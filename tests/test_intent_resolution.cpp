@@ -47,6 +47,7 @@ int main()
 
         IntentId older = intents.create(owner, lightType, officeSlot, IntentLifetime::persistent(), Light{10}, IntentPriority::Medium);
         IntentId newer = intents.create(owner, lightType, officeSlot, IntentLifetime::persistent(), Light{90}, IntentPriority::Medium);
+        assert(newer > older);
 
         std::map<ComponentName, ComponentSlotId> components{
             {"officeLight", officeSlot}
@@ -56,6 +57,53 @@ int main()
 
         assert(selected.size() == 1);
         assert(selected.at("officeLight") == newer);
+    }
+
+    {
+        IntentRegistry intents;
+
+        ComponentType<Light> lightType{0};
+        ComponentSlotId officeSlot = 1;
+        BehaviorId owner = 1;
+
+        intents.create_behavior_pool(owner);
+
+        IntentId lower = intents.create(
+            owner,
+            lightType,
+            officeSlot,
+            IntentLifetime::persistent(),
+            Light{10},
+            IntentPriority::Medium
+        );
+        IntentId higher = intents.create(
+            owner,
+            lightType,
+            officeSlot,
+            IntentLifetime::persistent(),
+            Light{20},
+            IntentPriority::Medium
+        );
+
+        intents.destroy(lower);
+        IntentId recycled = intents.create(
+            owner,
+            lightType,
+            officeSlot,
+            IntentLifetime::persistent(),
+            Light{30},
+            IntentPriority::Medium
+        );
+
+        assert(recycled == lower);
+
+        std::map<ComponentName, ComponentSlotId> components{
+            {"officeLight", officeSlot}
+        };
+        std::map<ComponentName, IntentId> selected = intents.resolve(lightType.id, components, 0);
+
+        assert(selected.size() == 1);
+        assert(selected.at("officeLight") == higher);
     }
 
     {
@@ -136,4 +184,3 @@ int main()
 
     return 0;
 }
-

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstddef>
 #include <set>
+#include <stdexcept>
 
 struct Light {
     int brightness = 0;
@@ -10,6 +11,32 @@ struct Light {
 
 struct Temperature {
     int celsius = 0;
+};
+
+struct ThrowingIntentValue {
+    static inline int movesUntilThrow = -1;
+
+    int value = 0;
+
+    explicit ThrowingIntentValue(int initialValue)
+        : value(initialValue)
+    {
+    }
+
+    ThrowingIntentValue(const ThrowingIntentValue&) = default;
+
+    ThrowingIntentValue(ThrowingIntentValue&& other) {
+        if (movesUntilThrow == 0)
+            throw std::runtime_error("intent value move failed");
+
+        if (movesUntilThrow > 0)
+            --movesUntilThrow;
+
+        value = other.value;
+    }
+
+    ThrowingIntentValue& operator=(const ThrowingIntentValue&) = default;
+    ThrowingIntentValue& operator=(ThrowingIntentValue&&) = default;
 };
 
 template <typename Function>
@@ -49,6 +76,96 @@ int main()
         assert(intents.target_index().at(lightType.id).at(slot).contains(id));
         assert(intents.size(owner) == 1);
         assert(!intents.exists(id + 100));
+    }
+
+    {
+        IntentRegistry intents;
+
+        BehaviorId owner = 7;
+        ComponentType<Light> lightType{2};
+        ComponentSlotId slot = 4;
+        intents.create_behavior_pool(owner);
+
+        expect_throw([&] {
+            intents.create(
+                owner,
+                lightType,
+                slot,
+                IntentLifetime{static_cast<IntentLifetimeKind>(3), 0},
+                Light{10}
+            );
+        });
+        expect_throw([&] {
+            intents.create(
+                owner,
+                lightType,
+                slot,
+                IntentLifetime{IntentLifetimeKind::Persistent, 10},
+                Light{10}
+            );
+        });
+        expect_throw([&] {
+            intents.create(
+                owner,
+                lightType,
+                slot,
+                IntentLifetime::persistent(),
+                Light{10},
+                static_cast<IntentPriority>(0)
+            );
+        });
+
+        assert(intents.size() == 0);
+        assert(intents.size(owner) == 0);
+        assert(intents.target_index().empty());
+
+        IntentId first = intents.create(
+            owner,
+            lightType,
+            slot,
+            IntentLifetime::persistent(),
+            Light{20}
+        );
+        assert(first == 1);
+    }
+
+    {
+        IntentRegistry intents;
+
+        BehaviorId owner = 7;
+        ComponentType<ThrowingIntentValue> valueType{2};
+        ComponentSlotId slot = 4;
+        intents.create_behavior_pool(owner);
+
+        for (int movesBeforeFailure : {0, 1}) {
+            ThrowingIntentValue::movesUntilThrow = movesBeforeFailure;
+            expect_throw([&] {
+                intents.create(
+                    owner,
+                    valueType,
+                    slot,
+                    IntentLifetime::persistent(),
+                    ThrowingIntentValue{10}
+                );
+            });
+
+            assert(intents.size() == 0);
+            assert(intents.size(owner) == 0);
+            assert(intents.intents_for(valueType.id, slot).empty());
+            assert(intents.target_index().empty());
+        }
+
+        ThrowingIntentValue::movesUntilThrow = -1;
+        IntentId first = intents.create(
+            owner,
+            valueType,
+            slot,
+            IntentLifetime::persistent(),
+            ThrowingIntentValue{20}
+        );
+
+        assert(first == 1);
+        assert(intents.typed_intent(valueType, first).value.value == 20);
     }
 
     {
@@ -149,7 +266,8 @@ int main()
 
         for (std::size_t i = 0; i < MAX_INTENTS; ++i) {
             IntentId id = intents.create(owner, lightType, slot, IntentLifetime::persistent(), Light{static_cast<int>(i)});
-            assert(created.insert(id).second);
+            bool inserted = created.insert(id).second;
+            assert(inserted);
             assert(intents.exists(id));
             assert(intents.owner_of(id) == owner);
         }
@@ -165,7 +283,8 @@ int main()
         intents.destroy(recycled);
         assert(intents.size(owner) == MAX_INTENTS - 1);
         assert(!intents.exists(recycled));
-        assert(intents.create(owner, lightType, slot, IntentLifetime::persistent(), Light{42}) == recycled);
+        IntentId recreated = intents.create(owner, lightType, slot, IntentLifetime::persistent(), Light{42});
+        assert(recreated == recycled);
         assert(intents.size(owner) == MAX_INTENTS);
     }
 

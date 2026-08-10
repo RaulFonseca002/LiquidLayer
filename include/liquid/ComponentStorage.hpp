@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
@@ -44,12 +45,16 @@ class ComponentStorage : public IComponentStorage{
 private:
     // One ComponentStorage<T> stores only T instances. Names, type IDs, and
     // cross-manager permission checks belong to ComponentRegistry/Coordinator.
-    std::vector<Component> components;
+    std::vector<std::optional<Component>> components;
     std::vector<Slot> availableSlots;
     std::unordered_map<BehaviorId, std::vector<ComponentSlotAccess>> accesses;
     std::size_t count = 0;
 
 public:
+
+    ComponentStorage() {
+        availableSlots.reserve(MaxComponentSlots);
+    }
 
     Slot add(Component component) {
 
@@ -57,16 +62,15 @@ public:
 
         if (!availableSlots.empty()) {
             id = availableSlots.back();
+            components[id].emplace(std::move(component));
             availableSlots.pop_back();
-
-            components[id] = std::move(component);
         }else{
 
             if (components.size() >= MaxComponentSlots)
                 throw std::runtime_error("all component slots are already filled");
 
-            id = components.size();
-            components.push_back(std::move(component));
+            id = static_cast<Slot>(components.size());
+            components.emplace_back(std::in_place, std::move(component));
         }
 
         count++;
@@ -77,14 +81,25 @@ public:
         if (id >= components.size())
             throw std::out_of_range("invalid component slot id");
 
-        if (std::find(availableSlots.begin(), availableSlots.end(), id) != availableSlots.end())
+        if (!components[id].has_value())
             throw std::runtime_error("component slot already removed");
 
         availableSlots.push_back(id);
+        components[id].reset();
+        removeAccessesTo(id);
         count--;
     }
 
     void addAccess(BehaviorId behavior, ComponentSlotAccess::Mode mode, Slot slot) {
+        if (!has(slot))
+            throw std::runtime_error("component slot not found");
+
+        if (mode != ComponentSlotAccess::r &&
+            mode != ComponentSlotAccess::w &&
+            mode != ComponentSlotAccess::rw) {
+            throw std::runtime_error("unknown component access mode");
+        }
+
         accesses[behavior].push_back({mode, slot});
     }
 
@@ -143,40 +158,43 @@ public:
         if (id >= components.size())
             throw std::out_of_range("invalid component slot id");
 
-        if (std::find(availableSlots.begin(), availableSlots.end(), id) != availableSlots.end())
+        if (!components[id].has_value())
             throw std::runtime_error("component slot removed");
 
-        return components[id];
+        return *components[id];
     }
 
     const Component& operator[](Slot id) const {
         if (id >= components.size())
             throw std::out_of_range("invalid component slot id");
-        if (std::find(availableSlots.begin(), availableSlots.end(), id) != availableSlots.end())
+        if (!components[id].has_value())
             throw std::runtime_error("component slot removed");
 
-        return components[id];
+        return *components[id];
     }
 
     bool has(Slot id) const {
         if (id >= components.size())
             return false;
 
-        return std::find(availableSlots.begin(), availableSlots.end(), id) == availableSlots.end();
+        return components[id].has_value();
     }
 
+    // Returned references and pointers are borrowed views. They remain valid
+    // only until the next structural mutation of this typed storage and must
+    // not be retained across frames or exposed to scripting boundaries.
     Component* get(Slot id) {
         if (!has(id))
             return nullptr;
 
-        return &components[id];
+        return &*components[id];
     }
 
     const Component* get(Slot id) const {
         if (!has(id))
             return nullptr;
 
-        return &components[id];
+        return &*components[id];
     }
 
     std::size_t size() const {

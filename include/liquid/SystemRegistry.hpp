@@ -18,12 +18,19 @@ class World;
 class SystemRegistry;
 
 class System {
-protected:
+private:
     std::set<BehaviorId> behaviours;
 
     friend class SystemRegistry;
 
+protected:
+    const std::set<BehaviorId>& behaviors() const;
+
 public:
+    // Membership callbacks are observational notifications. Implementations
+    // should not throw or attempt topology changes. If one throws, the
+    // registry finishes the membership transition, then rethrows the first
+    // callback error; callers must not interpret that exception as rollback.
     virtual ~System() = default;
 
     virtual void on_behavior_added(BehaviorId behavior);
@@ -40,12 +47,31 @@ private:
 
     std::unordered_map<std::type_index, SystemRecord> systems;
     std::vector<std::type_index> registrationOrder;
+    std::size_t dispatchDepth = 0;
+
+    class DispatchGuard {
+    private:
+        SystemRegistry& registry;
+
+    public:
+        explicit DispatchGuard(SystemRegistry& owner);
+        ~DispatchGuard();
+
+        DispatchGuard(const DispatchGuard&) = delete;
+        DispatchGuard& operator=(const DispatchGuard&) = delete;
+    };
+
+    void ensure_structural_mutation_allowed() const;
 
 public:
     SystemRegistry() = default;
+    SystemRegistry(const SystemRegistry&) = delete;
+    SystemRegistry& operator=(const SystemRegistry&) = delete;
+    SystemRegistry(SystemRegistry&&) = delete;
+    SystemRegistry& operator=(SystemRegistry&&) = delete;
 
     template <typename SystemType, typename... Args>
-    void register_system(Args&&... args);
+    void register_system(Signature signature, Args&&... args);
 
     template <typename SystemType>
     void destroy_system();
@@ -81,24 +107,40 @@ public:
 
     void update_behavior(BehaviorId behavior, Signature behaviorSignature);
     void remove_behavior(BehaviorId behavior);
-    std::size_t run_systems(World& world, FrameNumber frame, IntentTime now);
+    bool dispatching() const;
+    std::size_t run_systems(
+        World& world,
+        FrameNumber frame,
+        IntentTime now,
+        std::size_t* completedSystems = nullptr
+    );
 };
 
 template <typename SystemType, typename... Args>
-void SystemRegistry::register_system(Args&&... args) {
+void SystemRegistry::register_system(Signature signature, Args&&... args) {
     static_assert(std::is_base_of_v<System, SystemType>, "registered systems must inherit from System");
+    ensure_structural_mutation_allowed();
 
     std::type_index type = std::type_index(typeid(SystemType));
 
     if (systems.contains(type))
         throw std::runtime_error("system already registered");
 
-    systems.emplace(type, SystemRecord{{}, std::make_shared<SystemType>(std::forward<Args>(args)...)});
+    std::shared_ptr<System> system = std::make_shared<SystemType>(std::forward<Args>(args)...);
+
+    registrationOrder.reserve(registrationOrder.size() + 1);
+    auto [position, inserted] = systems.emplace(type, SystemRecord{signature, std::move(system)});
+    (void)position;
+
+    if (!inserted)
+        throw std::runtime_error("system already registered");
+
     registrationOrder.push_back(type);
 }
 
 template <typename SystemType>
 void SystemRegistry::destroy_system() {
+    ensure_structural_mutation_allowed();
     auto found = systems.find(std::type_index(typeid(SystemType)));
 
     if (found == systems.end())
@@ -120,6 +162,7 @@ bool SystemRegistry::exists() const {
 
 template <typename SystemType>
 void SystemRegistry::set_signature(Signature signature) {
+    ensure_structural_mutation_allowed();
     auto found = systems.find(std::type_index(typeid(SystemType)));
 
     if (found == systems.end())
@@ -170,6 +213,7 @@ const SystemType& SystemRegistry::get_system() const {
 
 template <typename SystemType>
 void SystemRegistry::add_behavior(BehaviorId behavior) {
+    ensure_structural_mutation_allowed();
     auto found = systems.find(std::type_index(typeid(SystemType)));
 
     if (found == systems.end())
@@ -178,19 +222,24 @@ void SystemRegistry::add_behavior(BehaviorId behavior) {
     auto [position, inserted] = found->second.system->behaviours.emplace(behavior);
     (void)position;
 
-    if (inserted)
+    if (inserted) {
+        DispatchGuard guard(*this);
         found->second.system->on_behavior_added(behavior);
+    }
 }
 
 template <typename SystemType>
 void SystemRegistry::remove_behavior(BehaviorId behavior) {
+    ensure_structural_mutation_allowed();
     auto found = systems.find(std::type_index(typeid(SystemType)));
 
     if (found == systems.end())
         throw std::runtime_error("system not registered");
 
-    if (found->second.system->behaviours.erase(behavior) > 0)
+    if (found->second.system->behaviours.erase(behavior) > 0) {
+        DispatchGuard guard(*this);
         found->second.system->on_behavior_removed(behavior);
+    }
 }
 
 template <typename SystemType>

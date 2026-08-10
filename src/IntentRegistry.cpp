@@ -10,6 +10,35 @@ int priority_value(IntentPriority priority) {
 
 }
 
+IntentRegistry::IntentRegistry() {
+    availableIds.reserve(MaxIntents);
+}
+
+void IntentRegistry::validate_metadata(IntentLifetime lifetime, IntentPriority priority) {
+    if (lifetime.kind != IntentLifetimeKind::Persistent &&
+        lifetime.kind != IntentLifetimeKind::UntilTime) {
+        throw std::invalid_argument("unknown intent lifetime kind");
+    }
+
+    if (lifetime.kind == IntentLifetimeKind::Persistent && lifetime.expiresAt != 0)
+        throw std::invalid_argument("persistent intent lifetime must not expire");
+
+    if (priority != IntentPriority::Low &&
+        priority != IntentPriority::Medium &&
+        priority != IntentPriority::High) {
+        throw std::invalid_argument("unknown intent priority");
+    }
+}
+
+void IntentRegistry::release_intent_id(IntentId id) {
+    if (id + 1 == nextId) {
+        --nextId;
+        return;
+    }
+
+    availableIds.push_back(id);
+}
+
 IntentId IntentRegistry::next_intent_id() {
     if (intentTypes.size() >= MAX_INTENTS && availableIds.empty())
         throw std::runtime_error("all the intents are already in use");
@@ -136,27 +165,27 @@ const IntentTargetIndex& IntentRegistry::target_index() const {
     return byTarget;
 }
 
-std::map<ComponentName, IntentId> IntentRegistry::resolve(ComponentTypeId type, const std::map<ComponentName, ComponentSlotId>& components, IntentTime now) {
-    std::vector<IntentId> expired;
-
-    for (IntentId id : live_intent_ids()) {
-        IntentLifetime lifetime = lifetime_of(id);
-
-        if (lifetime.kind == IntentLifetimeKind::UntilTime && now >= lifetime.expiresAt)
-            expired.push_back(id);
-    }
-
-    for (IntentId id : expired)
-        destroy(id);
-
+std::map<ComponentName, IntentId> IntentRegistry::select(
+    ComponentTypeId type,
+    const std::map<ComponentName, ComponentSlotId>& components
+) const {
     std::map<ComponentName, IntentId> selected;
+    auto typePosition = byTarget.find(type);
 
     for (const auto& [name, slot] : components) {
+        if (typePosition == byTarget.end())
+            break;
+
+        auto slotPosition = typePosition->second.find(slot);
+
+        if (slotPosition == typePosition->second.end())
+            continue;
+
         IntentId selectedIntent = 0;
         IntentPriority selectedPriority = IntentPriority::Low;
         bool hasSelection = false;
 
-        for (IntentId id : intents_for(type, slot)) {
+        for (IntentId id : slotPosition->second) {
             const Intent& candidate = intent(id);
 
             if (!hasSelection ||
@@ -173,6 +202,26 @@ std::map<ComponentName, IntentId> IntentRegistry::resolve(ComponentTypeId type, 
     }
 
     return selected;
+}
+
+std::map<ComponentName, IntentId> IntentRegistry::resolve(
+    ComponentTypeId type,
+    const std::map<ComponentName, ComponentSlotId>& components,
+    IntentTime now
+) {
+    std::vector<IntentId> expired;
+
+    for (IntentId id : live_intent_ids()) {
+        IntentLifetime lifetime = lifetime_of(id);
+
+        if (lifetime.kind == IntentLifetimeKind::UntilTime && now >= lifetime.expiresAt)
+            expired.push_back(id);
+    }
+
+    for (IntentId id : expired)
+        destroy(id);
+
+    return select(type, components);
 }
 
 std::size_t IntentRegistry::size(BehaviorId id) const {

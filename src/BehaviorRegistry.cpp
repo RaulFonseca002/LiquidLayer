@@ -16,7 +16,16 @@ BehaviorId BehaviorRegistry::create() {
     BehaviorId behavior = availableIds.back();
     availableIds.pop_back();
 
-    active.emplace(behavior);
+    try {
+        auto [position, inserted] = active.emplace(behavior);
+        (void)position;
+
+        if (!inserted)
+            throw std::logic_error("behavior id already active");
+    } catch (...) {
+        availableIds.push_back(behavior);
+        throw;
+    }
 
     return behavior;
 }

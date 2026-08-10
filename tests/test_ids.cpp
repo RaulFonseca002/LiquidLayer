@@ -22,10 +22,6 @@ int main()
     assert(MaxComponentSlots == MAX_COMPONENT_SLOTS);
     assert(MaxComponentTypes == 64);
     assert(InvalidComponentTypeId == std::numeric_limits<ComponentTypeId>::max());
-    assert(Low16Bits == LOW_16_BITS);
-    assert(IntentOwnerShift == INTENT_OWNER_SHIFT);
-    assert(Low16Bits == 0x0000FFFFu);
-    assert(IntentOwnerShift == 16);
 
     ComponentType<Light> invalidType;
     assert(invalidType.id == InvalidComponentTypeId);
@@ -33,13 +29,6 @@ int main()
     ComponentType<Light> lightType{7};
     ComponentTypeId converted = lightType;
     assert(converted == 7);
-
-    BehaviorId owner = 42;
-    std::uint16_t localIntent = 1234;
-    IntentId packed = (static_cast<IntentId>(owner) << IntentOwnerShift) | localIntent;
-
-    assert((packed >> IntentOwnerShift) == owner);
-    assert((packed & Low16Bits) == localIntent);
 
     Signature empty;
     assert(empty.none());

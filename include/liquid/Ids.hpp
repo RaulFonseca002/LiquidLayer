@@ -9,6 +9,8 @@
 namespace liquid {
 
 using BehaviorId = std::uint16_t;
+using BehaviorAccessRevision = std::uint64_t;
+using WorldInstanceId = std::uint64_t;
 using IntentId = std::uint32_t;
 using FrameNumber = std::uint64_t;
 using ComponentName = std::string;
@@ -69,14 +71,12 @@ inline constexpr std::size_t MaxComponentTypes = 64;
 inline constexpr std::size_t MaxComponentSlots =
     static_cast<std::size_t>(std::numeric_limits<Slot>::max());
 
-inline constexpr std::uint32_t Low16Bits = 0x0000FFFF;
-inline constexpr std::uint32_t IntentOwnerShift = 16;
-
 using Signature = std::bitset<MaxComponentTypes>;
 
 }
 
 using liquid::BehaviorId;
+using liquid::BehaviorAccessRevision;
 using liquid::ComponentAccessMode;
 using liquid::ComponentName;
 using liquid::ComponentSlotId;
@@ -91,17 +91,14 @@ using liquid::IntentPriority;
 using liquid::Slot;
 using liquid::Signature;
 using liquid::TypeName;
+using liquid::WorldInstanceId;
 
-using liquid::Low16Bits;
 using liquid::MaxBehaviours;
 using liquid::MaxComponentSlots;
 using liquid::MaxComponentTypes;
 using liquid::MaxIntents;
-using liquid::IntentOwnerShift;
 
 inline constexpr std::size_t MAX_BEHAVIOURS = liquid::MaxBehaviours;
 inline constexpr std::size_t MAX_INTENTS = liquid::MaxIntents;
 inline constexpr std::size_t MAX_COMPONENT_TYPES = liquid::MaxComponentTypes;
 inline constexpr std::size_t MAX_COMPONENT_SLOTS = liquid::MaxComponentSlots;
-inline constexpr std::uint32_t LOW_16_BITS = liquid::Low16Bits;
-inline constexpr std::uint32_t INTENT_OWNER_SHIFT = liquid::IntentOwnerShift;

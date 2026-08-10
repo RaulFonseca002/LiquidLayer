@@ -11,18 +11,49 @@
 #include <utility>
 #include <vector>
 
+class Runtime;
+
+// World and Runtime are single-thread-confined. A World owns all handles and
+// borrowed component views for one runtime session; callers must synchronize
+// externally and must not expose this trusted host boundary to scripts.
 class World {
 private:
+    friend class Runtime;
+
     WorldState state;
     Coordinator coordinator;
+    bool systemsRunning = false;
+
+    void ensure_structural_mutation_allowed() const;
+    bool resolution_request_is_current(
+        ComponentTypeId type,
+        const std::map<ComponentName, ComponentSlotId>& components
+    ) const;
+    std::size_t destroy_expired_intents(IntentTime now);
+    std::map<ComponentName, IntentId> resolve_intents(
+        ComponentTypeId type,
+        const std::map<ComponentName, ComponentSlotId>& components,
+        IntentTime now
+    );
+    std::size_t run_systems(
+        FrameNumber frame,
+        IntentTime now,
+        std::size_t* completedSystems = nullptr
+    );
 
 public:
     World();
+    World(const World&) = delete;
+    World& operator=(const World&) = delete;
+    World(World&&) = delete;
+    World& operator=(World&&) = delete;
 
     BehaviorId create_behavior();
     void destroy_behavior(BehaviorId id);
     bool behavior_exists(BehaviorId id);
     std::size_t behavior_count();
+    WorldInstanceId instance_id() const;
+    BehaviorAccessRevision behavior_access_revision(BehaviorId id) const;
 
     void destroy_intent(IntentId id);
     bool intent_exists(IntentId id);
@@ -33,15 +64,10 @@ public:
     std::vector<IntentId> live_intent_ids() const;
     std::vector<IntentId> intents_for(ComponentTypeId type, ComponentSlotId slot) const;
     const IntentTargetIndex& intent_target_index() const;
-    std::map<ComponentName, IntentId> resolve_intents(
-        ComponentTypeId type,
-        const std::map<ComponentName, ComponentSlotId>& components,
-        IntentTime now
-    );
     std::size_t intent_count(BehaviorId owner);
 
     template <typename SystemType, typename... Args>
-    void register_system(Args&&... args);
+    void register_system(Signature signature, Args&&... args);
 
     template <typename SystemType>
     void destroy_system();
@@ -50,7 +76,6 @@ public:
     bool system_exists() const;
 
     std::size_t system_count() const;
-    std::size_t run_systems(FrameNumber frame, IntentTime now);
 
     template <typename SystemType>
     void set_system_signature(Signature signature);
@@ -63,12 +88,6 @@ public:
 
     template <typename SystemType>
     const SystemType& get_system() const;
-
-    template <typename SystemType>
-    void add_behavior_to_system(BehaviorId behavior);
-
-    template <typename SystemType>
-    void remove_behavior_from_system(BehaviorId behavior);
 
     template <typename SystemType>
     bool system_has_behavior(BehaviorId behavior) const;
@@ -148,12 +167,14 @@ public:
 };
 
 template <typename SystemType, typename... Args>
-void World::register_system(Args&&... args) {
-    coordinator.register_system<SystemType>(std::forward<Args>(args)...);
+void World::register_system(Signature signature, Args&&... args) {
+    ensure_structural_mutation_allowed();
+    coordinator.register_system<SystemType>(signature, std::forward<Args>(args)...);
 }
 
 template <typename SystemType>
 void World::destroy_system() {
+    ensure_structural_mutation_allowed();
     coordinator.destroy_system<SystemType>();
 }
 
@@ -164,6 +185,7 @@ bool World::system_exists() const {
 
 template <typename SystemType>
 void World::set_system_signature(Signature signature) {
+    ensure_structural_mutation_allowed();
     coordinator.set_system_signature<SystemType>(signature);
 }
 
@@ -183,16 +205,6 @@ const SystemType& World::get_system() const {
 }
 
 template <typename SystemType>
-void World::add_behavior_to_system(BehaviorId behavior) {
-    coordinator.add_behavior_to_system<SystemType>(behavior);
-}
-
-template <typename SystemType>
-void World::remove_behavior_from_system(BehaviorId behavior) {
-    coordinator.remove_behavior_from_system<SystemType>(behavior);
-}
-
-template <typename SystemType>
 bool World::system_has_behavior(BehaviorId behavior) const {
     return coordinator.system_has_behavior<SystemType>(behavior);
 }
@@ -204,6 +216,7 @@ std::size_t World::system_behavior_count() const {
 
 template <typename Component>
 ComponentType<Component> World::register_component(TypeName typeName) {
+    ensure_structural_mutation_allowed();
     return coordinator.register_component<Component>(std::move(typeName));
 }
 
@@ -214,6 +227,7 @@ ComponentTypeId World::component_type(ComponentType<Component> type) const {
 
 template <typename Component>
 void World::add_component(ComponentType<Component> type, std::string name, Component component) {
+    ensure_structural_mutation_allowed();
     coordinator.add_component(type, std::move(name), std::move(component));
 }
 
@@ -234,6 +248,7 @@ const Component* World::get_component_named(ComponentType<Component> type, const
 
 template <typename Component>
 void World::remove_component(ComponentType<Component> type, const std::string& name) {
+    ensure_structural_mutation_allowed();
     coordinator.remove_component(type, name);
 }
 
@@ -244,11 +259,13 @@ void World::grant_component_access(
     const std::string& name,
     ComponentAccessMode mode
 ) {
+    ensure_structural_mutation_allowed();
     coordinator.grant_component_access(type, behavior, name, mode);
 }
 
 template <typename Component>
 void World::revoke_component_access(ComponentType<Component> type, BehaviorId behavior, const std::string& name) {
+    ensure_structural_mutation_allowed();
     coordinator.revoke_component_access(type, behavior, name);
 }
 

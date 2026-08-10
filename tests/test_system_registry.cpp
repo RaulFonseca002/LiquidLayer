@@ -18,11 +18,34 @@ struct TrackingSystem : System {
     }
 
     std::size_t exposed_count() const {
-        return behaviours.size();
+        return behaviors().size();
     }
 
     bool exposes(BehaviorId behavior) const {
-        return behaviours.contains(behavior);
+        return behaviors().contains(behavior);
+    }
+};
+
+struct CallbackRegisteredSystem : System {
+};
+
+struct RegistryMutatingCallbackSystem : System {
+    SystemRegistry& registry;
+    bool mutationRejected = false;
+
+    explicit RegistryMutatingCallbackSystem(SystemRegistry& owner)
+        : registry(owner)
+    {
+    }
+
+    void on_behavior_added(BehaviorId behavior) override {
+        (void)behavior;
+
+        try {
+            registry.register_system<CallbackRegisteredSystem>(Signature{});
+        } catch (const std::logic_error&) {
+            mutationRejected = true;
+        }
     }
 };
 
@@ -56,9 +79,9 @@ struct ConfiguredSystem : System {
     int threshold = 0;
     std::string label;
 
-    ConfiguredSystem(int threshold, std::string label)
-        : threshold(threshold),
-          label(std::move(label))
+    ConfiguredSystem(int configuredThreshold, std::string configuredLabel)
+        : threshold(configuredThreshold),
+          label(std::move(configuredLabel))
     {
     }
 };
@@ -82,7 +105,7 @@ int main()
     {
         SystemRegistry systems;
 
-        systems.register_system<TrackingSystem>();
+        systems.register_system<TrackingSystem>(Signature{});
 
         assert(systems.exists<TrackingSystem>());
         assert(systems.size() == 1);
@@ -90,7 +113,7 @@ int main()
         assert(systems.behavior_count<TrackingSystem>() == 0);
 
         expect_throw([&] {
-            systems.register_system<TrackingSystem>();
+            systems.register_system<TrackingSystem>(Signature{});
         });
     }
 
@@ -129,7 +152,7 @@ int main()
     {
         SystemRegistry systems;
 
-        systems.register_system<ConfiguredSystem>(8, "focus");
+        systems.register_system<ConfiguredSystem>(Signature{}, 8, "focus");
 
         auto& configured = systems.get_system<ConfiguredSystem>();
         assert(configured.threshold == 8);
@@ -139,7 +162,7 @@ int main()
     {
         SystemRegistry systems;
 
-        systems.register_system<TrackingSystem>();
+        systems.register_system<TrackingSystem>(Signature{});
         auto& tracking = systems.get_system<TrackingSystem>();
 
         systems.update_behavior(7, {});
@@ -162,16 +185,13 @@ int main()
     {
         SystemRegistry systems;
 
-        systems.register_system<LightingSystem>();
-        systems.register_system<ClimateSystem>();
-
         Signature lightSignature;
         lightSignature.set(0);
         Signature temperatureSignature;
         temperatureSignature.set(1);
 
-        systems.set_signature<LightingSystem>(lightSignature);
-        systems.set_signature<ClimateSystem>(temperatureSignature);
+        systems.register_system<LightingSystem>(lightSignature);
+        systems.register_system<ClimateSystem>(temperatureSignature);
 
         systems.update_behavior(10, lightSignature);
 
@@ -201,7 +221,7 @@ int main()
     {
         SystemRegistry systems;
 
-        systems.register_system<TrackingSystem>();
+        systems.register_system<TrackingSystem>(Signature{});
         auto& tracking = systems.get_system<TrackingSystem>();
 
         systems.add_behavior<TrackingSystem>(1);
@@ -222,7 +242,7 @@ int main()
     {
         SystemRegistry systems;
 
-        systems.register_system<TrackingSystem>();
+        systems.register_system<TrackingSystem>(Signature{});
         systems.add_behavior<TrackingSystem>(1);
 
         systems.destroy_system<TrackingSystem>();
@@ -233,6 +253,18 @@ int main()
         expect_throw([&] {
             systems.get_system<TrackingSystem>();
         });
+    }
+
+    {
+        SystemRegistry systems;
+        systems.register_system<RegistryMutatingCallbackSystem>(Signature{}, systems);
+
+        systems.update_behavior(7, Signature{});
+
+        auto& system = systems.get_system<RegistryMutatingCallbackSystem>();
+        assert(system.mutationRejected);
+        assert(systems.has_behavior<RegistryMutatingCallbackSystem>(7));
+        assert(!systems.exists<CallbackRegisteredSystem>());
     }
 
     return 0;

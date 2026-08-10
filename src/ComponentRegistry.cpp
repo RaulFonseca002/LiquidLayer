@@ -11,6 +11,24 @@ ComponentTypeId ComponentRegistry::component_type(const TypeName& typeName) cons
     return found->second;
 }
 
+bool ComponentRegistry::component_type_exists(ComponentTypeId type) const {
+    return type < typeNames.size() && storages.contains(type);
+}
+
+bool ComponentRegistry::component_matches(
+    ComponentTypeId type,
+    const ComponentName& name,
+    ComponentSlotId slot
+) const {
+    auto typeComponents = componentNames.find(type);
+
+    if (typeComponents == componentNames.end())
+        return false;
+
+    auto found = typeComponents->second.find(name);
+    return found != typeComponents->second.end() && found->second == slot;
+}
+
 void ComponentRegistry::remove_behavior(BehaviorId behavior) {
     for (auto& [type, storage] : storages) {
         (void)type;

@@ -40,10 +40,18 @@ private:
     static liquid::ComponentSlotAccess::Mode storage_access_mode(ComponentAccessMode mode);
 
 public:
+    ComponentRegistry() = default;
+    ComponentRegistry(const ComponentRegistry&) = delete;
+    ComponentRegistry& operator=(const ComponentRegistry&) = delete;
+    ComponentRegistry(ComponentRegistry&&) = delete;
+    ComponentRegistry& operator=(ComponentRegistry&&) = delete;
+
     template <typename Component>
     ComponentType<Component> register_component(TypeName typeName);
 
     ComponentTypeId component_type(const TypeName& typeName) const;
+    bool component_type_exists(ComponentTypeId type) const;
+    bool component_matches(ComponentTypeId type, const ComponentName& name, ComponentSlotId slot) const;
 
     template <typename Component>
     ComponentTypeId component_type(ComponentType<Component> type) const;
@@ -88,6 +96,9 @@ public:
 
     template <typename Component>
     bool can_read(ComponentType<Component> type, BehaviorId behavior, const std::string& name) const;
+
+    template <typename Component>
+    bool can_read(ComponentType<Component> type, BehaviorId behavior, ComponentSlotId slot) const;
 
     template <typename Component>
     bool can_write(ComponentType<Component> type, BehaviorId behavior, const std::string& name) const;
@@ -137,13 +148,70 @@ ComponentType<Component> ComponentRegistry::register_component(TypeName typeName
     if (nextComponentType >= MaxComponentTypes)
         throw std::runtime_error("maximum component types reached");
 
-    ComponentTypeId type = nextComponentType++;
+    ComponentTypeId type = nextComponentType;
+    auto storage = std::make_shared<liquid::ComponentStorage<Component>>();
+    typeNames.reserve(typeNames.size() + 1);
+    bool typeIndexed = false;
+    bool storageIndexed = false;
+    bool componentNamesCreated = false;
+    bool slotNamesCreated = false;
 
-    componentTypes.emplace(typeName, type);
-    typeNames.push_back(typeName);
-    storages.emplace(type, std::make_shared<liquid::ComponentStorage<Component>>());
-    componentNames[type];
-    slotNames[type];
+    try {
+        auto [typePosition, typeInserted] = componentTypes.emplace(typeName, type);
+        (void)typePosition;
+
+        if (!typeInserted)
+            throw std::logic_error("component type already indexed");
+
+        typeIndexed = true;
+
+        auto [storagePosition, storageInserted] = storages.emplace(type, std::move(storage));
+        (void)storagePosition;
+
+        if (!storageInserted)
+            throw std::logic_error("component storage already indexed");
+
+        storageIndexed = true;
+
+        auto [componentNamesPosition, componentNamesInserted] = componentNames.emplace(
+            type,
+            std::map<ComponentName, ComponentSlotId>{}
+        );
+        (void)componentNamesPosition;
+
+        if (!componentNamesInserted)
+            throw std::logic_error("component name index already exists");
+
+        componentNamesCreated = true;
+
+        auto [slotNamesPosition, slotNamesInserted] = slotNames.emplace(
+            type,
+            std::map<ComponentSlotId, ComponentName>{}
+        );
+        (void)slotNamesPosition;
+
+        if (!slotNamesInserted)
+            throw std::logic_error("component slot index already exists");
+
+        slotNamesCreated = true;
+        typeNames.push_back(typeName);
+    } catch (...) {
+        if (slotNamesCreated)
+            slotNames.erase(type);
+
+        if (componentNamesCreated)
+            componentNames.erase(type);
+
+        if (storageIndexed)
+            storages.erase(type);
+
+        if (typeIndexed)
+            componentTypes.erase(typeName);
+
+        throw;
+    }
+
+    ++nextComponentType;
 
     return ComponentType<Component>{type};
 }
@@ -166,9 +234,29 @@ void ComponentRegistry::add_component(ComponentType<Component> type, std::string
 
     auto storage = component_storage<Component>(typeId);
     ComponentSlotId slot = storage->add(std::move(component));
+    bool nameIndexed = false;
 
-    componentNames[typeId].emplace(name, slot);
-    slotNames[typeId].emplace(slot, std::move(name));
+    try {
+        auto [namePosition, nameInserted] = componentNames.at(typeId).emplace(name, slot);
+        (void)namePosition;
+
+        if (!nameInserted)
+            throw std::logic_error("component name already indexed");
+
+        nameIndexed = true;
+
+        auto [slotPosition, slotInserted] = slotNames.at(typeId).emplace(slot, name);
+        (void)slotPosition;
+
+        if (!slotInserted)
+            throw std::logic_error("component slot already indexed");
+    } catch (...) {
+        if (nameIndexed)
+            componentNames.at(typeId).erase(name);
+
+        storage->remove(slot);
+        throw;
+    }
 }
 
 template <typename Component>
@@ -186,7 +274,7 @@ bool ComponentRegistry::has_component_named(ComponentType<Component> type, const
             return false;
 
         return component_storage<Component>(typeId)->has(found->second);
-    } catch (...) {
+    } catch (const std::runtime_error&) {
         return false;
     }
 }
@@ -232,11 +320,12 @@ void ComponentRegistry::grant_access(ComponentType<Component> type, BehaviorId b
     ComponentTypeId typeId = component_type(type);
     ComponentSlotId slot = named_slot(typeId, name);
     auto storage = component_storage<Component>(typeId);
+    liquid::ComponentSlotAccess::Mode storageMode = storage_access_mode(mode);
 
     // Replace any previous access for this behavior/slot pair so a grant is an
     // update, not a duplicate access record.
     storage->removeAccess(behavior, slot);
-    storage->addAccess(behavior, storage_access_mode(mode), slot);
+    storage->addAccess(behavior, storageMode, slot);
 }
 
 template <typename Component>
@@ -307,7 +396,21 @@ bool ComponentRegistry::can_read(ComponentType<Component> type, BehaviorId behav
     try {
         ComponentTypeId typeId = component_type(type);
         ComponentSlotId slot = named_slot(typeId, name);
+        return can_read(type, behavior, slot);
+    } catch (const std::runtime_error&) {
+        return false;
+    }
+}
+
+template <typename Component>
+bool ComponentRegistry::can_read(ComponentType<Component> type, BehaviorId behavior, ComponentSlotId slot) const {
+    try {
+        ComponentTypeId typeId = component_type(type);
         auto storage = component_storage<Component>(typeId);
+
+        if (!storage->has(slot))
+            return false;
+
         const auto& allAccesses = storage->allAccesses();
         auto accesses = allAccesses.find(behavior);
 
@@ -318,7 +421,7 @@ bool ComponentRegistry::can_read(ComponentType<Component> type, BehaviorId behav
             if (access.slot == slot && (access.mode == liquid::ComponentSlotAccess::r || access.mode == liquid::ComponentSlotAccess::rw))
                 return true;
         }
-    } catch (...) {
+    } catch (const std::runtime_error&) {
         return false;
     }
 
@@ -344,7 +447,7 @@ bool ComponentRegistry::can_write(ComponentType<Component> type, BehaviorId beha
             if (access.slot == slot && (access.mode == liquid::ComponentSlotAccess::w || access.mode == liquid::ComponentSlotAccess::rw))
                 return true;
         }
-    } catch (...) {
+    } catch (const std::runtime_error&) {
         return false;
     }
 
@@ -356,20 +459,8 @@ bool ComponentRegistry::can_write(ComponentType<Component> type, BehaviorId beha
     try {
         ComponentTypeId typeId = component_type(type);
         ComponentSlotId slot = named_slot(typeId, name);
-        auto storage = component_storage<Component>(typeId);
-        const auto& allAccesses = storage->allAccesses();
-        auto accesses = allAccesses.find(behavior);
-
-        if (accesses == allAccesses.end())
-            return false;
-
-        for (const liquid::ComponentSlotAccess& access : accesses->second) {
-            if (access.slot == slot && (access.mode == liquid::ComponentSlotAccess::w || access.mode == liquid::ComponentSlotAccess::rw))
-                return true;
-        }
-    } catch (...) {
+        return can_write(type, behavior, slot);
+    } catch (const std::runtime_error&) {
         return false;
     }
-
-    return false;
 }

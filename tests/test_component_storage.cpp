@@ -2,9 +2,39 @@
 
 #include <cassert>
 #include <cstddef>
+#include <memory>
+#include <stdexcept>
 
 struct Light {
     int brightness = 0;
+};
+
+struct ThrowingConstruction {
+    static inline bool throwOnMoveConstruction = false;
+
+    int value = 0;
+
+    ThrowingConstruction() = default;
+    explicit ThrowingConstruction(int initialValue)
+        : value(initialValue)
+    {
+    }
+
+    ThrowingConstruction(const ThrowingConstruction&) = default;
+
+    ThrowingConstruction(ThrowingConstruction&& other) {
+        if (throwOnMoveConstruction)
+            throw std::runtime_error("move construction failed");
+
+        value = other.value;
+    }
+
+    ThrowingConstruction& operator=(const ThrowingConstruction&) = default;
+    ThrowingConstruction& operator=(ThrowingConstruction&&) = default;
+};
+
+struct ResourceComponent {
+    std::shared_ptr<int> resource;
 };
 
 template <typename Function>
@@ -70,6 +100,43 @@ int main()
     }
 
     {
+        liquid::ComponentStorage<ThrowingConstruction> storage;
+
+        ComponentSlotId slot = storage.add(ThrowingConstruction{10});
+        storage.remove(slot);
+
+        ThrowingConstruction::throwOnMoveConstruction = true;
+        expect_throw([&] {
+            storage.add(ThrowingConstruction{20});
+        });
+        ThrowingConstruction::throwOnMoveConstruction = false;
+
+        assert(!storage.has(slot));
+        assert(storage.get(slot) == nullptr);
+        assert(storage.size() == 0);
+
+        ComponentSlotId reused = storage.add(ThrowingConstruction{30});
+        assert(reused == slot);
+        assert(storage.get(reused)->value == 30);
+        assert(storage.size() == 1);
+    }
+
+    {
+        liquid::ComponentStorage<ResourceComponent> storage;
+        std::shared_ptr<int> resource = std::make_shared<int>(42);
+        std::weak_ptr<int> released = resource;
+        ComponentSlotId slot = storage.add(ResourceComponent{resource});
+
+        resource.reset();
+        assert(!released.expired());
+
+        storage.remove(slot);
+
+        assert(released.expired());
+        assert(!storage.has(slot));
+    }
+
+    {
         liquid::ComponentStorage<Light> storage;
 
         assert(!storage.has(42));
@@ -96,6 +163,17 @@ int main()
         storage.addAccess(reader, liquid::ComponentSlotAccess::rw, second);
         storage.addAccess(writer, liquid::ComponentSlotAccess::w, first);
 
+        expect_throw([&] {
+            storage.addAccess(reader, liquid::ComponentSlotAccess::r, 42);
+        });
+        expect_throw([&] {
+            storage.addAccess(
+                reader,
+                static_cast<liquid::ComponentSlotAccess::Mode>(3),
+                first
+            );
+        });
+
         assert(storage.allAccesses().size() == 2);
         assert(storage.accessesOf(reader).size() == 2);
         assert(storage.accessesOf(reader)[0].slot == first);
@@ -118,8 +196,9 @@ int main()
         storage.removeAccess(reader, first);
         assert(storage.accessesOf(reader).size() == 1);
 
-        storage.removeAccessesTo(first);
+        storage.remove(first);
 
+        assert(!storage.has(first));
         assert(storage.accessesOf(reader).size() == 1);
         expect_throw([&] {
             storage.accessesOf(writer);

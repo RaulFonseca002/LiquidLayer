@@ -4,6 +4,8 @@
 
 namespace liquid {
 
+// Monotonic milliseconds since the current runtime session began. It is not
+// wall-clock or epoch time and must never move backwards between frames.
 using IntentTime = std::uint64_t;
 
 enum class IntentLifetimeKind {
@@ -17,9 +19,9 @@ struct IntentLifetime {
     IntentLifetimeKind kind;
     IntentTime expiresAt;
 
-    IntentLifetime(IntentLifetimeKind kind, IntentTime expiresAt)
-        : kind(kind),
-          expiresAt(expiresAt)
+    IntentLifetime(IntentLifetimeKind lifetimeKind, IntentTime expirationTime)
+        : kind(lifetimeKind),
+          expiresAt(expirationTime)
     {
     }
 

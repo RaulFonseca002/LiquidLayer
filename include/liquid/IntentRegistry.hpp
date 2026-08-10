@@ -43,8 +43,12 @@ private:
     std::map<IntentId, ComponentIntent<Component>> records;
 
 public:
-    void add(ComponentIntent<Component> intent) {
-        records.emplace(intent.id, std::move(intent));
+    void add(ComponentIntent<Component>&& intent) {
+        auto [position, inserted] = records.emplace(intent.id, std::move(intent));
+        (void)position;
+
+        if (!inserted)
+            throw std::logic_error("intent id already exists in typed storage");
     }
 
     void destroy(IntentId id) override {
@@ -93,6 +97,8 @@ private:
     IntentTargetIndex byTarget;
 
     IntentId next_intent_id();
+    void release_intent_id(IntentId id);
+    static void validate_metadata(IntentLifetime lifetime, IntentPriority priority);
     const I_IntentStorage& storage_for(IntentId id) const;
     void erase_from_indexes(const Intent& intent);
 
@@ -103,6 +109,12 @@ private:
     std::shared_ptr<const IntentStorage<Component>> storage_for(ComponentType<Component> type) const;
 
 public:
+    IntentRegistry();
+    IntentRegistry(const IntentRegistry&) = delete;
+    IntentRegistry& operator=(const IntentRegistry&) = delete;
+    IntentRegistry(IntentRegistry&&) = delete;
+    IntentRegistry& operator=(IntentRegistry&&) = delete;
+
     template <typename Component>
     IntentId create(BehaviorId owner, ComponentType<Component> type, ComponentSlotId slot, IntentLifetime lifetime, Component value, IntentPriority priority = IntentPriority::Medium);
 
@@ -122,6 +134,7 @@ public:
     std::vector<IntentId> live_intent_ids() const;
     std::vector<IntentId> intents_for(ComponentTypeId type, ComponentSlotId slot) const;
     const IntentTargetIndex& target_index() const;
+    std::map<ComponentName, IntentId> select(ComponentTypeId type, const std::map<ComponentName, ComponentSlotId>& components) const;
     std::map<ComponentName, IntentId> resolve(ComponentTypeId type, const std::map<ComponentName, ComponentSlotId>& components, IntentTime now);
 
     std::size_t size(BehaviorId id) const;
@@ -176,16 +189,71 @@ IntentId IntentRegistry::create(BehaviorId owner, ComponentType<Component> type,
     if (slot == InvalidComponentSlotId)
         throw std::runtime_error("invalid component slot id");
 
+    validate_metadata(lifetime, priority);
+
+    std::shared_ptr<IntentStorage<Component>> storage = storage_for(type);
     IntentId id = next_intent_id();
+    bool storageAdded = false;
+    bool typeIndexed = false;
+    bool ownerIndexed = false;
 
-    ComponentIntent<Component> record{{id, owner, {type.id, slot}, lifetime, priority}, std::move(value)};
+    try {
+        ComponentIntent<Component> record{{id, owner, {type.id, slot}, lifetime, priority}, std::move(value)};
+        storage->add(std::move(record));
+        storageAdded = true;
 
-    storage_for(type)->add(std::move(record));
-    intentTypes.emplace(id, type.id);
-    byOwner[owner].emplace(id);
-    byTarget[type.id][slot].emplace(id);
+        auto [typePosition, typeInserted] = intentTypes.emplace(id, type.id);
+        (void)typePosition;
 
-    return id;
+        if (!typeInserted)
+            throw std::logic_error("intent id already indexed");
+
+        typeIndexed = true;
+
+        auto [ownerPosition, ownerInserted] = byOwner.at(owner).emplace(id);
+        (void)ownerPosition;
+
+        if (!ownerInserted)
+            throw std::logic_error("intent id already indexed by owner");
+
+        ownerIndexed = true;
+
+        auto [targetPosition, targetInserted] = byTarget[type.id][slot].emplace(id);
+        (void)targetPosition;
+
+        if (!targetInserted)
+            throw std::logic_error("intent id already indexed by target");
+
+        return id;
+    } catch (...) {
+        auto targetType = byTarget.find(type.id);
+
+        if (targetType != byTarget.end()) {
+            auto targetSlot = targetType->second.find(slot);
+
+            if (targetSlot != targetType->second.end()) {
+                targetSlot->second.erase(id);
+
+                if (targetSlot->second.empty())
+                    targetType->second.erase(targetSlot);
+            }
+
+            if (targetType->second.empty())
+                byTarget.erase(targetType);
+        }
+
+        if (ownerIndexed)
+            byOwner.at(owner).erase(id);
+
+        if (typeIndexed)
+            intentTypes.erase(id);
+
+        if (storageAdded)
+            storage->destroy(id);
+
+        release_intent_id(id);
+        throw;
+    }
 }
 
 template <typename Component>

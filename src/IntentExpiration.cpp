@@ -4,6 +4,8 @@
 #include "liquid/IntentRegistry.hpp"
 #include "liquid/world/World.hpp"
 
+#include <stdexcept>
+
 namespace liquid {
 
 namespace {
@@ -17,7 +19,7 @@ bool lifetime_is_expired(const IntentLifetime& lifetime, IntentTime now) {
             return now >= lifetime.expiresAt;
     }
 
-    return false;
+    throw std::invalid_argument("unknown intent lifetime kind");
 }
 
 }
@@ -71,15 +73,6 @@ std::vector<IntentId> expired_intent_ids(const World& world, IntentTime now) {
     }
 
     return expired;
-}
-
-std::size_t destroy_expired_intents(World& world, IntentTime now) {
-    std::vector<IntentId> expired = expired_intent_ids(world, now);
-
-    for (IntentId id : expired)
-        world.destroy_intent(id);
-
-    return expired.size();
 }
 
 }

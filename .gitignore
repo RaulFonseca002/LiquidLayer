@@ -4,6 +4,7 @@
 
 # CMake and build outputs
 build/
+build_sanitized/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt

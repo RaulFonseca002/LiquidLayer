@@ -1,6 +1,6 @@
-#include "liquid/world/World.hpp"
 #include "liquid/IntentExpiration.hpp"
 #include "liquid/IntentRegistry.hpp"
+#include "liquid/Runtime.hpp"
 
 #include <cassert>
 #include <type_traits>
@@ -54,7 +54,8 @@ int main()
         assert(expired.size() == 1);
         assert(contains(expired, timed));
 
-        assert(destroy_expired_intents(intents, 20) == 1);
+        std::size_t destroyed = destroy_expired_intents(intents, 20);
+        assert(destroyed == 1);
         assert(intents.exists(persistent));
         assert(!intents.exists(timed));
         assert(intents.exists(later));
@@ -66,7 +67,8 @@ int main()
     }
 
     {
-        World world;
+        Runtime runtime;
+        World& world = runtime.world();
         ComponentType<Light> lightType = world.register_component<Light>("Light");
 
         world.add_component(lightType, "officeLight", Light{50});
@@ -87,7 +89,9 @@ int main()
         assert(expired.size() == 1);
         assert(contains(expired, timed));
 
-        assert(destroy_expired_intents(world, 5) == 1);
+        FrameLog log = runtime.run_frame(5);
+
+        assert(log.expired_intents == 1);
         assert(!world.intent_exists(timed));
         assert(world.intent_exists(persistent));
 

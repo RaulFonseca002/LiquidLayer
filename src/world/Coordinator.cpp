@@ -1,15 +1,53 @@
 #include "liquid/world/Coordinator.hpp"
 
+#include <exception>
+#include <limits>
 #include <stdexcept>
 
-Coordinator::Coordinator(WorldState& state)
-    : state(state)
+Coordinator::Coordinator(WorldState& worldState)
+    : state(worldState)
 {
 }
 
 BehaviorId Coordinator::create_behavior() {
+    BehaviorAccessRevision accessRevision = next_behavior_access_revision();
     BehaviorId behavior = state.behaviors.create();
-    state.intents.create_behavior_pool(behavior);
+
+    try {
+        state.intents.create_behavior_pool(behavior);
+        auto [signaturePosition, signatureInserted] = state.behaviorSignatures.emplace(
+            behavior,
+            Signature{}
+        );
+        (void)signaturePosition;
+
+        if (!signatureInserted)
+            throw std::logic_error("behavior signature already exists");
+
+        auto [revisionPosition, revisionInserted] = state.behaviorAccessRevisions.emplace(
+            behavior,
+            accessRevision
+        );
+        (void)revisionPosition;
+
+        if (!revisionInserted)
+            throw std::logic_error("behavior access revision already exists");
+
+        update_system_memberships(behavior);
+    } catch (...) {
+        std::exception_ptr creationException = std::current_exception();
+
+        try {
+            state.systems.remove_behavior(behavior);
+        } catch (...) {
+        }
+
+        state.behaviorSignatures.erase(behavior);
+        state.behaviorAccessRevisions.erase(behavior);
+        state.intents.destroy_owned_by(behavior);
+        state.behaviors.destroy(behavior);
+        std::rethrow_exception(creationException);
+    }
 
     return behavior;
 }
@@ -20,9 +58,20 @@ void Coordinator::destroy_behavior(BehaviorId id) {
 
     state.components.remove_behavior(id);
     state.behaviorSignatures.erase(id);
-    state.systems.remove_behavior(id);
+    state.behaviorAccessRevisions.erase(id);
+    std::exception_ptr callbackException;
+
+    try {
+        state.systems.remove_behavior(id);
+    } catch (...) {
+        callbackException = std::current_exception();
+    }
+
     state.intents.destroy_owned_by(id);
     state.behaviors.destroy(id);
+
+    if (callbackException)
+        std::rethrow_exception(callbackException);
 }
 
 bool Coordinator::behavior_exists(BehaviorId id) {
@@ -31,6 +80,25 @@ bool Coordinator::behavior_exists(BehaviorId id) {
 
 std::size_t Coordinator::behavior_count() {
     return state.behaviors.size();
+}
+
+BehaviorAccessRevision Coordinator::behavior_access_revision(BehaviorId id) const {
+    if (!state.behaviors.exists(id))
+        throw std::runtime_error("behavior id not found");
+
+    auto found = state.behaviorAccessRevisions.find(id);
+
+    if (found == state.behaviorAccessRevisions.end())
+        throw std::logic_error("behavior access revision not found");
+
+    return found->second;
+}
+
+BehaviorAccessRevision Coordinator::next_behavior_access_revision() {
+    if (state.lastBehaviorAccessRevision == std::numeric_limits<BehaviorAccessRevision>::max())
+        throw std::overflow_error("behavior access revision exhausted");
+
+    return ++state.lastBehaviorAccessRevision;
 }
 
 void Coordinator::destroy_intent(IntentId id) {
@@ -74,7 +142,8 @@ std::map<ComponentName, IntentId> Coordinator::resolve_intents(
     const std::map<ComponentName, ComponentSlotId>& components,
     IntentTime now
 ) {
-    return state.intents.resolve(type, components, now);
+    (void)now;
+    return state.intents.select(type, components);
 }
 
 void Coordinator::destroy_intents_for_target(ComponentTypeId type, ComponentSlotId slot) {
@@ -104,8 +173,13 @@ std::size_t Coordinator::system_count() const {
     return state.systems.size();
 }
 
-std::size_t Coordinator::run_systems(World& world, FrameNumber frame, IntentTime now) {
-    return state.systems.run_systems(world, frame, now);
+std::size_t Coordinator::run_systems(
+    World& world,
+    FrameNumber frame,
+    IntentTime now,
+    std::size_t* completedSystems
+) {
+    return state.systems.run_systems(world, frame, now, completedSystems);
 }
 
 Signature Coordinator::behavior_signature(BehaviorId behavior) const {
@@ -119,4 +193,22 @@ Signature Coordinator::behavior_signature(BehaviorId behavior) const {
 
 void Coordinator::update_system_memberships(BehaviorId behavior) {
     state.systems.update_behavior(behavior, behavior_signature(behavior));
+}
+
+void Coordinator::update_all_system_memberships() {
+    std::exception_ptr firstException;
+
+    for (const auto& [behavior, behaviorSignature] : state.behaviorSignatures) {
+        (void)behaviorSignature;
+
+        try {
+            update_system_memberships(behavior);
+        } catch (...) {
+            if (!firstException)
+                firstException = std::current_exception();
+        }
+    }
+
+    if (firstException)
+        std::rethrow_exception(firstException);
 }

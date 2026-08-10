@@ -49,7 +49,8 @@ void stress_behavior_registry()
 
         if (shouldCreate && active.size() < MAX_BEHAVIOURS) {
             BehaviorId id = registry.create();
-            assert(active.insert(id).second);
+            bool inserted = active.insert(id).second;
+            assert(inserted);
             activeList.push_back(id);
         } else if (!activeList.empty()) {
             std::uniform_int_distribution<std::size_t> distribution(0, activeList.size() - 1);
@@ -98,7 +99,8 @@ void stress_intent_registry()
             IntentId id = registry.create(owner, type, slot, IntentLifetime::persistent(), StressLight{static_cast<int>(step)});
             assert(registry.owner_of(id) == owner);
             assert(registry.target_of(id) == (ComponentTarget{type.id, slot}));
-            assert(active[owner].insert(id).second);
+            bool inserted = active[owner].insert(id).second;
+            assert(inserted);
             activeList[owner].push_back(id);
         } else if (operation < 8 && !activeList[owner].empty()) {
             std::uniform_int_distribution<std::size_t> distribution(0, activeList[owner].size() - 1);
@@ -306,19 +308,15 @@ void stress_world()
         model.liveTemperatures.insert(name);
     }
 
-    world.register_system<StressLightSystem>();
-    world.register_system<StressTemperatureSystem>();
-    world.register_system<StressCombinedSystem>();
-
     Signature lightSignature;
     lightSignature.set(lightType.id);
     Signature temperatureSignature;
     temperatureSignature.set(temperatureType.id);
     Signature combinedSignature = lightSignature | temperatureSignature;
 
-    world.set_system_signature<StressLightSystem>(lightSignature);
-    world.set_system_signature<StressTemperatureSystem>(temperatureSignature);
-    world.set_system_signature<StressCombinedSystem>(combinedSignature);
+    world.register_system<StressLightSystem>(lightSignature);
+    world.register_system<StressTemperatureSystem>(temperatureSignature);
+    world.register_system<StressCombinedSystem>(combinedSignature);
 
     std::vector<BehaviorId> activeBehaviors;
 

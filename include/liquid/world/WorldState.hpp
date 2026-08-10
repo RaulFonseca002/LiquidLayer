@@ -8,9 +8,12 @@
 #include <map>
 
 struct WorldState {
+    WorldInstanceId instanceId = 0;
     ComponentRegistry components;
     BehaviorRegistry behaviors;
     IntentRegistry intents;
     SystemRegistry systems;
     std::map<BehaviorId, Signature> behaviorSignatures;
+    std::map<BehaviorId, BehaviorAccessRevision> behaviorAccessRevisions;
+    BehaviorAccessRevision lastBehaviorAccessRevision = 0;
 };

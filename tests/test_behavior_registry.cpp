@@ -60,13 +60,16 @@ int main()
         BehaviorId third = behaviors.create();
 
         behaviors.destroy(second);
-        assert(behaviors.create() == second);
+        BehaviorId recycledSecond = behaviors.create();
+        assert(recycledSecond == second);
 
         behaviors.destroy(first);
         behaviors.destroy(third);
 
-        assert(behaviors.create() == third);
-        assert(behaviors.create() == first);
+        BehaviorId recycledThird = behaviors.create();
+        BehaviorId recycledFirst = behaviors.create();
+        assert(recycledThird == third);
+        assert(recycledFirst == first);
         assert(behaviors.size() == 3);
     }
 
@@ -87,7 +90,8 @@ int main()
 
         for (std::size_t i = 0; i < MAX_BEHAVIOURS; ++i) {
             BehaviorId id = behaviors.create();
-            assert(created.insert(id).second);
+            bool inserted = created.insert(id).second;
+            assert(inserted);
             assert(behaviors.exists(id));
         }
 
