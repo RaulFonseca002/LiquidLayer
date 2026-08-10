@@ -26,40 +26,27 @@ Superposition ECS reference lives at `/home/raul/Desktop/superposition`. Use it 
 
 ## Current Coding Milestone
 
-### M5 — Lua Behavior Scripting
+### M6 — Simulation CLI
 
-Goal: allow Lua behavior code to create new intents through controlled APIs while keeping existing intent records immutable and world/registry internals protected.
+Goal: add the smallest deterministic command-line executable that runs Solid scenarios without hardware and exercises the existing Runtime and M5 Lua boundary.
 
 Codex should focus only on:
 
-- `Ids.hpp`
-- `IntentLifetime.hpp`
-- `IntentExpiration.hpp`
-- `IntentRegistry.hpp`
-- `BehaviorRegistry.hpp`
-- `ComponentStorage.hpp`
-- `ComponentRegistry.hpp`
-- `world/WorldState.hpp`
-- `world/Coordinator.hpp`
-- `world/World.hpp`
-- `SystemRegistry.hpp`
-- `Runtime.hpp`
-- `scripting/` headers and sources when the Lua boundary design requires them
-- `world/World.cpp`
-- `Runtime.cpp`
-- existing M1/M2/M3/M4 `.cpp` files only when needed for scripting integration
+- `apps/` for the simulation executable
 - CMake boilerplate
-- test files for the above, especially `test_lua_behavior.cpp` and regressions in existing M1/M2/M3/M4 tests
+- `Runtime`, `World`, and `scripting/` public surfaces only when minimal CLI integration requires them
+- a focused CLI integration test and regressions in existing M1-M5 tests
+- documentation needed to define and run deterministic scenarios
 
-Do not create event, adapter, LLM, simulation CLI, MQTT, voice, or final Liquid Layer application systems yet.
-M5 is limited to controlled Lua behavior scripting. Lua may create new intents through approved APIs; it must not mutate existing intents, component storage internals, registries, coordinator internals, or physical-world state directly.
+Do not create event, physical adapter, LLM, MQTT, voice, or final Liquid Layer application systems yet.
+M6 is limited to a hardware-free simulation CLI. It should reuse the existing Runtime and Lua execution paths, accept explicit deterministic inputs, and expose inspectable results without introducing a second runtime architecture.
 
 ---
 
-## Current Minimal Repository Shape and M5 Additions
+## Current Minimal Repository Shape and M6 Additions
 
 Start small. Do not create folders before they are needed.
-The M5 scripting folders listed here are allowed additions when implementing the current milestone.
+The completed M5 scripting folders remain part of the core. M6 adds only `apps/` and its focused test when implementation begins.
 
 ```text
 liquid/
@@ -68,6 +55,8 @@ liquid/
   DEVELOPMENT_TRACKING.md
   Liquid_Concepts_and_Architecture.md
   ARTICLE_NOTES.md
+
+  apps/
 
   include/
     liquid/
@@ -110,6 +99,7 @@ liquid/
     test_intent_resolution.cpp
     test_runtime.cpp
     test_lua_behavior.cpp
+    test_simulation_cli.cpp
     test_stress.cpp
 ```
 
@@ -190,10 +180,15 @@ Current planned ID model:
 - Behaviors do not own components exclusively. Multiple behaviors may receive read/write access to the same named component.
 - `ComponentRegistry` owns component type IDs, the type-erased storage map, and the `ComponentName <-> ComponentSlotId` indexes for each component type.
 - `ComponentStorage<T>` owns component slots, slot recycling, and access records for that one component type.
+- Live component slots are represented explicitly; removal destroys the stored value immediately, and liveness checks are constant-time.
+- References and pointers returned by component APIs are borrowed only until the next structural mutation of that typed storage. Never retain them across frames or expose them to Lua.
 - Behavior access is tracked inside the typed storage as `BehaviorId -> vector<ComponentSlotAccess>`, where each access records a slot and read/write mode.
-- In M4, `World` is the outside-facing state boundary and owns `WorldState`. `Runtime` advances the world through deterministic frames. `Coordinator` is internal consistency logic over `WorldState`.
+- In M4, `World` is the outside-facing state boundary and owns `WorldState`. `Runtime` is the sole frame-phase driver; `Coordinator` is internal consistency logic over `WorldState`.
+- The settled M4 order is `begin -> expire -> systems -> resolve -> end`, so intents created by systems can participate in the same frame.
+- World and system topology cannot change during system dispatch. Systems may use component data through existing APIs and create or cancel intents.
 - Systems request `name -> ComponentSlotId` maps for a behavior and component type. Behavior permission checks happen before component slots are handed out or resolved.
-- Completed M1 system coordination stores inherited `System` objects by concrete system type, `Signature` requirements, and behavior-to-system membership. Coordinator updates membership when behavior signatures change.
+- System registration receives its initial `Signature` atomically. Only `Coordinator` derives membership from behavior signatures; `World` has no public manual membership override.
+- Membership callbacks are observational and should not throw or mutate topology. The registry commits all transitions and then rethrows the first callback error; creation/registration may roll back the newly created object, while already-started structural changes remain committed and consistent.
 - Physical addresses or adapter references may belong inside component data when needed; permissions belong in the behavior/type/slot access table.
 - Components should not contain virtual behavior.
 - Do not use C++ inheritance between components.
@@ -206,7 +201,20 @@ Current planned ID model:
 - Intent lifetime is intent metadata, not component storage.
 - M2 introduced the minimal lifetime model needed to evaluate and clean expired immutable intents.
 - Current lifetime policies are persistent and until-time. Explicit cancellation is represented by destroying the intent. Until-frame, cancellation events, or script-based lifetime can remain future work unless explicitly required.
+- `IntentTime` is monotonic session-relative time in milliseconds, never wall-clock or epoch time. Explicit frame times must be nondecreasing.
 - Factories/bundles should be used later so required intent fields and behavior component sets are not forgotten.
+
+### Runtime and Lua Boundary
+
+- `World` and `Runtime` are single-thread-confined; callers provide any external synchronization.
+- Lua receives only typed, named, allowlisted capabilities for creating new intents. It never receives `World`, `Coordinator`, registries, storage, raw component slots, component pointers, or a caller-selected owner.
+- Cached capability layouts contain only immutable host descriptions keyed by lifecycle-unique world and behavior access revisions. Lua gets a fresh state, table, and copied snapshot on every execution.
+- Access-table contents are data, not authority. Writable entries expose only `propose(request)`, and one execution may buffer multiple proposals for the same target before any intent is committed.
+- The host fixes the executing `BehaviorId` and current time. Lua may request only persistent lifetime or a checked duration in milliseconds.
+- Each execution has bounded instructions, Lua memory, buffered host values, strings, tables, source size, diagnostic size, and created-intent count.
+- A failed script returns an execution error and destroys only the intents created by that execution. Script errors must not escape `System::run` and fault the whole runtime.
+- Lua C closures catch C++ exceptions before returning to Lua, and Lua error jumps must not cross live C++ RAII objects.
+- `Liquid_Concepts_and_Architecture.md`, section 13, is the canonical Lua script-authoring and future model-prompt contract. Generated scripts also require a trusted dynamic capability manifest; never infer codec schemas or permissions from snapshots alone.
 
 ### Serialization/Reproducibility
 
@@ -223,25 +231,25 @@ Avoid:
 
 ## Current Success Criteria
 
-M5 is working when tests can prove:
+M6 is working when tests can prove:
 
-1. Lua behavior code can create a new intent through a controlled API.
-2. Lua cannot mutate an existing intent record after creation.
-3. Lua cannot bypass `World` permissions or write directly into registries/component storage.
-4. Script-created intents follow the existing owner, target, lifetime, priority, cleanup, and resolution rules.
-5. Existing M1/M2/M3/M4 behavior, component, system-membership, intent lifetime, cleanup, resolution, runtime, world, recycling, and sanitizer-backed stress tests still pass.
+1. A minimal Solid scenario runs from the command line without hardware.
+2. The CLI drives the existing Runtime and M5 Lua boundary rather than duplicating their behavior.
+3. Explicit scenario inputs and frame times produce reproducible observable results.
+4. Successful frame results, selected intents, and bounded script errors are inspectable.
+5. End-to-end CLI regressions cover a successful scenario and a script failure.
+6. Existing M1-M5 behavior, component, intent, runtime, Lua sandbox, recycling, and sanitizer-backed stress tests still pass.
 
 ---
 
 ## What Not to Build Yet
 
-Do not add these during M5:
+Do not add these during M6:
 
 - `events/`
 - `systems/`
 - `adapters/`
 - LLM integration
-- simulation CLI
 - MQTT
 - voice pipeline
 - final Liquid Layer application concepts
@@ -252,8 +260,9 @@ Do not add these during M5:
 - M2 intent lifetime and expiration is complete and now flows through `World` at the public boundary.
 - M3 intent resolution is complete: behavior/type access produces `name -> ComponentSlotId`, `IntentRegistry` returns `name -> selected IntentId`, and later application resolves component data through coordinator/registry APIs.
 - System coordination is implemented as template-addressed system registration, signatures, behavior membership, and membership callbacks.
-- M4 minimal frame loop is complete: `Runtime` advances `World`, records a small frame log, resolves explicit intent requests, and runs systems through `System::run(World&, FrameNumber, IntentTime)` in deterministic registration order.
-- M5 Lua behavior scripting is current: Lua may create new intents only through controlled APIs and must not mutate existing intent records or bypass `World`.
+- M4 minimal frame loop is complete: `Runtime` alone drives `begin -> expire -> systems -> resolve -> end`, records completed or failed frames, accepts only nondecreasing explicit time, and runs systems in deterministic registration order.
+- M5 Lua behavior scripting is complete: Lua may create new intents only through controlled APIs and cannot mutate existing intent records or bypass `World`.
+- M6 Simulation CLI is current: it should provide a deterministic, inspectable, hardware-free way to exercise the completed Solid core.
 - `Coordinator` remains responsible internally for registering systems, storing or forwarding system `Signature`s, matching behavior signatures to systems, and updating system membership whenever component access changes or a behavior/component is destroyed.
 - Future systems, runtime loops, and adapters should not store direct component pointers as long-term state; use behavior IDs, component type handles, component names, and slots as handles that can be validated each frame.
 

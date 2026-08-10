@@ -34,7 +34,7 @@ M1 proves the first technical foundation:
 - intents are owned by behaviors and use global recyclable intent-record handles;
 - components are shared named data, not behavior-owned objects;
 - behaviors receive read/write access to named component instances;
-- `Coordinator` is the public boundary for behavior ownership, permissions, signatures, and cleanup;
+- `World` is the public state boundary for behavior ownership, permissions, signatures, and cleanup, while `Coordinator` remains internal consistency logic;
 - systems can track matching behavior membership through component-type signatures;
 - cleanup and recycling paths are covered by assert tests, deterministic stress tests, and opt-in sanitizer builds.
 

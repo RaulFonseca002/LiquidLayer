@@ -93,6 +93,7 @@ Current minimal structure:
 liquid/
   CMakeLists.txt
   AGENTS.md
+  CURRENT_STATE_EVALUATION.md
   DEVELOPMENT_TRACKING.md
   Liquid_Concepts_and_Architecture.md
   ARTICLE_NOTES.md
@@ -100,6 +101,8 @@ liquid/
   include/
     liquid/
       Ids.hpp
+      IntentLifetime.hpp
+      IntentExpiration.hpp
       ComponentStorage.hpp
       ComponentRegistry.hpp
       world/
@@ -110,6 +113,7 @@ liquid/
       IntentRegistry.hpp
       SystemRegistry.hpp
       Runtime.hpp
+      scripting/
 
   src/
     ComponentRegistry.cpp
@@ -119,7 +123,9 @@ liquid/
     BehaviorRegistry.cpp
     IntentRegistry.cpp
     SystemRegistry.cpp
+    IntentExpiration.cpp
     Runtime.cpp
+    scripting/
 
   tests/
     test_ids.cpp
@@ -129,6 +135,10 @@ liquid/
     test_behavior_registry.cpp
     test_intent_registry.cpp
     test_system_registry.cpp
+    test_intent_expiration.cpp
+    test_intent_resolution.cpp
+    test_runtime.cpp
+    test_lua_behavior.cpp
     test_stress.cpp
 ```
 
@@ -270,7 +280,7 @@ Expected concepts:
 - cleanup of expired intents.
 - explicit cancellation by destroying an intent.
 
-Current implementation direction:
+Current implementation:
 
 - Keep intent lifetime as intent metadata, not component storage.
 - Keep the public world boundary responsible for behavior-owned intent creation and cleanup.
@@ -358,7 +368,7 @@ tests/test_intent_resolution.cpp
 
 Completion note:
 
-M4 adds `World` as the public state boundary, `WorldState` as the owner of world-local registries/signatures, internal coordinator logic over that state, deterministic registration-ordered system execution through `System::run(World&, FrameNumber, IntentTime)`, and `Runtime::run_frame(...)` with expiration, explicit intent resolution requests, and a small frame log. The World layer now lives under dedicated `world` folders.
+M4 adds `World` as the public state boundary, `WorldState` as the owner of world-local registries/signatures, internal coordinator logic over that state, and `Runtime` as the sole frame-phase driver. Frames use explicit nondecreasing time, run systems in deterministic registration order before resolving their intents, and retain a small success or failure log. The World layer now lives under dedicated `world` folders.
 
 Goal:
 
@@ -370,6 +380,7 @@ Expected concepts:
 - frame context;
 - begin frame;
 - run intent expiration;
+- run systems;
 - resolve intents;
 - cleanup;
 - frame log stub.
@@ -379,12 +390,13 @@ This is the first milestone where a `runtime/` folder may become justified.
 Current implementation direction:
 
 - Keep the loop deterministic and explicit; no wall-clock globals.
-- `World` owns `WorldState` and is the public state boundary.
-- `Runtime` owns a `World` and advances it through deterministic frames.
+- `World` owns `WorldState`, enforces cross-registry invariants, and exposes domain commands and queries.
+- `Runtime` owns a `World` and is the only caller of frame-phase operations.
 - Keep `Coordinator` as internal consistency logic for behavior signatures, permissions, cleanup, system membership, and registry forwarding.
-- Call expiration through the world-based expiration helper, then resolve explicit frame requests through `World::resolve_intents(...)`.
-- Run systems through `SystemRegistry` in deterministic registration order with `System::run(World&, FrameNumber, IntentTime)`.
-- Add only the minimal frame log shape needed to prove ordering and selected intent handles.
+- Execute `begin -> expire -> systems -> resolve -> end`; intents created by a system participate in that same frame's explicit resolution requests.
+- Run systems through `SystemRegistry` in deterministic registration order with `System::run(World&, FrameNumber, IntentTime)` while world and system topology is frozen.
+- Accept equal timestamps but reject decreasing `IntentTime` before a frame starts.
+- Treat an escaping phase exception as fail-stop: preserve the partial frame log, do not advance the frame number, and reject further frames on that `Runtime` instance.
 - Do not add adapters, events, Lua, LLM integration, simulation CLI, or physical-world application.
 
 Likely new files:
@@ -403,7 +415,7 @@ tests/test_world.cpp
 
 ### M5 — Lua Behavior Scripting
 
-**Status:** Current
+**Status:** Done
 
 Goal:
 
@@ -413,14 +425,21 @@ Important rule:
 
 Lua creates new intents. It does not mutate existing intents.
 
-Current implementation direction:
+Implemented boundary:
 
-- Keep Lua behind controlled APIs that create new intents through `World`.
-- Do not let Lua mutate existing intents, registries, component storage internals, or coordinator state directly.
-- Decide the minimal Lua binding/runtime surface before adding a large scripting subsystem.
+- Pin the official Lua C API at Lua 5.4.8 for M5.
+- Give Lua only typed, named, allowlisted intent-creation capabilities. Never expose `World`, `Coordinator`, registries, storage, raw component slots, component pointers, or owner selection.
+- Cache only immutable host capability descriptions by lifecycle-unique world and behavior access revisions. Build a fresh Lua state, capability table, and copied component snapshot for every execution.
+- Fix the executing `BehaviorId` and current time in the host. Lua may choose only persistent lifetime or a checked duration in monotonic session-relative milliseconds.
+- Execute scripts in protected mode with explicit instruction, Lua-memory, source-size, diagnostic-size, and per-execution created-intent limits. Do not use `luaL_openlibs`; load only the libraries deliberately approved for behavior code.
+- Keep `pcall`, `xpcall`, coroutine, dynamic loading, package, OS, I/O, debug, metatable, and raw-table authority out of the script environment. Omit native string pattern/format functions that could bypass the VM instruction hook or reveal object addresses.
+- Catch C++ exceptions inside every Lua C closure and avoid Lua long jumps across live C++ RAII objects.
+- Let a writable capability buffer multiple `propose(...)` requests, including multiple requests for the same component. Commit only after successful script completion; if a later commit fails, roll back only the intent IDs already created by that execution.
+- Keep existing intent ownership, permission, priority, lifetime, cleanup, and resolution rules as the only authority behind the binding.
+- Treat `Liquid_Concepts_and_Architecture.md`, section 13, as the canonical script-authoring and future model-prompt contract. A future prompt builder must combine that stable contract with current behavior permissions and trusted machine-readable schema metadata registered beside each codec; the current executable codec functions are not introspectable.
 - Keep adapters, LLM integration, simulation CLI, MQTT, voice, and final Liquid Layer application concepts out of scope.
 
-Likely new files:
+M5 files:
 
 ```text
 include/liquid/scripting/
@@ -432,13 +451,28 @@ tests/test_lua_behavior.cpp
 
 ### M6 — Simulation CLI
 
-**Status:** Planned
+**Status:** Current
 
 Goal:
 
 Add a small executable that runs Solid without hardware.
 
 This is the first milestone where `apps/` becomes useful.
+
+Current implementation direction:
+
+- Add one small executable under `apps/` that links the existing `liquid` library.
+- Run reproducible scenarios with explicit frame times and deterministic inputs.
+- Accept simulated initial state and Lua behavior source without requiring physical adapters.
+- Report frame results, selected intents, and bounded script errors in a form suitable for inspection and golden tests.
+- Keep events, physical adapters, LLM integration, MQTT, voice, and final Liquid Layer application behavior out of scope.
+
+Done when:
+
+- a user can run a minimal Solid scenario from the command line without hardware;
+- the scenario exercises the existing Runtime and M5 Lua boundary rather than introducing a second execution path;
+- repeated runs with the same inputs produce the same observable result;
+- at least one end-to-end CLI regression covers successful execution and one covers a bounded script error.
 
 ---
 
@@ -485,12 +519,13 @@ When a milestone is completed:
 
 ## Current Notes
 
-- The current coding focus is M5 Lua behavior scripting.
+- The current coding focus is M6 Simulation CLI.
 - M1 modified ECS core is complete and should be treated as foundation, not active scope.
 - M2 now uses typed intent-record storage with owner and component-target indexes; `IntentId` no longer encodes the owner behavior.
 - M3 registry-owned intent resolution is complete and should be treated as foundation, not active scope.
 - M4 is complete: it introduces the smallest deterministic frame loop, `World` as public state boundary, explicit frame input, expiration, intent resolution requests, registration-ordered system execution, and a small frame log.
-- M5 should introduce only the controlled Lua behavior scripting boundary needed for behaviors to create intents.
+- M5 is complete: it provides the controlled Lua behavior scripting boundary needed for behaviors to create intents without exposing runtime internals.
+- M6 is current: add the smallest deterministic, hardware-free CLI that exercises the existing Runtime and Lua boundary.
 - The project owner will implement core logic manually.
 - Codex should generate headers, tests, CMake, and boilerplate unless explicitly asked to implement logic.
 - The current structure is intentionally small to keep the project controllable.

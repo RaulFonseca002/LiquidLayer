@@ -1,11 +1,11 @@
 # Liquid Concepts and Architecture v0.2
 
-**Status:** Living baseline during M5 Lua behavior scripting
+**Status:** Living baseline during M6 Simulation CLI
 **Scope:** Conceptual architecture, vocabulary, and accepted design direction  
 **Project:** Liquid Layer  
 **Engine / framework:** Liquid  
-**Current development stage:** Solid, M5 Lua behavior scripting
-**Date:** June 2026
+**Current development stage:** Solid, M6 Simulation CLI
+**Date:** August 2026
 
 ---
 
@@ -25,7 +25,7 @@ The project is divided into three conceptual layers.
 |---|---|---|
 | **Liquid Layer** | Final application/research project focused on adaptive smart environments for neurodivergent people. | Future project layer |
 | **Liquid** | Standalone engine/framework/runtime used by Liquid Layer and by simulation/data-collection tools. | Engine repo |
-| **Solid** | First implementation stage of Liquid: deterministic ECS-inspired runtime. | M1-M4 complete; M5 current |
+| **Solid** | First implementation stage of Liquid: deterministic ECS-inspired runtime. | M1-M5 complete; M6 current |
 | **Liquid stage** | Later implementation stage: adaptive/LLM layer that creates, modifies, and explains Solid blocks. | Future focus |
 
 The internal code should not overuse metaphorical names. Folder and file names should describe responsibility: `vocabulary`, `core`, `runtime`, `events`, `behaviors`, `intents`, `systems`, and `adapters`.
@@ -189,7 +189,7 @@ A command is the adapter-facing operation produced from a resolved effect. The a
 
 ### Frame
 
-A frame is one deterministic execution step of the runtime. The frame collects inputs, applies events, runs systems, resolves intents, emits effects, logs what happened, and advances time/frame number.
+A frame is one deterministic execution step of the runtime. In the current Solid core, `Runtime` begins the frame, expires old intents, runs systems, resolves explicit intent requests, records completion, and advances the frame number. Future input, event, effect, and adapter phases must be added around this fixed ownership boundary rather than bypassing it.
 
 ---
 
@@ -349,12 +349,16 @@ Folder responsibility:
 - Access relationships hold permissions between behaviors and named component instances.
 - `ComponentType<T>` is the typed runtime handle returned by explicit component registration.
 - Component type lookup is template-driven in M1, following the Superposition-style manager flow.
-- `Runtime` owns the minimal deterministic frame loop and advances a `World`.
-- `World` owns `WorldState`: component, behavior, intent, and system registries plus behavior signatures.
+- `Runtime` owns the minimal deterministic frame loop, is the sole frame-phase driver, and advances a `World` using nondecreasing explicit time.
+- `World` owns `WorldState`: component, behavior, intent, and system registries plus behavior signatures. It exposes domain commands and queries but not direct system-execution, expiration-cleanup, or intent-resolution phases.
 - World-layer headers and sources live under a dedicated `world` folder because `World` is the public state boundary, while `Runtime` remains separate frame orchestration.
 - `Coordinator` operates internally on `WorldState` for behavior existence checks, cross-manager permission checks, cleanup sequencing, registry forwarding, and system membership.
 - Systems are registered by concrete type and store `Signature` requirements, behavior membership, and membership callbacks.
-- M4 runs systems in deterministic registration order with `System::run(World&, FrameNumber, IntentTime)`.
+- A system's initial `Signature` is supplied atomically at registration. `Coordinator` alone derives membership from signatures; the public `World` API does not provide manual membership overrides.
+- Membership callbacks are observational and should not throw or mutate topology. Membership transitions are committed before the first callback error is rethrown; callers must inspect state rather than assume an exception implies rollback.
+- M4 runs systems in deterministic registration order with `System::run(World&, FrameNumber, IntentTime)` before resolution, so system-created intents can be selected in the same frame.
+- Component, behavior, permission, and system topology is frozen during system dispatch; systems may use permitted component data and create or cancel intents.
+- A frame that lets an exception escape is not committed: its number does not advance, its partial log records the failed phase, and that `Runtime` becomes fail-stop because world mutations are not transactional yet.
 - Systems should own behavior logic.
 - Intents are immutable proposed component-state changes or effects, not component rows and not immediate actions.
 - Intent owner pools are aligned with behavior creation/destruction through `World`.
@@ -363,6 +367,15 @@ Folder responsibility:
 - Intent resolution should be target-oriented; current M3 resolves one component type from `ComponentName -> ComponentSlotId` into `ComponentName -> IntentId`.
 - A selected intent handle later becomes a resolved effect, then an adapter command/action.
 - Completed M2 intent lifetime is persistent or until-time; future factories/bundles should create valid intent records without missing required metadata.
+- `IntentTime` means monotonic milliseconds since the runtime session began. It is not epoch or wall-clock time.
+- Component pointers and references are borrowed views valid only until the next structural mutation of that typed storage; they are never retained across frames or exposed to Lua.
+- `World` and `Runtime` are single-thread-confined and require external synchronization if driven from more than one thread.
+- M5 Lua receives a narrow capability API: typed component name and value, host-fixed behavior owner and current time, and persistent or checked-duration lifetime. Scripts never receive `World`, coordinator/registry/storage objects, raw slots, component pointers, or owner selection.
+- Capability layouts cache only immutable host descriptions keyed by lifecycle-unique world and behavior access revisions. Every execution creates a fresh Lua state, fresh access tables, and copied component snapshots, so script mutations cannot retain or enlarge authority.
+- Writable capabilities expose only `propose(request)`. A script may buffer multiple requests for the same component, such as a temporary high-priority intent plus a persistent lower-priority fallback; access-table fields are never interpreted as authority.
+- Every Lua execution is protected by instruction, Lua-memory, buffered-host-value, string, table, source, diagnostic, and created-intent limits. Proposals commit only after successful execution; partial commit failure rolls back only the intents created by that execution, and errors do not escape `System::run`.
+- The script environment omits protected-call and coroutine facilities as well as dynamic loading, package, OS, I/O, debug, raw-table, and metatable authority. This prevents hook errors from being caught in an unbounded loop and keeps the capability table as the only effect boundary.
+- Lua host closures catch C++ exceptions at the C boundary and avoid Lua long jumps across live C++ RAII objects.
 - No C++ inheritance between components in v1.
 - LLM conflict resolution is not a default mechanism.
 - LLM/script work should be async when it may be slow.
@@ -370,7 +383,421 @@ Folder responsibility:
 
 ---
 
-## 13. Open Decisions
+## 13. Lua Behavior Scripting and Model Prompt Contract
+
+This section is the canonical authoring contract for M5 behavior scripts. It is intended for human authors, tests, and future prompts that ask a model to generate Lua. If this section and an example disagree, this section wins.
+
+### 13.1 Host integration model
+
+Lua is embedded through the Lua 5.4.8 C API. A `LuaBehaviorRunner` receives a `World`, the host-selected `BehaviorId`, the current monotonic `IntentTime`, and text source. The C++ host registers each script-visible component type with a `LuaComponentCodec<T>`:
+
+```cpp
+struct Light {
+    int brightness = 0;
+};
+
+LuaComponentCodec<Light> lightCodec{
+    [](const Light& light) {
+        return LuaValue::Table{
+            {"brightness", LuaValue{light.brightness}}
+        };
+    },
+    [](const LuaValue& value) {
+        const auto& table = value.as_table();
+        if (table.size() != 1 || !table.contains("brightness"))
+            throw std::runtime_error("Light requires exactly brightness");
+
+        std::int64_t brightness = table.at("brightness").as_integer();
+        if (brightness < 0 || brightness > 100)
+            throw std::runtime_error("brightness must be between 0 and 100");
+
+        return Light{static_cast<int>(brightness)};
+    }
+};
+
+LuaBehaviorRunner runner;
+runner.expose_component(lightType, "Light", lightCodec);
+
+LuaExecutionResult result = runner.execute(
+    world,
+    behavior,
+    now,
+    source
+);
+```
+
+The codec is part of the security and validation boundary:
+
+- `encode` defines the exact copied value Lua may inspect;
+- `decode` defines the exact value shape and ranges Lua may request;
+- the script never receives the original component object or a retained pointer;
+- exposing a component type does not grant access by itself; the executing behavior must also have current access to each named component instance.
+
+Bindings are frozen after the runner's first execution. Register all component codecs before running scripts.
+
+### 13.2 Execution environment
+
+Every execution creates a fresh `lua_State`, a fresh `_ENV`, fresh access tables, and fresh copied component snapshots. Globals and Lua references do not persist between executions.
+
+The script receives these host globals:
+
+| Global | Meaning |
+|---|---|
+| `access` | Capability table described below. This is the only effect boundary. |
+| `now_ms` | Host-supplied monotonic session time as a Lua integer. It is not wall-clock or epoch time. |
+
+The allowlisted base functions are:
+
+```text
+assert  error  ipairs  next  pairs  select  tonumber  type
+```
+
+The `table`, `string`, `math`, and `utf8` libraries are available with these removals:
+
+```text
+string.dump
+string.find
+string.format
+string.gmatch
+string.gsub
+string.match
+math.random
+math.randomseed
+```
+
+The string pattern functions run inside native C and cannot be interrupted by the Lua VM instruction hook, so they are intentionally unavailable. `string.format` and base `tostring` are unavailable because they can expose process/object addresses.
+
+The following facilities are not available:
+
+```text
+_G                 collectgarbage      coroutine
+debug              dofile              getmetatable
+io                 load                loadfile
+os                 package             pcall
+print              rawequal            rawget
+rawset             require             setmetatable
+tostring           warn                xpcall
+```
+
+`pcall` and `xpcall` are deliberately absent. If scripts could catch the count-hook error, a hostile loop could repeatedly catch its instruction-limit failure and continue forever.
+
+Scripts are loaded in text-only mode. Binary Lua chunks and sources containing embedded NUL bytes are rejected.
+
+### 13.3 Capability table shape
+
+The conceptual table path is:
+
+```lua
+access.<registered-type-name>.<component-name>
+```
+
+For example:
+
+```lua
+access.Light.officeLight
+```
+
+Dot notation is valid only when both registered names are valid Lua identifiers. A dynamic manifest must provide an already escaped bracket expression for other names:
+
+```lua
+access["Lighting Device"]["office-light"]
+```
+
+The model must copy the exact path expression from the manifest instead of reconstructing or normalizing component names.
+
+The fields present depend on the behavior's current permission:
+
+| Permission | `value` | `propose` |
+|---|---:|---:|
+| Read | present | absent |
+| Write | absent | present |
+| ReadWrite | present | present |
+
+A read/write entry can therefore look like:
+
+```lua
+access = {
+    Light = {
+        officeLight = {
+            value = {
+                brightness = 10
+            },
+            propose = function(request)
+                -- Host C++ closure.
+            end
+        }
+    }
+}
+```
+
+The visible table is data, not authority. A script may modify it, replace it, move `propose` to another table, or add fake fields, but none of those operations change the closure's host-bound target or permission. The host never reads fields such as `owner`, `slot`, `type`, or `writable` from Lua.
+
+The `value` field is a snapshot. Mutating it changes only the current Lua table:
+
+```lua
+local light = access.Light.officeLight
+light.value.brightness = 50
+```
+
+This does not write the component and does not create an intent. The script must explicitly call `propose` to request an effect.
+
+### 13.4 Proposal request schema
+
+Call `propose` with dot syntax and exactly one table argument:
+
+```lua
+access.Light.officeLight.propose({
+    value = { brightness = 50 },
+    priority = "high",
+    duration_ms = 500
+})
+```
+
+Do not use method/colon syntax:
+
+```lua
+-- Invalid: this passes the component table as an extra first argument.
+access.Light.officeLight:propose({
+    value = { brightness = 50 }
+})
+```
+
+The request accepts exactly these fields:
+
+| Field | Required | Contract |
+|---|---:|---|
+| `value` | yes | Must match the registered component codec exactly. `nil` is not a component value. |
+| `priority` | no | `"low"`, `"medium"`, or `"high"`; defaults to `"medium"`. |
+| `lifetime` | no | The only accepted value is `"persistent"`. |
+| `duration_ms` | no | Nonnegative integer duration relative to host `now_ms`. |
+
+Lifetime rules:
+
+- omit both `lifetime` and `duration_ms` for a persistent intent;
+- use `lifetime = "persistent"` to state persistence explicitly;
+- use `duration_ms = N` for an until-time intent ending at `now_ms + N`;
+- do not provide both `lifetime` and `duration_ms`;
+- `duration_ms = 0` is valid;
+- the deadline must fit the signed Lua-integer time domain.
+
+Unknown request fields are rejected. `propose` returns no meaningful value.
+
+### 13.5 Lua values accepted by codecs
+
+The boundary transports these value kinds:
+
+```text
+boolean
+integer
+finite floating-point number
+string
+array table
+object table with string keys
+```
+
+Constraints:
+
+- NaN and positive/negative infinity are rejected;
+- object keys must be strings;
+- arrays use contiguous integer keys starting at `1`;
+- a table cannot mix object and array keys;
+- cyclic table references are rejected;
+- shared table aliases are copied as independent values and remain subject to the aggregate entry and buffered-byte limits;
+- functions, userdata, threads, and `nil` inside a component value are rejected;
+- the component codec may impose stricter fields, types, string rules, enums, and numeric ranges.
+
+Host-encoded arrays carry a private marker so an empty array snapshot remains an array when proposed unchanged. Scripts cannot inspect or forge that marker because metatable and raw-table authority is absent.
+
+A literal empty Lua table, `{}`, is interpreted as an empty object because Lua itself does not distinguish empty arrays from empty objects. A script can create a nonempty array with `{value1, value2}`. If a codec needs an empty array, the script must reuse or clear a host-provided array snapshot; a future array-construction helper may be added if generation without a snapshot becomes necessary.
+
+### 13.6 Buffering, commit, and rollback
+
+Calling `propose` validates and buffers a typed C++ request. It does not mutate the `World` and does not create an intent while Lua is running.
+
+A script may call `propose` more than once for the same component:
+
+```lua
+local light = access.Light.officeLight
+
+light.propose({
+    value = { brightness = 100 },
+    priority = "high",
+    duration_ms = 5
+})
+
+light.propose({
+    value = { brightness = 30 },
+    priority = "low",
+    lifetime = "persistent"
+})
+```
+
+This represents a temporary high-priority state with a persistent lower-priority fallback. The normal immutable-intent resolver decides which intent wins.
+
+After successful script execution, the host closes the Lua state, then commits buffered proposals. Immediately before each commit it:
+
+1. uses the host-fixed `BehaviorId`;
+2. resolves the host-bound component name to its current slot;
+3. verifies that the target still exists;
+4. verifies current write permission;
+5. creates a new immutable intent through `World`.
+
+If the script, instruction hook, allocator, codec, or callback fails, no buffered proposal is committed. If a later commit fails after earlier proposals from this execution were created, only those newly created intent IDs are destroyed in reverse order. Pre-existing intents remain untouched.
+
+Lua cannot inspect, modify, or delete an existing intent.
+
+### 13.7 Default execution limits
+
+The current defaults are host-configurable through `LuaExecutionLimits`:
+
+| Limit | Default |
+|---|---:|
+| Source bytes | 64 KiB |
+| Lua allocator memory | 8 MiB |
+| VM instructions | 100,000 |
+| Diagnostic bytes | 4 KiB |
+| Intents created per execution | 64 |
+| Table depth | 16 |
+| Table entries per transported value | 4,096 |
+| String bytes | 64 KiB |
+| Buffered host value bytes | 8 MiB |
+
+Generated scripts should stay comfortably below these limits instead of attempting to consume the full allowance. Native APIs that could perform unbounded work outside the VM instruction counter are not exposed.
+
+### 13.8 Script-authoring rules for a model
+
+A future model-generation prompt must contain two separate parts.
+
+The first is the stable contract from this section. The second is a dynamic capability manifest generated by trusted host code for the specific behavior and execution context. At minimum, that manifest must state:
+
+- the exact access path for every available component;
+- whether the path is readable, writable, or read/write;
+- the exact `value` schema expected by that component's codec;
+- field types, allowed enums, required fields, and numeric/string ranges;
+- the current copied value for readable capabilities;
+- current monotonic `now_ms` when time affects the requested behavior.
+
+Example prompt manifest:
+
+```text
+Execution time:
+  now_ms: 100
+
+Available capabilities:
+  - path: access.Light.officeLight
+    permission: read_write
+    readable value: { brightness = 10 }
+    writable schema:
+      value must be exactly { brightness = INTEGER }
+      brightness range: 0..100
+
+  - path: access.Light.hallLight
+    permission: read
+    readable value: { brightness = 40 }
+    writable schema: none
+```
+
+The capability manifest is future integration work; M5 does not yet implement an LLM prompt builder or machine-readable codec schema metadata. `LuaComponentCodec<T>` currently contains executable `encode` and `decode` functions, which cannot be introspected to recover field requirements and ranges. A later integration must register a trusted schema description beside each codec, test that description against codec validation, and combine it with current behavior permissions. The model must never infer authority or schema rules from a snapshot alone.
+
+When generating a script, the model must follow this checklist:
+
+1. Use only capability paths explicitly present in the manifest.
+2. Read only entries whose manifest says they contain `value`.
+3. Call `propose` only on entries marked writable.
+4. Use dot-call syntax with one request table.
+5. Match the codec's value schema exactly; do not add explanatory metadata to the request or component value.
+6. Use only `low`, `medium`, or `high` priority.
+7. Use either persistent lifetime or a nonnegative duration, never both.
+8. Do not assume a snapshot mutation changes the world.
+9. Do not invent globals, libraries, component types, component names, fields, owner IDs, slots, or existing intent IDs.
+10. Produce only Lua source when the caller requests an executable script; do not wrap it in Markdown unless the caller explicitly asks.
+
+The host receives one of these execution statuses:
+
+```text
+Success
+InvalidBehavior
+SourceLimitExceeded
+SyntaxError
+RuntimeError
+InstructionLimitExceeded
+MemoryLimitExceeded
+IntentLimitExceeded
+InvalidProposal
+CommitFailed
+HostError
+```
+
+A future generation pipeline may use the bounded diagnostic from `SyntaxError`, `RuntimeError`, or `InvalidProposal` in a repair prompt, but it must reuse the same capability manifest and must not grant additional authority to make a failed script pass. Retry count and model-selection policy remain future work. `HostError` and `CommitFailed` can represent host-state failures rather than a script-generation error and should not automatically be treated as model-correctable.
+
+Recommended model prompt skeleton:
+
+```text
+You generate one Lua 5.4 behavior script for the Liquid runtime.
+
+Follow the Liquid Lua Behavior Scripting and Model Prompt Contract exactly.
+Use only the capabilities and schemas in the manifest below.
+Do not invent component paths, fields, globals, libraries, IDs, or permissions.
+Changing a .value table changes only a local snapshot; call .propose({...}) to request an intent.
+Use dot syntax for propose, exactly one request table, and no unknown request fields.
+Return only Lua source without Markdown fences.
+
+<insert dynamic capability manifest>
+
+Desired behavior:
+<insert user/system behavior requirement>
+```
+
+### 13.9 Complete example
+
+Given a manifest declaring `access.Light.officeLight` read/write with `brightness` in `0..100`, a valid script is:
+
+```lua
+local light = access.Light.officeLight
+
+assert(light.value.brightness >= 0)
+assert(light.value.brightness <= 100)
+
+light.propose({
+    value = { brightness = 100 },
+    priority = "high",
+    duration_ms = 5
+})
+
+light.propose({
+    value = { brightness = 30 },
+    priority = "low",
+    lifetime = "persistent"
+})
+```
+
+Invalid examples:
+
+```lua
+-- Invalid: direct snapshot mutation does not request an intent.
+access.Light.officeLight.value.brightness = 100
+
+-- Invalid: colon syntax passes two arguments.
+access.Light.officeLight:propose({ value = { brightness = 100 } })
+
+-- Invalid: owner, slot, and reason are unknown request fields.
+access.Light.officeLight.propose({
+    owner = 7,
+    slot = 2,
+    reason = "make the room brighter",
+    value = { brightness = 100 }
+})
+
+-- Invalid: a read-only capability has no propose function.
+access.Light.hallLight.propose({ value = { brightness = 0 } })
+
+-- Invalid: unavailable libraries and dynamic loading are not part of _ENV.
+local os = require("os")
+```
+
+---
+
+## 14. Open Decisions
 
 These are intentionally not finalized in this document:
 
@@ -384,14 +811,15 @@ These are intentionally not finalized in this document:
 - LLM integration approach;
 - behavior trigger representation;
 - adapter API;
-- frame scheduling details beyond the high-level order;
-- whether script customization uses Go directly, WASM, Lua, or another boundary.
+- future input, event, effect, batching, and replay phases around the settled M4 core order;
+- future machine-readable component-schema and capability-manifest representation for model prompts;
+- future diagnostic/log record representation beyond the current bounded execution result.
 
 These belong in the implementation guide and ADRs.
 
 ---
 
-## 14. Source Notes
+## 15. Source Notes
 
 This document builds on the earlier NeurOS design baseline and the implementation discussion that followed it.
 
