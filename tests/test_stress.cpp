@@ -1,15 +1,19 @@
 #include "liquid/BehaviorRegistry.hpp"
 #include "liquid/ComponentRegistry.hpp"
-#include "liquid/world/World.hpp"
 #include "liquid/IntentRegistry.hpp"
+#include "liquid/Runtime.hpp"
+#include "liquid/scripting/LuaBehaviorRunner.hpp"
+#include "liquid/world/World.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -28,6 +32,82 @@ struct StressTemperatureSystem : System {
 };
 
 struct StressCombinedSystem : System {
+};
+
+liquid::scripting::LuaComponentCodec<StressLight> stress_light_codec()
+{
+    using liquid::scripting::LuaValue;
+
+    return {
+        [](const StressLight& light) {
+            return LuaValue::Table{{"value", LuaValue{light.value}}};
+        },
+        [](const LuaValue& value) {
+            const auto& table = value.as_table();
+
+            if (table.size() != 1 || !table.contains("value"))
+                throw std::runtime_error("StressLight requires exactly value");
+
+            std::int64_t decoded = table.at("value").as_integer();
+            if (decoded < 0 || decoded > 100)
+                throw std::runtime_error("StressLight value must be between 0 and 100");
+
+            return StressLight{static_cast<int>(decoded)};
+        }
+    };
+}
+
+struct StressLuaSystem : System {
+    liquid::scripting::LuaBehaviorRunner* runner;
+    BehaviorId owner;
+    const std::vector<int>* brightnesses;
+    std::size_t successes = 0;
+    std::size_t failures = 0;
+
+    StressLuaSystem(
+        liquid::scripting::LuaBehaviorRunner& behaviorRunner,
+        BehaviorId behavior,
+        const std::vector<int>& frameBrightnesses
+    )
+        : runner(&behaviorRunner), owner(behavior), brightnesses(&frameBrightnesses)
+    {
+    }
+
+    void run(World& world, FrameNumber frame, IntentTime now) override
+    {
+        std::string source;
+        bool shouldFail = frame % 100 == 99;
+
+        if (shouldFail) {
+            source = "error(\"bounded stress failure\", 0)";
+        } else if (frame == 0) {
+            source =
+                "local light = access.StressLight.light; "
+                "light.propose({ value = { value = " +
+                std::to_string(brightnesses->at(0)) +
+                " }, priority = \"low\" }); "
+                "light.propose({ value = { value = " +
+                std::to_string(brightnesses->at(0)) +
+                " }, priority = \"medium\", duration_ms = 1 })";
+        } else {
+            source =
+                "access.StressLight.light.propose({ value = { value = " +
+                std::to_string(brightnesses->at(static_cast<std::size_t>(frame))) +
+                " }, priority = \"medium\", duration_ms = 1 })";
+        }
+
+        liquid::scripting::LuaExecutionResult result = runner->execute(world, owner, now, source);
+
+        if (shouldFail) {
+            assert(result.status == liquid::scripting::LuaExecutionStatus::RuntimeError);
+            assert(result.createdIntents.empty());
+            failures++;
+        } else {
+            assert(result.succeeded());
+            assert(result.createdIntents.size() == (frame == 0 ? 2 : 1));
+            successes++;
+        }
+    }
 };
 
 template <typename T>
@@ -399,12 +479,93 @@ void stress_world()
     }
 }
 
+void stress_runtime_lua()
+{
+    using liquid::scripting::LuaBehaviorRunner;
+
+    LuaBehaviorRunner runner;
+    Runtime runtime;
+    World& world = runtime.world();
+    ComponentType<StressLight> lightType = world.register_component<StressLight>("StressLight");
+    world.add_component(lightType, "light", StressLight{0});
+
+    BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(lightType, behavior, "light", ComponentAccessMode::ReadWrite);
+    ComponentSlotId slot = world.get_components(lightType, behavior).at("light");
+
+    std::mt19937 rng(0x600Du);
+    std::uniform_int_distribution<int> brightnessDistribution(0, 100);
+    std::vector<int> brightnesses;
+    brightnesses.reserve(1000);
+    for (std::size_t index = 0; index < 1000; ++index)
+        brightnesses.push_back(brightnessDistribution(rng));
+
+    runner.expose_component(lightType, "StressLight", stress_light_codec());
+    world.register_system<StressLuaSystem>(Signature{}, runner, behavior, brightnesses);
+
+    std::size_t expectedLiveIntents = 0;
+    bool temporaryIntentLive = false;
+
+    for (FrameNumber frame = 0; frame < 1000; ++frame) {
+        FrameLog log = runtime.run_frame(frame, {{lightType.id, {{"light", slot}}}});
+        bool shouldFail = frame % 100 == 99;
+        std::size_t expectedExpired = temporaryIntentLive ? 1 : 0;
+
+        if (temporaryIntentLive) {
+            expectedLiveIntents--;
+            temporaryIntentLive = false;
+        }
+
+        if (frame == 0)
+            expectedLiveIntents++;
+
+        if (!shouldFail) {
+            expectedLiveIntents++;
+            temporaryIntentLive = true;
+        }
+
+        assert(log.completed);
+        assert(log.frame == frame);
+        assert(log.now == frame);
+        assert(log.systems_run == 1);
+        assert(log.resolution_requests == 1);
+        assert(log.expired_intents == expectedExpired);
+        assert(log.selected_intents == 1);
+        assert(world.intent_count(behavior) == expectedLiveIntents);
+
+        const auto& selections = log.intent_selections.at(lightType.id);
+        IntentId selectedId = selections.at("light");
+        const auto& selected = world.typed_intent(lightType, selectedId);
+        assert(selected.owner == behavior);
+
+        if (shouldFail) {
+            assert(selected.value.value == brightnesses.front());
+            assert(selected.priority == IntentPriority::Low);
+            assert(selected.lifetime.kind == IntentLifetimeKind::Persistent);
+        } else {
+            assert(selected.value.value == brightnesses.at(static_cast<std::size_t>(frame)));
+            assert(selected.priority == IntentPriority::Medium);
+            assert(selected.lifetime.kind == IntentLifetimeKind::UntilTime);
+            assert(selected.lifetime.expiresAt == frame + 1);
+        }
+
+        assert(world.get_component_named(lightType, "light")->value == 0);
+        assert(!runtime.faulted());
+        assert(runtime.frame() == frame + 1);
+    }
+
+    const auto& system = world.get_system<StressLuaSystem>();
+    assert(system.successes == 990);
+    assert(system.failures == 10);
+}
+
 int main()
 {
     stress_behavior_registry();
     stress_intent_registry();
     stress_component_registry();
     stress_world();
+    stress_runtime_lua();
 
     return 0;
 }

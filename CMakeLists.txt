@@ -141,6 +141,16 @@ liquid_apply_sanitizers(liquid_lua)
 liquid_apply_sanitizers(liquid)
 liquid_apply_warnings(liquid)
 
+add_executable(liquid_sim_cli
+    apps/liquid_sim_cli.cpp
+    apps/SimulationCli.cpp
+)
+
+target_include_directories(liquid_sim_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
+target_link_libraries(liquid_sim_cli PRIVATE liquid)
+liquid_apply_sanitizers(liquid_sim_cli)
+liquid_apply_warnings(liquid_sim_cli)
+
 include(CTest)
 
 if(BUILD_TESTING)
@@ -154,6 +164,7 @@ if(BUILD_TESTING)
         test_intent_resolution
         test_runtime
         test_lua_behavior
+        test_simulation_cli
         test_world
         test_system_registry
         test_stress
@@ -161,6 +172,13 @@ if(BUILD_TESTING)
 
     foreach(test_name IN LISTS LIQUID_TESTS)
         add_executable(${test_name} tests/${test_name}.cpp)
+
+        if(test_name STREQUAL "test_simulation_cli")
+            target_sources(${test_name} PRIVATE apps/SimulationCli.cpp)
+            target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
+            add_dependencies(${test_name} liquid_sim_cli)
+        endif()
+
         target_link_libraries(${test_name} PRIVATE liquid)
 
         # assert is the current test harness, so checks must remain active in
@@ -175,6 +193,21 @@ if(BUILD_TESTING)
         liquid_apply_warnings(${test_name})
         string(REPLACE "test_" "" ctest_name ${test_name})
         add_test(NAME ${ctest_name} COMMAND ${test_name})
+
+        if(ctest_name STREQUAL "simulation_cli")
+            set_tests_properties(${ctest_name} PROPERTIES TIMEOUT 10)
+        elseif(ctest_name STREQUAL "stress")
+            set_tests_properties(${ctest_name} PROPERTIES TIMEOUT 60)
+        endif()
     endforeach()
+
+    add_test(
+        NAME simulation_cli_process
+        COMMAND ${CMAKE_COMMAND}
+            "-DCLI=$<TARGET_FILE:liquid_sim_cli>"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_simulation_cli_process.cmake"
+    )
+    set_tests_properties(simulation_cli_process PROPERTIES TIMEOUT 10)
 
 endif()
