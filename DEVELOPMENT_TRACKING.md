@@ -451,7 +451,7 @@ tests/test_lua_behavior.cpp
 
 ### M6 — Simulation CLI
 
-**Status:** Current
+**Status:** Done
 
 Goal:
 
@@ -459,13 +459,20 @@ Add a small executable that runs Solid without hardware.
 
 This is the first milestone where `apps/` becomes useful.
 
-Current implementation direction:
+Implemented:
 
 - Add one small executable under `apps/` that links the existing `liquid` library.
 - Run reproducible scenarios with explicit frame times and deterministic inputs.
 - Accept simulated initial state and Lua behavior source without requiring physical adapters.
 - Report frame results, selected intents, and bounded script errors in a form suitable for inspection and golden tests.
 - Keep events, physical adapters, LLM integration, MQTT, voice, and final Liquid Layer application behavior out of scope.
+
+Completion note:
+
+- Added `liquid_sim_cli` as a deterministic, hardware-free executable over the existing Runtime and Lua boundary.
+- Added strict scenario parsing, bounded script input and diagnostics, stable line-oriented output, and explicit exit statuses.
+- Added successful, rollback-on-error, fresh-process replay, fixed-seed stress, strict-warning, and sanitizer-backed regressions.
+- Documented the research-backed scenario contract and its limits in `M6_TEST_BASE.md`.
 
 Done when:
 
@@ -478,7 +485,9 @@ Done when:
 
 ## Stage 2 — Liquid Milestones
 
-Not detailed yet.
+**Status:** Planning
+
+No Stage 2 implementation milestone is current yet. The next task is to define and approve the first minimal Liquid milestone before adding source folders or implementation code.
 
 Expected future areas:
 
@@ -519,13 +528,14 @@ When a milestone is completed:
 
 ## Current Notes
 
-- The current coding focus is M6 Simulation CLI.
+- Stage 1 Solid is complete through M6.
+- The current focus is defining and approving the first minimal Stage 2 Liquid milestone; implementation scope is not yet authorized.
 - M1 modified ECS core is complete and should be treated as foundation, not active scope.
 - M2 now uses typed intent-record storage with owner and component-target indexes; `IntentId` no longer encodes the owner behavior.
 - M3 registry-owned intent resolution is complete and should be treated as foundation, not active scope.
 - M4 is complete: it introduces the smallest deterministic frame loop, `World` as public state boundary, explicit frame input, expiration, intent resolution requests, registration-ordered system execution, and a small frame log.
 - M5 is complete: it provides the controlled Lua behavior scripting boundary needed for behaviors to create intents without exposing runtime internals.
-- M6 is current: add the smallest deterministic, hardware-free CLI that exercises the existing Runtime and Lua boundary.
+- M6 is complete: the deterministic, hardware-free CLI exercises the existing Runtime and Lua boundary with inspectable output and end-to-end regressions.
 - The project owner will implement core logic manually.
 - Codex should generate headers, tests, CMake, and boilerplate unless explicitly asked to implement logic.
 - The current structure is intentionally small to keep the project controllable.

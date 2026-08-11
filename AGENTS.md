@@ -18,7 +18,7 @@ Liquid is being developed in stages:
 2. **Liquid** — adaptive/LLM layer that generates or modifies solid behavior blocks.
 3. **Liquid Layer** — final neurodivergent-support application built on top of Liquid.
 
-Current work is only **Stage 1: Solid**.
+Stage 1, **Solid**, is complete through M6. The current work is limited to defining and approving the first Stage 2, **Liquid**, milestone.
 
 Superposition ECS reference lives at `/home/raul/Desktop/superposition`. Use it as a local design reference for component managers, coordinator-owned signatures, and template-driven component type lookup.
 
@@ -26,27 +26,24 @@ Superposition ECS reference lives at `/home/raul/Desktop/superposition`. Use it 
 
 ## Current Coding Milestone
 
-### M6 — Simulation CLI
+### Stage 2 Milestone Definition
 
-Goal: add the smallest deterministic command-line executable that runs Solid scenarios without hardware and exercises the existing Runtime and M5 Lua boundary.
+M6 is complete. No Stage 2 implementation milestone has been selected yet.
 
 Codex should focus only on:
 
-- `apps/` for the simulation executable
-- CMake boilerplate
-- `Runtime`, `World`, and `scripting/` public surfaces only when minimal CLI integration requires them
-- a focused CLI integration test and regressions in existing M1-M5 tests
-- documentation needed to define and run deterministic scenarios
+- reading the completed Solid architecture and M6 simulation evidence;
+- defining the smallest useful Stage 2 milestone with the project owner;
+- updating `DEVELOPMENT_TRACKING.md` and this file after that scope is explicitly approved.
 
-Do not create event, physical adapter, LLM, MQTT, voice, or final Liquid Layer application systems yet.
-M6 is limited to a hardware-free simulation CLI. It should reuse the existing Runtime and Lua execution paths, accept explicit deterministic inputs, and expose inspectable results without introducing a second runtime architecture.
+Do not add source folders, dependencies, LLM integration, events, adapters, MQTT, voice, or final Liquid Layer application systems during this transition. Preserve the completed M1–M6 implementation until the next milestone is explicitly defined.
 
 ---
 
-## Current Minimal Repository Shape and M6 Additions
+## Current Minimal Repository Shape
 
 Start small. Do not create folders before they are needed.
-The completed M5 scripting folders remain part of the core. M6 adds only `apps/` and its focused test when implementation begins.
+The completed M5 scripting boundary and M6 simulation CLI remain part of the baseline. Do not add new folders during Stage 2 milestone definition.
 
 ```text
 liquid/
@@ -231,20 +228,17 @@ Avoid:
 
 ## Current Success Criteria
 
-M6 is working when tests can prove:
+The milestone transition is complete when:
 
-1. A minimal Solid scenario runs from the command line without hardware.
-2. The CLI drives the existing Runtime and M5 Lua boundary rather than duplicating their behavior.
-3. Explicit scenario inputs and frame times produce reproducible observable results.
-4. Successful frame results, selected intents, and bounded script errors are inspectable.
-5. End-to-end CLI regressions cover a successful scenario and a script failure.
-6. Existing M1-M5 behavior, component, intent, runtime, Lua sandbox, recycling, and sanitizer-backed stress tests still pass.
+1. M6 is recorded as complete.
+2. The first minimal Stage 2 milestone is explicitly agreed with the project owner.
+3. Only the files and folders required by that approved milestone are added.
 
 ---
 
 ## What Not to Build Yet
 
-Do not add these during M6:
+Do not add these until an approved Stage 2 milestone requires them:
 
 - `events/`
 - `systems/`
@@ -262,7 +256,7 @@ Do not add these during M6:
 - System coordination is implemented as template-addressed system registration, signatures, behavior membership, and membership callbacks.
 - M4 minimal frame loop is complete: `Runtime` alone drives `begin -> expire -> systems -> resolve -> end`, records completed or failed frames, accepts only nondecreasing explicit time, and runs systems in deterministic registration order.
 - M5 Lua behavior scripting is complete: Lua may create new intents only through controlled APIs and cannot mutate existing intent records or bypass `World`.
-- M6 Simulation CLI is current: it should provide a deterministic, inspectable, hardware-free way to exercise the completed Solid core.
+- M6 Simulation CLI is complete: it provides a deterministic, inspectable, hardware-free way to exercise the completed Solid core.
 - `Coordinator` remains responsible internally for registering systems, storing or forwarding system `Signature`s, matching behavior signatures to systems, and updating system membership whenever component access changes or a behavior/component is destroyed.
 - Future systems, runtime loops, and adapters should not store direct component pointers as long-term state; use behavior IDs, component type handles, component names, and slots as handles that can be validated each frame.
 
