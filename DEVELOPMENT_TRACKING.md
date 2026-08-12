@@ -489,6 +489,13 @@ Done when:
 
 No Stage 2 implementation milestone is current yet. The next task is to define and approve the first minimal Liquid milestone before adding source folders or implementation code.
 
+Experimental branch note:
+
+- `experiment/stage2` contains **Solid Scope**, a local browser visualization of the completed M6 scenario.
+- This is an observability/development-tool experiment, not a promoted Stage 2 milestone.
+- It must reuse the existing Runtime and Lua execution path, preserve deterministic semantics, and keep actual component state separate from selected desired state.
+- The experiment adds a shared app-level scenario, deterministic NDJSON trace executable, hardened loopback bridge, responsive browser instrument, and focused success/failure/stress regressions without changing Solid core semantics.
+
 Expected future areas:
 
 - LLM-assisted behavior generation;

@@ -1,6 +1,7 @@
 # Local agent state
 .agents/
 .codex/
+.impeccable/live/
 
 # CMake and build outputs
 build/
@@ -21,6 +22,10 @@ compile_commands.json
 *.dylib
 *.dll
 *.exe
+
+# Python cache artifacts
+__pycache__/
+*.py[cod]
 
 # Editor and OS noise
 .DS_Store

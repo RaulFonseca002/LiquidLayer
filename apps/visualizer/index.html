@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="solid-scope-token" content="__SOLID_SCOPE_TOKEN__">
+    <meta name="color-scheme" content="light">
+    <title>Solid Scope</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+</head>
+<body data-run-state="idle">
+    <a class="skip-link" href="#instrument">Skip to runtime instrument</a>
+
+    <header class="status-bar">
+        <div class="wordmark" aria-label="Solid Scope">
+            <span class="wordmark-solid">Solid</span>
+            <span class="wordmark-divider" aria-hidden="true">/</span>
+            <span>Scope</span>
+        </div>
+        <div class="status-cluster" aria-label="Run status">
+            <span class="status-chip" id="connection-status" data-state="idle">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span id="connection-label">Ready locally</span>
+            </span>
+            <span class="time-readout"><span class="quiet-label">Simulation</span> <output id="simulation-time">n/a</output></span>
+            <button class="primary-button header-run" id="header-run-button" type="button" aria-keyshortcuts="Meta+Enter Control+Enter">Run trace</button>
+        </div>
+    </header>
+
+    <main class="workspace" id="instrument">
+        <aside class="scenario-panel" aria-labelledby="scenario-title">
+            <div class="section-heading">
+                <div>
+                    <p class="instrument-index">Input bench</p>
+                    <h1 id="scenario-title">Scenario</h1>
+                </div>
+                <span class="format-chip">Lua · deterministic</span>
+            </div>
+
+            <form id="scenario-form" aria-busy="false" novalidate>
+                <div class="field-row">
+                    <label for="initial-brightness">Initial brightness</label>
+                    <div class="number-field">
+                        <input id="initial-brightness" name="initial_brightness" type="number" min="0" max="100" step="1" value="10" required>
+                        <span aria-hidden="true">%</span>
+                    </div>
+                </div>
+
+                <div class="field-row field-row-stack">
+                    <label for="frame-times">Frame times <span class="field-hint">milliseconds, comma separated</span></label>
+                    <input id="frame-times" name="frame_times" type="text" inputmode="numeric" value="100, 105" spellcheck="false" required>
+                </div>
+
+                <div class="editor-heading">
+                    <label for="script-source">Behavior script</label>
+                    <span class="script-state" id="script-state" data-state="idle">
+                        <span class="script-state-mark" aria-hidden="true"></span>
+                        <span id="script-state-label">Not started</span>
+                    </span>
+                </div>
+                <div class="editor-shell" id="editor-shell">
+                    <div class="editor-gutter" id="editor-gutter" aria-hidden="true"></div>
+                    <textarea id="script-source" name="script" rows="14" spellcheck="false" aria-describedby="script-help">access.Light.officeLight.propose({
+    value = { brightness = 30 },
+    priority = "low",
+    lifetime = { kind = "persistent" }
+})
+
+access.Light.officeLight.propose({
+    value = { brightness = 70 },
+    priority = "high",
+    lifetime = {
+        kind = "duration",
+        milliseconds = 5
+    }
+})</textarea>
+                </div>
+                <p class="field-help" id="script-help">The editor indicates the observed script boundary only. Solid does not report source-line execution.</p>
+
+                <p class="form-message" id="form-message" role="alert" hidden></p>
+
+                <div class="scenario-actions">
+                    <button class="primary-button" id="run-button" type="submit" aria-keyshortcuts="Meta+Enter Control+Enter">Run trace</button>
+                    <button class="secondary-button" id="stop-button" type="button" disabled>Stop</button>
+                </div>
+            </form>
+
+            <div class="scenario-note">
+                <strong>Expected evidence</strong>
+                <p>The actual component stays at 10. The selected desire is 70 at 100 ms, then 30 at 105 ms after the temporary intent expires.</p>
+            </div>
+        </aside>
+
+        <section class="scope-panel" aria-labelledby="scope-title">
+            <div class="scope-heading">
+                <div>
+                    <p class="instrument-index">Runtime evidence</p>
+                    <h2 id="scope-title">Frame scope</h2>
+                </div>
+                <div class="frame-identity">
+                    <span class="quiet-label">Active frame</span>
+                    <output id="active-frame">n/a</output>
+                </div>
+            </div>
+
+            <section class="playback-strip" aria-label="Playback controls">
+                <div class="playback-copy">
+                    <strong id="playback-status">Waiting for a trace</strong>
+                    <span id="event-counter">0 events</span>
+                </div>
+                <div class="playback-controls">
+                    <button class="compact-button" id="pause-button" type="button" disabled>Pause playback</button>
+                    <button class="compact-button" id="step-button" type="button" disabled>Step</button>
+                    <label class="speed-control" for="speed-select">Replay speed
+                        <select id="speed-select">
+                            <option value="0.5">0.5×</option>
+                            <option value="1" selected>1×</option>
+                            <option value="2">2×</option>
+                            <option value="4">4×</option>
+                        </select>
+                    </label>
+                </div>
+            </section>
+
+            <section class="phase-instrument" aria-labelledby="phase-title">
+                <div class="phase-caption">
+                    <h3 id="phase-title">Runtime phase rail</h3>
+                    <span>Recorded phase replay</span>
+                </div>
+                <ol class="phase-rail" id="phase-rail">
+                    <li data-phase="begin"><span class="phase-node" aria-hidden="true"></span><span>Begin</span></li>
+                    <li data-phase="expire"><span class="phase-node" aria-hidden="true"></span><span>Expire</span></li>
+                    <li data-phase="systems"><span class="phase-node" aria-hidden="true"></span><span>Systems</span></li>
+                    <li data-phase="resolve"><span class="phase-node" aria-hidden="true"></span><span>Resolve</span></li>
+                    <li data-phase="end"><span class="phase-node" aria-hidden="true"></span><span>End</span></li>
+                </ol>
+                <p class="phase-disclosure">These phases are replayed from the completed <code>FrameLog</code>. They are not live intra-frame timing.</p>
+            </section>
+
+            <section class="evidence-lanes" aria-label="State and intent evidence">
+                <article class="evidence-lane actual-lane">
+                    <div class="lane-heading">
+                        <div>
+                            <span class="lane-symbol" aria-hidden="true">A</span>
+                            <h3>Actual component</h3>
+                        </div>
+                        <span class="lane-state">Observed state</span>
+                    </div>
+                    <div class="lane-value">
+                        <output id="actual-value">n/a</output>
+                        <span>brightness</span>
+                    </div>
+                    <p id="actual-detail">No component snapshot received.</p>
+                </article>
+
+                <article class="evidence-lane intents-lane">
+                    <div class="lane-heading">
+                        <div>
+                            <span class="lane-symbol" aria-hidden="true">P</span>
+                            <h3>Proposed intents</h3>
+                        </div>
+                        <span class="lane-state" id="intent-count">0 live</span>
+                    </div>
+                    <ol class="intent-list" id="intent-list">
+                        <li class="empty-evidence">Run the scenario to inspect immutable intent evidence.</li>
+                    </ol>
+                </article>
+
+                <article class="evidence-lane selected-lane">
+                    <div class="lane-heading">
+                        <div>
+                            <span class="lane-symbol" aria-hidden="true">S</span>
+                            <h3>Selected desire</h3>
+                        </div>
+                        <span class="lane-state">Resolution result</span>
+                    </div>
+                    <div class="lane-value selected-value">
+                        <output id="selected-value">n/a</output>
+                        <span>desired brightness</span>
+                    </div>
+                    <p id="selected-detail">No intent has been selected.</p>
+                </article>
+            </section>
+
+            <div class="lower-evidence">
+                <section class="ledger-section" aria-labelledby="ledger-title">
+                    <div class="subsection-heading">
+                        <h3 id="ledger-title">Frame ledger</h3>
+                        <span>Deterministic order</span>
+                    </div>
+                    <div class="table-scroll" tabindex="0" aria-label="Scrollable frame ledger">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th scope="col">Frame</th>
+                                    <th scope="col">Time</th>
+                                    <th scope="col">Script</th>
+                                    <th scope="col">Expired</th>
+                                    <th scope="col">Selected</th>
+                                </tr>
+                            </thead>
+                            <tbody id="frame-ledger">
+                                <tr class="empty-row"><td colspan="5">Completed frames will appear here.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="health-section" aria-labelledby="health-title">
+                    <div class="subsection-heading">
+                        <h3 id="health-title">Run health</h3>
+                        <span class="health-badge" id="health-badge" data-state="idle">Not run</span>
+                    </div>
+                    <dl class="health-list">
+                        <div><dt>Runtime</dt><dd id="runtime-health">Waiting</dd></div>
+                        <div><dt>Transport</dt><dd id="transport-health">Ready</dd></div>
+                        <div><dt>Last sequence</dt><dd id="last-sequence">n/a</dd></div>
+                    </dl>
+                    <div class="diagnostic" id="diagnostic-panel" hidden>
+                        <strong>Diagnostic</strong>
+                        <pre id="diagnostic-text"></pre>
+                    </div>
+                </section>
+            </div>
+
+            <p class="live-region" id="live-region" aria-live="polite" aria-atomic="true"></p>
+        </section>
+    </main>
+</body>
+</html>

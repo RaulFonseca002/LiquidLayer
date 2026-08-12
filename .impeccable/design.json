@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-11T00:00:00-03:00",
+  "title": "Design System: Solid Scope",
+  "extensions": {
+    "colorMeta": {
+      "trace-orange": {
+        "role": "primary",
+        "displayName": "Trace Orange",
+        "canonical": "oklch(0.630 0.190 38.6)",
+        "tonalRamp": ["oklch(0.18 0.06 38.6)", "oklch(0.28 0.10 38.6)", "oklch(0.38 0.14 38.6)", "oklch(0.50 0.18 38.6)", "oklch(0.63 0.19 38.6)", "oklch(0.74 0.15 38.6)", "oklch(0.86 0.08 38.6)", "oklch(0.95 0.03 38.6)"]
+      },
+      "deterministic-cobalt": {
+        "role": "secondary",
+        "displayName": "Deterministic Cobalt",
+        "canonical": "oklch(0.520 0.190 264)",
+        "tonalRamp": ["oklch(0.16 0.06 264)", "oklch(0.25 0.10 264)", "oklch(0.34 0.14 264)", "oklch(0.43 0.17 264)", "oklch(0.52 0.19 264)", "oklch(0.65 0.15 264)", "oklch(0.80 0.09 264)", "oklch(0.94 0.03 264)"]
+      },
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Canvas",
+        "canonical": "oklch(1.000 0.000 0)",
+        "tonalRamp": ["oklch(0.18 0 0)", "oklch(0.30 0 0)", "oklch(0.42 0 0)", "oklch(0.55 0 0)", "oklch(0.68 0 0)", "oklch(0.80 0 0)", "oklch(0.92 0 0)", "oklch(1 0 0)"]
+      }
+    },
+    "typographyMeta": {
+      "interface": {"displayName": "Interface", "purpose": "Controls, headings, and explanatory prose."},
+      "data": {"displayName": "Evidence", "purpose": "Lua, IDs, values, timestamps, and diagnostics."}
+    },
+    "shadows": [],
+    "motion": [
+      {"name": "state", "value": "180ms cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Control and semantic state transitions."},
+      {"name": "playhead", "value": "240ms cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Runtime rail movement between recorded events."}
+    ],
+    "breakpoints": [
+      {"name": "compact", "value": "720px"},
+      {"name": "wide", "value": "1120px"}
+    ]
+  },
+  "components": [
+    {
+      "name": "Run Trace Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Starts one bounded local simulation trace.",
+      "html": "<button class=\"ds-run\">Run trace</button>",
+      "css": ".ds-run{border:0;border-radius:6px;background:oklch(0.18 0.012 250);color:oklch(1 0 0);padding:10px 16px;font:650 14px system-ui;transition:background 180ms cubic-bezier(.22,1,.36,1),transform 180ms cubic-bezier(.22,1,.36,1)}.ds-run:hover{background:oklch(0.52 0.19 264)}.ds-run:active{transform:translateY(1px)}.ds-run:focus-visible{outline:2px solid oklch(0.52 0.19 264);outline-offset:2px}"
+    },
+    {
+      "name": "Scenario Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Compact numeric and text scenario input.",
+      "html": "<label class=\"ds-field\"><span>Initial brightness</span><input value=\"10\"></label>",
+      "css": ".ds-field{display:grid;gap:6px;color:oklch(0.18 0.012 250);font:650 12px system-ui}.ds-field input{border:1px solid oklch(0.80 0.008 250);border-radius:6px;background:oklch(1 0 0);color:inherit;padding:9px 11px;font:500 13px ui-monospace}.ds-field input:focus-visible{outline:2px solid oklch(0.52 0.19 264);outline-offset:2px}"
+    },
+    {
+      "name": "Runtime Status",
+      "kind": "chip",
+      "description": "A text-and-color execution state indicator.",
+      "html": "<span class=\"ds-status\"><i></i>Executing</span>",
+      "css": ".ds-status{display:inline-flex;align-items:center;gap:7px;border-radius:999px;background:oklch(0.95 0.03 38.6);color:oklch(0.28 0.10 38.6);padding:5px 9px;font:650 12px system-ui}.ds-status i{inline-size:8px;block-size:8px;border-radius:50%;background:oklch(0.63 0.19 38.6)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Transparent Bench Instrument",
+    "overview": "Solid Scope is a daylight-neutral development instrument. Causal evidence determines density; color is reserved for calibrated execution, selection, health, and failure signals.",
+    "keyCharacteristics": ["Daylight-neutral flat surfaces", "One structural runtime rail", "Separate actual, proposed, and selected lanes", "Monospace only for machine evidence", "Restrained motion and stable placement"],
+    "rules": [
+      {"name": "The Signal Budget Rule", "body": "Semantic color occupies no more than ten percent of a resting screen.", "section": "colors"},
+      {"name": "The Evidence Typeface Rule", "body": "Monospace communicates machine evidence only.", "section": "typography"},
+      {"name": "The Bench Plane Rule", "body": "Resting panels use tonal layering, not wide shadows.", "section": "elevation"}
+    ],
+    "dos": ["Keep actual, proposed, and selected state in separate lanes.", "Label recorded phase replay honestly.", "Use exact frame time and sequence numbers."],
+    "donts": ["Don't build a generic dark neon developer dashboard.", "Don't use interchangeable metric cards.", "Don't imply source-line or intra-frame visibility the engine did not report.", "Don't present selected desire as applied state."]
+  }
+}

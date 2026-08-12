@@ -30,20 +30,23 @@ Superposition ECS reference lives at `/home/raul/Desktop/superposition`. Use it 
 
 M6 is complete. No Stage 2 implementation milestone has been selected yet.
 
+On the `experiment/stage2` branch only, the project owner has approved **Solid Scope**, a local browser visualization experiment around the completed M6 scenario. This experiment is a development tool, not the first Stage 2 milestone.
+
 Codex should focus only on:
 
 - reading the completed Solid architecture and M6 simulation evidence;
 - defining the smallest useful Stage 2 milestone with the project owner;
 - updating `DEVELOPMENT_TRACKING.md` and this file after that scope is explicitly approved.
+- keeping the Solid Scope experiment inside `apps/`, focused tests, CMake wiring, and design/documentation files.
 
-Do not add source folders, dependencies, LLM integration, events, adapters, MQTT, voice, or final Liquid Layer application systems during this transition. Preserve the completed M1–M6 implementation until the next milestone is explicitly defined.
+Do not add LLM integration, events, adapters, MQTT, voice, or final Liquid Layer application systems during this transition. Preserve the completed M1–M6 implementation. Solid Scope may extract the existing app-level scenario path and add a trace executable plus loopback-only browser bridge, but it must not introduce a second Runtime or change Solid semantics.
 
 ---
 
 ## Current Minimal Repository Shape
 
 Start small. Do not create folders before they are needed.
-The completed M5 scripting boundary and M6 simulation CLI remain part of the baseline. Do not add new folders during Stage 2 milestone definition.
+The completed M5 scripting boundary and M6 simulation CLI remain part of the baseline. The approved experiment may add only `apps/visualizer/` plus the smallest shared app-level scenario/trace files and focused tests it needs.
 
 ```text
 liquid/

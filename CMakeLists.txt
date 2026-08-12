@@ -141,15 +141,32 @@ liquid_apply_sanitizers(liquid_lua)
 liquid_apply_sanitizers(liquid)
 liquid_apply_warnings(liquid)
 
+add_library(liquid_simulation_scenario STATIC
+    apps/SimulationInput.cpp
+    apps/SimulationScenario.cpp
+)
+target_include_directories(liquid_simulation_scenario PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/apps)
+target_link_libraries(liquid_simulation_scenario PUBLIC liquid)
+liquid_apply_sanitizers(liquid_simulation_scenario)
+liquid_apply_warnings(liquid_simulation_scenario)
+
 add_executable(liquid_sim_cli
     apps/liquid_sim_cli.cpp
     apps/SimulationCli.cpp
 )
-
 target_include_directories(liquid_sim_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
-target_link_libraries(liquid_sim_cli PRIVATE liquid)
+target_link_libraries(liquid_sim_cli PRIVATE liquid_simulation_scenario)
 liquid_apply_sanitizers(liquid_sim_cli)
 liquid_apply_warnings(liquid_sim_cli)
+
+add_executable(liquid_sim_trace
+    apps/liquid_sim_trace.cpp
+    apps/SimulationTrace.cpp
+)
+target_include_directories(liquid_sim_trace PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
+target_link_libraries(liquid_sim_trace PRIVATE liquid_simulation_scenario)
+liquid_apply_sanitizers(liquid_sim_trace)
+liquid_apply_warnings(liquid_sim_trace)
 
 include(CTest)
 
@@ -165,6 +182,8 @@ if(BUILD_TESTING)
         test_runtime
         test_lua_behavior
         test_simulation_cli
+        test_simulation_scenario
+        test_simulation_trace
         test_world
         test_system_registry
         test_stress
@@ -176,10 +195,25 @@ if(BUILD_TESTING)
         if(test_name STREQUAL "test_simulation_cli")
             target_sources(${test_name} PRIVATE apps/SimulationCli.cpp)
             target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
+            target_link_libraries(${test_name} PRIVATE liquid_simulation_scenario)
             add_dependencies(${test_name} liquid_sim_cli)
         endif()
 
-        target_link_libraries(${test_name} PRIVATE liquid)
+        if(test_name STREQUAL "test_simulation_scenario")
+            target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
+            target_link_libraries(${test_name} PRIVATE liquid_simulation_scenario)
+        endif()
+
+        if(test_name STREQUAL "test_simulation_trace")
+            target_sources(${test_name} PRIVATE apps/SimulationTrace.cpp)
+            target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
+            target_link_libraries(${test_name} PRIVATE liquid_simulation_scenario)
+            add_dependencies(${test_name} liquid_sim_trace)
+        endif()
+
+        if(NOT test_name MATCHES "^test_simulation_(cli|scenario|trace)$")
+            target_link_libraries(${test_name} PRIVATE liquid)
+        endif()
 
         # assert is the current test harness, so checks must remain active in
         # optimized configurations where CMake otherwise defines NDEBUG.
@@ -209,5 +243,20 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_simulation_cli_process.cmake"
     )
     set_tests_properties(simulation_cli_process PROPERTIES TIMEOUT 10)
+
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(
+        NAME visualizer_server
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_visualizer_server.py"
+    )
+    set_tests_properties(visualizer_server PROPERTIES TIMEOUT 30)
+
+    add_test(
+        NAME visualizer_integration
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_visualizer_integration.py"
+            "$<TARGET_FILE:liquid_sim_trace>"
+    )
+    set_tests_properties(visualizer_integration PROPERTIES TIMEOUT 30)
 
 endif()
