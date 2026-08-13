@@ -1,9 +1,12 @@
-#include "liquid/IntentExpiration.hpp"
-#include "liquid/IntentRegistry.hpp"
+#include "liquid/detail/IntentExpiration.hpp"
+#include "liquid/detail/IntentRegistry.hpp"
 #include "liquid/Runtime.hpp"
 
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
 #include <type_traits>
+
+using namespace liquid;
+using liquid::detail::IntentRegistry;
 
 struct Light {
     int brightness = 0;
@@ -19,7 +22,7 @@ bool contains(const std::vector<IntentId>& ids, IntentId wanted)
     return false;
 }
 
-int main()
+TEST_CASE("test_intent_expiration")
 {
     {
         static_assert(!std::is_default_constructible_v<IntentLifetime>);
@@ -27,9 +30,9 @@ int main()
         IntentLifetime persistent = IntentLifetime::persistent();
         IntentLifetime timed = IntentLifetime::until_time(10);
 
-        assert(persistent.kind == IntentLifetimeKind::Persistent);
-        assert(timed.kind == IntentLifetimeKind::UntilTime);
-        assert(timed.expiresAt == 10);
+        REQUIRE(persistent.kind == IntentLifetimeKind::Persistent);
+        REQUIRE(timed.kind == IntentLifetimeKind::UntilTime);
+        REQUIRE(timed.expiresAt == 10);
     }
 
     {
@@ -44,26 +47,26 @@ int main()
         IntentId timed = intents.create(owner, lightType, slot, IntentLifetime::until_time(20), Light{20});
         IntentId later = intents.create(owner, lightType, slot, IntentLifetime::until_time(30), Light{30});
 
-        assert(intents.size() == 3);
-        assert(intents.intents_for(lightType.id, slot).size() == 3);
+        REQUIRE(intents.size() == 3);
+        REQUIRE(intents.intents_for(lightType.id, slot).size() == 3);
 
         std::vector<IntentId> beforeExpiration = expired_intent_ids(intents, 19);
-        assert(beforeExpiration.empty());
+        REQUIRE(beforeExpiration.empty());
 
         std::vector<IntentId> expired = expired_intent_ids(intents, 20);
-        assert(expired.size() == 1);
-        assert(contains(expired, timed));
+        REQUIRE(expired.size() == 1);
+        REQUIRE(contains(expired, timed));
 
         std::size_t destroyed = destroy_expired_intents(intents, 20);
-        assert(destroyed == 1);
-        assert(intents.exists(persistent));
-        assert(!intents.exists(timed));
-        assert(intents.exists(later));
-        assert(intents.size(owner) == 2);
+        REQUIRE(destroyed == 1);
+        REQUIRE(intents.exists(persistent));
+        REQUIRE(!intents.exists(timed));
+        REQUIRE(intents.exists(later));
+        REQUIRE(intents.size(owner) == 2);
 
         intents.destroy(later);
-        assert(!intents.exists(later));
-        assert(intents.size(owner) == 1);
+        REQUIRE(!intents.exists(later));
+        REQUIRE(intents.size(owner) == 1);
     }
 
     {
@@ -81,23 +84,22 @@ int main()
         IntentId timed = world.create_intent(behavior, lightType, slot, IntentLifetime::until_time(5), Light{80});
         IntentId persistent = world.create_intent(behavior, lightType, slot, IntentLifetime::persistent(), Light{20});
 
-        assert(world.intent_target(timed) == (ComponentTarget{lightType.id, slot}));
-        assert(world.intents_for(lightType.id, slot).size() == 2);
-        assert(world.typed_intent(lightType, timed).value.brightness == 80);
+        REQUIRE(world.intent_target(timed) == (ComponentTarget{lightType.id, slot}));
+        REQUIRE(world.intents_for(lightType.id, slot).size() == 2);
+        REQUIRE(world.typed_intent(lightType, timed).value.brightness == 80);
 
         std::vector<IntentId> expired = expired_intent_ids(world, 5);
-        assert(expired.size() == 1);
-        assert(contains(expired, timed));
+        REQUIRE(expired.size() == 1);
+        REQUIRE(contains(expired, timed));
 
         FrameLog log = runtime.run_frame(5);
 
-        assert(log.expired_intents == 1);
-        assert(!world.intent_exists(timed));
-        assert(world.intent_exists(persistent));
+        REQUIRE(log.expired_intents == 1);
+        REQUIRE(!world.intent_exists(timed));
+        REQUIRE(world.intent_exists(persistent));
 
         world.destroy_intent(persistent);
-        assert(!world.intent_exists(persistent));
+        REQUIRE(!world.intent_exists(persistent));
     }
 
-    return 0;
 }

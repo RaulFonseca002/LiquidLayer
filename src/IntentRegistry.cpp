@@ -1,6 +1,9 @@
-#include "liquid/IntentRegistry.hpp"
+#include "liquid/detail/IntentRegistry.hpp"
 
+#include <limits>
 #include <stdexcept>
+
+namespace liquid::detail {
 
 namespace {
 
@@ -10,8 +13,10 @@ int priority_value(IntentPriority priority) {
 
 }
 
-IntentRegistry::IntentRegistry() {
-    availableIds.reserve(MaxIntents);
+IntentRegistry::IntentRegistry(WorldInstanceId world)
+    : worldId(world),
+      generations(MaxIntents + 1, 1) {
+    availableSlots.reserve(MaxIntents);
 }
 
 void IntentRegistry::validate_metadata(IntentLifetime lifetime, IntentPriority priority) {
@@ -31,25 +36,41 @@ void IntentRegistry::validate_metadata(IntentLifetime lifetime, IntentPriority p
 }
 
 void IntentRegistry::release_intent_id(IntentId id) {
-    if (id + 1 == nextId) {
-        --nextId;
+    if (id.slot + 1 == nextSlot) {
+        --nextSlot;
         return;
     }
 
-    availableIds.push_back(id);
+    availableSlots.push_back(id.slot);
+}
+
+void IntentRegistry::retire_intent_id(IntentId id) {
+    if (generations.at(id.slot) == std::numeric_limits<std::uint32_t>::max())
+        return;
+
+    ++generations.at(id.slot);
+    availableSlots.push_back(id.slot);
 }
 
 IntentId IntentRegistry::next_intent_id() {
-    if (intentTypes.size() >= MAX_INTENTS && availableIds.empty())
+    if (intentTypes.size() >= MaxIntents && availableSlots.empty())
         throw std::runtime_error("all the intents are already in use");
 
-    if (!availableIds.empty()) {
-        IntentId id = availableIds.back();
-        availableIds.pop_back();
-        return id;
+    if (!availableSlots.empty()) {
+        std::uint32_t slot = availableSlots.back();
+        availableSlots.pop_back();
+        return IntentId{worldId, slot, generations.at(slot)};
     }
 
-    return nextId++;
+    std::uint32_t slot = nextSlot++;
+    return IntentId{worldId, slot, generations.at(slot)};
+}
+
+liquid::IntentSequence IntentRegistry::next_intent_sequence() {
+    if (lastSequence == std::numeric_limits<liquid::IntentSequence>::max())
+        throw std::overflow_error("intent sequence exhausted");
+
+    return ++lastSequence;
 }
 
 const I_IntentStorage& IntentRegistry::storage_for(IntentId id) const {
@@ -95,10 +116,22 @@ void IntentRegistry::destroy(IntentId id) {
     Intent removed = intent(id);
     ComponentTypeId type = intentTypes.at(id);
 
+    constexpr std::size_t maximumBufferedLifecycleRecords = 1'000'000;
+    if (lifecycleRecords.size() >= maximumBufferedLifecycleRecords)
+        throw std::length_error("intent lifecycle evidence capacity exceeded");
+    lifecycleRecords.push_back({false, removed});
     erase_from_indexes(removed);
     storages.at(type)->destroy(id);
     intentTypes.erase(id);
-    availableIds.push_back(id);
+    retire_intent_id(id);
+}
+
+const std::vector<IntentLifecycleRecord>& IntentRegistry::lifecycle_records() const {
+    return lifecycleRecords;
+}
+
+void IntentRegistry::clear_lifecycle_records() {
+    lifecycleRecords.clear();
 }
 
 void IntentRegistry::destroy_owned_by(BehaviorId owner) {
@@ -182,6 +215,7 @@ std::map<ComponentName, IntentId> IntentRegistry::select(
             continue;
 
         IntentId selectedIntent = 0;
+        liquid::IntentSequence selectedSequence = 0;
         IntentPriority selectedPriority = IntentPriority::Low;
         bool hasSelection = false;
 
@@ -190,9 +224,10 @@ std::map<ComponentName, IntentId> IntentRegistry::select(
 
             if (!hasSelection ||
                 priority_value(candidate.priority) > priority_value(selectedPriority) ||
-                (candidate.priority == selectedPriority && id > selectedIntent)) {
+                (candidate.priority == selectedPriority && candidate.sequence > selectedSequence)) {
                 selectedIntent = id;
                 selectedPriority = candidate.priority;
+                selectedSequence = candidate.sequence;
                 hasSelection = true;
             }
         }
@@ -240,4 +275,6 @@ std::size_t IntentRegistry::size() const {
 void IntentRegistry::create_behavior_pool(BehaviorId id) {
     destroy_owned_by(id);
     byOwner[id];
+}
+
 }

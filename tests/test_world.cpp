@@ -1,13 +1,20 @@
 #include "liquid/world/World.hpp"
 #include "liquid/IntentExpiration.hpp"
 
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
 #include <map>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+using namespace liquid;
+using liquid::detail::ComponentRegistry;
+using liquid::detail::Coordinator;
+using liquid::detail::IntentRegistry;
+using liquid::detail::SystemRegistry;
+using liquid::detail::WorldState;
 
 using ResolutionComponents = std::map<ComponentName, ComponentSlotId>;
 
@@ -61,6 +68,8 @@ struct Temperature {
 };
 
 struct TrackingSystem : System {
+    static constexpr std::string_view stableName = "tests.test.world.cpp.TrackingSystem";
+    static constexpr std::uint32_t version = 1;
     std::vector<std::string> events;
 
     void on_behavior_added(BehaviorId behavior) override {
@@ -73,6 +82,8 @@ struct TrackingSystem : System {
 };
 
 struct TemperatureSystem : System {
+    static constexpr std::string_view stableName = "tests.test.world.cpp.TemperatureSystem";
+    static constexpr std::uint32_t version = 1;
     std::vector<BehaviorId> added;
     std::vector<BehaviorId> removed;
 
@@ -86,6 +97,8 @@ struct TemperatureSystem : System {
 };
 
 struct ConfiguredSystem : System {
+    static constexpr std::string_view stableName = "tests.test.world.cpp.ConfiguredSystem";
+    static constexpr std::uint32_t version = 1;
     int threshold = 0;
     std::string label;
 
@@ -97,6 +110,8 @@ struct ConfiguredSystem : System {
 };
 
 struct ThrowingRemovalSystem : System {
+    static constexpr std::string_view stableName = "tests.test.world.cpp.ThrowingRemovalSystem";
+    static constexpr std::uint32_t version = 1;
     std::vector<BehaviorId> removed;
 
     void on_behavior_removed(BehaviorId behavior) override {
@@ -106,6 +121,8 @@ struct ThrowingRemovalSystem : System {
 };
 
 struct ThrowingAdditionSystem : System {
+    static constexpr std::string_view stableName = "tests.test.world.cpp.ThrowingAdditionSystem";
+    static constexpr std::uint32_t version = 1;
     void on_behavior_added(BehaviorId behavior) override {
         (void)behavior;
         throw std::runtime_error("addition callback failed");
@@ -113,6 +130,8 @@ struct ThrowingAdditionSystem : System {
 };
 
 struct RemovalObserverSystem : System {
+    static constexpr std::string_view stableName = "tests.test.world.cpp.RemovalObserverSystem";
+    static constexpr std::uint32_t version = 1;
     std::vector<BehaviorId> removed;
 
     void on_behavior_removed(BehaviorId behavior) override {
@@ -121,6 +140,8 @@ struct RemovalObserverSystem : System {
 };
 
 struct WorldMutatingCallbackSystem : System {
+    static constexpr std::string_view stableName = "tests.test.world.cpp.WorldMutatingCallbackSystem";
+    static constexpr std::uint32_t version = 1;
     World* world = nullptr;
     BehaviorId victim = 0;
     bool armed = false;
@@ -154,21 +175,59 @@ void expect_throw(Function function)
         thrown = true;
     }
 
-    assert(thrown);
+    REQUIRE(thrown);
 }
 
-int main()
+TEST_CASE("component creation and removal produce complete encoded evidence") {
+    World world;
+    ComponentCodec<Light> codec{
+        [](const Light& light) {
+            if (light.brightness < 0)
+                throw std::invalid_argument("brightness must be nonnegative");
+            return Value{static_cast<std::int64_t>(light.brightness)};
+        },
+        [](const Value& value) {
+            return Light{static_cast<int>(value.as_signed_integer())};
+        }
+    };
+    const auto lightType = world.register_component<Light>(
+        "tests.Light", 1, std::move(codec));
+
+    REQUIRE_THROWS_AS(
+        world.add_component(lightType, "invalid", Light{-1}),
+        std::invalid_argument);
+    REQUIRE(!world.has_component_named(lightType, "invalid"));
+
+    world.add_component(lightType, "office", Light{40});
+    REQUIRE(world.component_mutations().size() == 1);
+    const auto& added = world.component_mutations().front();
+    REQUIRE(!added.removed);
+    REQUIRE(added.name == "office");
+    REQUIRE(added.before.kind() == Value::Kind::Null);
+    REQUIRE(added.after == Value{std::int64_t{40}});
+
+    world.clear_component_mutations();
+    world.remove_component(lightType, "office");
+    REQUIRE(world.component_mutations().size() == 1);
+    const auto& removed = world.component_mutations().front();
+    REQUIRE(removed.removed);
+    REQUIRE(removed.name == "office");
+    REQUIRE(removed.before == Value{std::int64_t{40}});
+    REQUIRE(removed.after.kind() == Value::Kind::Null);
+}
+
+TEST_CASE("test_world")
 {
     {
         World world;
         BehaviorId existing = world.create_behavior();
 
         world.register_system<TrackingSystem>(Signature{});
-        assert(world.system_has_behavior<TrackingSystem>(existing));
+        REQUIRE(world.system_has_behavior<TrackingSystem>(existing));
 
         BehaviorId createdLater = world.create_behavior();
-        assert(world.system_has_behavior<TrackingSystem>(createdLater));
-        assert(world.system_behavior_count<TrackingSystem>() == 2);
+        REQUIRE(world.system_has_behavior<TrackingSystem>(createdLater));
+        REQUIRE(world.system_behavior_count<TrackingSystem>() == 2);
     }
 
     {
@@ -182,12 +241,12 @@ int main()
 
         BehaviorId trigger = world.create_behavior();
 
-        assert(system.mutationRejected);
-        assert(world.behavior_exists(victim));
-        assert(world.behavior_exists(trigger));
-        assert(world.system_has_behavior<WorldMutatingCallbackSystem>(victim));
-        assert(world.system_has_behavior<WorldMutatingCallbackSystem>(trigger));
-        assert(world.system_behavior_count<WorldMutatingCallbackSystem>() == 2);
+        REQUIRE(system.mutationRejected);
+        REQUIRE(world.behavior_exists(victim));
+        REQUIRE(world.behavior_exists(trigger));
+        REQUIRE(world.system_has_behavior<WorldMutatingCallbackSystem>(victim));
+        REQUIRE(world.system_has_behavior<WorldMutatingCallbackSystem>(trigger));
+        REQUIRE(world.system_behavior_count<WorldMutatingCallbackSystem>() == 2);
     }
 
     {
@@ -198,9 +257,9 @@ int main()
             world.register_system<ThrowingAdditionSystem>(Signature{});
         });
 
-        assert(!world.system_exists<ThrowingAdditionSystem>());
-        assert(world.system_count() == 0);
-        assert(world.behavior_count() == 1);
+        REQUIRE(!world.system_exists<ThrowingAdditionSystem>());
+        REQUIRE(world.system_count() == 0);
+        REQUIRE(world.behavior_count() == 1);
     }
 
     {
@@ -214,14 +273,14 @@ int main()
         ComponentSlotId slot = world.get_components(lightType, behavior).at("officeLight");
         IntentId intent = world.create_intent(behavior, lightType, slot, IntentLifetime::persistent(), Light{80});
 
-        assert(behavior == 0);
-        assert(world.behavior_exists(behavior));
-        assert(world.behavior_count() == 1);
-        assert(world.intent_exists(intent));
-        assert(world.intent_owner(intent) == behavior);
-        assert(world.intent_target(intent) == (ComponentTarget{lightType.id, slot}));
-        assert(world.typed_intent(lightType, intent).value.brightness == 80);
-        assert(world.intent_count(behavior) == 1);
+        REQUIRE(behavior.slot == 0);
+        REQUIRE(world.behavior_exists(behavior));
+        REQUIRE(world.behavior_count() == 1);
+        REQUIRE(world.intent_exists(intent));
+        REQUIRE(world.intent_owner(intent) == behavior);
+        REQUIRE(world.intent_target(intent) == (ComponentTarget{lightType.id, slot}));
+        REQUIRE(world.typed_intent(lightType, intent).value.brightness == 80);
+        REQUIRE(world.intent_count(behavior) == 1);
 
         expect_throw([&] {
             world.create_intent(42, lightType, slot, IntentLifetime::persistent(), Light{10});
@@ -237,9 +296,9 @@ int main()
 
         world.destroy_behavior(behavior);
 
-        assert(!world.behavior_exists(behavior));
-        assert(!world.intent_exists(intent));
-        assert(world.behavior_count() == 0);
+        REQUIRE(!world.behavior_exists(behavior));
+        REQUIRE(!world.intent_exists(intent));
+        REQUIRE(world.behavior_count() == 0);
 
         expect_throw([&] {
             world.intent_count(behavior);
@@ -249,10 +308,12 @@ int main()
         world.grant_component_access(lightType, recycled, "officeLight", ComponentAccessMode::ReadWrite);
         IntentId recreatedIntent = world.create_intent(recycled, lightType, slot, IntentLifetime::persistent(), Light{90});
 
-        assert(recycled == behavior);
-        assert(recreatedIntent == intent);
-        assert(world.intent_exists(recreatedIntent));
-        assert(world.intent_count(recycled) == 1);
+        REQUIRE(recycled.slot == behavior.slot);
+        REQUIRE(recycled.generation > behavior.generation);
+        REQUIRE(recreatedIntent.slot == intent.slot);
+        REQUIRE(recreatedIntent.generation > intent.generation);
+        REQUIRE(world.intent_exists(recreatedIntent));
+        REQUIRE(world.intent_count(recycled) == 1);
     }
 
     {
@@ -286,11 +347,11 @@ int main()
             );
         });
 
-        assert(world.can_write_component(lightType, behavior, "officeLight"));
-        assert(world.behavior_signature(behavior).test(lightType.id));
-        assert(world.system_has_behavior<TrackingSystem>(behavior));
-        assert(world.intent_exists(intent));
-        assert(world.intent_count(behavior) == 1);
+        REQUIRE(world.can_write_component(lightType, behavior, "officeLight"));
+        REQUIRE(world.behavior_signature(behavior).test(lightType.id));
+        REQUIRE(world.system_has_behavior<TrackingSystem>(behavior));
+        REQUIRE(world.intent_exists(intent));
+        REQUIRE(world.intent_count(behavior) == 1);
     }
 
     {
@@ -306,10 +367,10 @@ int main()
 
         world.destroy_intent(intent);
 
-        assert(world.behavior_exists(behavior));
-        assert(!world.intent_exists(intent));
-        assert(world.behavior_count() == 1);
-        assert(world.intent_count(behavior) == 0);
+        REQUIRE(world.behavior_exists(behavior));
+        REQUIRE(!world.intent_exists(intent));
+        REQUIRE(world.behavior_count() == 1);
+        REQUIRE(world.intent_count(behavior) == 0);
     }
 
     {
@@ -330,7 +391,7 @@ int main()
         world.register_system<TrackingSystem>(lightSignature);
 
         auto& trackingSystem = world.get_system<TrackingSystem>();
-        assert(trackingSystem.events.empty());
+        REQUIRE(trackingSystem.events.empty());
         trackingSystem.events.clear();
 
         expect_throw([&] {
@@ -349,18 +410,16 @@ int main()
         auto trackingLights = world.get_components(lightType, trackingBehavior);
         auto focusLights = world.get_components(lightType, focusBehavior);
 
-        assert(trackingLights.size() == 2);
-        assert(focusLights.size() == 1);
-        assert(trackingLights.at("officeLight") == 0);
-        assert(trackingLights.at("deskLight") == 1);
-        assert(focusLights.at("officeLight") == 0);
-        assert(world.resolve_component(lightType, trackingLights.at("officeLight"))->brightness == 40);
-        assert(world.read_component(lightType, focusBehavior, "officeLight")->brightness == 40);
-        assert(world.write_component(lightType, trackingBehavior, "officeLight")->brightness == 40);
+        REQUIRE(trackingLights.size() == 2);
+        REQUIRE(focusLights.size() == 1);
+        REQUIRE(trackingLights.at("officeLight").slot == 0);
+        REQUIRE(trackingLights.at("deskLight").slot == 1);
+        REQUIRE(focusLights.at("officeLight").slot == 0);
+        REQUIRE(world.resolve_component(lightType, trackingLights.at("officeLight"))->brightness == 40);
+        REQUIRE(world.read_component(lightType, focusBehavior, "officeLight")->brightness == 40);
+        REQUIRE(world.can_write_component(lightType, trackingBehavior, "officeLight"));
 
-        expect_throw([&] {
-            world.write_component(lightType, focusBehavior, "officeLight");
-        });
+        REQUIRE(!world.can_write_component(lightType, focusBehavior, "officeLight"));
 
         expect_throw([&] {
             world.read_component(lightType, 99, "officeLight");
@@ -370,49 +429,49 @@ int main()
             world.revoke_component_access(lightType, 99, "officeLight");
         });
 
-        assert(world.can_read_component(lightType, focusBehavior, "officeLight"));
-        assert(!world.can_write_component(lightType, focusBehavior, "officeLight"));
-        assert(world.can_write_component(lightType, trackingBehavior, "officeLight"));
-        assert(world.behavior_signature(trackingBehavior).test(lightType.id));
-        assert(world.behavior_signature(trackingBehavior).test(temperatureType.id));
-        assert(world.behavior_signature(focusBehavior).test(lightType.id));
-        assert(world.system_behavior_count<TrackingSystem>() == 2);
-        assert(world.system_has_behavior<TrackingSystem>(trackingBehavior));
-        assert(world.system_has_behavior<TrackingSystem>(focusBehavior));
-        assert((trackingSystem.events == std::vector<std::string>{"+0", "+1"}));
+        REQUIRE(world.can_read_component(lightType, focusBehavior, "officeLight"));
+        REQUIRE(!world.can_write_component(lightType, focusBehavior, "officeLight"));
+        REQUIRE(world.can_write_component(lightType, trackingBehavior, "officeLight"));
+        REQUIRE(world.behavior_signature(trackingBehavior).test(lightType.id));
+        REQUIRE(world.behavior_signature(trackingBehavior).test(temperatureType.id));
+        REQUIRE(world.behavior_signature(focusBehavior).test(lightType.id));
+        REQUIRE(world.system_behavior_count<TrackingSystem>() == 2);
+        REQUIRE(world.system_has_behavior<TrackingSystem>(trackingBehavior));
+        REQUIRE(world.system_has_behavior<TrackingSystem>(focusBehavior));
+        REQUIRE((trackingSystem.events == std::vector<std::string>{"+0", "+1"}));
 
         world.remove_component(lightType, "officeLight");
 
-        assert(!world.has_component_named(lightType, "officeLight"));
-        assert(world.get_components(lightType, focusBehavior).empty());
-        assert(!world.behavior_signature(focusBehavior).test(lightType.id));
-        assert(!world.system_has_behavior<TrackingSystem>(focusBehavior));
-        assert(world.behavior_signature(trackingBehavior).test(lightType.id));
-        assert(world.system_has_behavior<TrackingSystem>(trackingBehavior));
-        assert(world.get_components(lightType, trackingBehavior).size() == 1);
-        assert(world.get_components(lightType, trackingBehavior).at("deskLight") == 1);
+        REQUIRE(!world.has_component_named(lightType, "officeLight"));
+        REQUIRE(world.get_components(lightType, focusBehavior).empty());
+        REQUIRE(!world.behavior_signature(focusBehavior).test(lightType.id));
+        REQUIRE(!world.system_has_behavior<TrackingSystem>(focusBehavior));
+        REQUIRE(world.behavior_signature(trackingBehavior).test(lightType.id));
+        REQUIRE(world.system_has_behavior<TrackingSystem>(trackingBehavior));
+        REQUIRE(world.get_components(lightType, trackingBehavior).size() == 1);
+        REQUIRE(world.get_components(lightType, trackingBehavior).at("deskLight").slot == 1);
 
         world.add_component(lightType, "taskLight", Light{55});
         world.grant_component_access(lightType, focusBehavior, "taskLight", ComponentAccessMode::ReadWrite);
 
         auto reusedLights = world.get_components(lightType, focusBehavior);
-        assert(reusedLights.size() == 1);
-        assert(reusedLights.at("taskLight") == 0);
-        assert(world.system_has_behavior<TrackingSystem>(focusBehavior));
-        assert(world.resolve_component(lightType, reusedLights.at("taskLight"))->brightness == 55);
+        REQUIRE(reusedLights.size() == 1);
+        REQUIRE(reusedLights.at("taskLight").slot == 0);
+        REQUIRE(world.system_has_behavior<TrackingSystem>(focusBehavior));
+        REQUIRE(world.resolve_component(lightType, reusedLights.at("taskLight"))->brightness == 55);
 
         world.revoke_component_access(lightType, focusBehavior, "taskLight");
 
-        assert(world.get_components(lightType, focusBehavior).empty());
-        assert(!world.behavior_signature(focusBehavior).test(lightType.id));
-        assert(!world.system_has_behavior<TrackingSystem>(focusBehavior));
+        REQUIRE(world.get_components(lightType, focusBehavior).empty());
+        REQUIRE(!world.behavior_signature(focusBehavior).test(lightType.id));
+        REQUIRE(!world.system_has_behavior<TrackingSystem>(focusBehavior));
 
         world.remove_component(lightType, "deskLight");
 
-        assert(world.get_components(lightType, trackingBehavior).empty());
-        assert(!world.behavior_signature(trackingBehavior).test(lightType.id));
-        assert(!world.system_has_behavior<TrackingSystem>(trackingBehavior));
-        assert(world.behavior_signature(trackingBehavior).test(temperatureType.id));
+        REQUIRE(world.get_components(lightType, trackingBehavior).empty());
+        REQUIRE(!world.behavior_signature(trackingBehavior).test(lightType.id));
+        REQUIRE(!world.system_has_behavior<TrackingSystem>(trackingBehavior));
+        REQUIRE(world.behavior_signature(trackingBehavior).test(temperatureType.id));
     }
 
     {
@@ -433,15 +492,15 @@ int main()
         ComponentSlotId temperatureSlot = world.get_components(temperatureType, first).at("officeTemperature");
         IntentId intent = world.create_intent(first, temperatureType, temperatureSlot, IntentLifetime::persistent(), Temperature{24});
 
-        assert(world.system_has_behavior<TemperatureSystem>(first));
-        assert(world.system_has_behavior<TemperatureSystem>(second));
+        REQUIRE(world.system_has_behavior<TemperatureSystem>(first));
+        REQUIRE(world.system_has_behavior<TemperatureSystem>(second));
 
         world.destroy_behavior(first);
 
-        assert(!world.behavior_exists(first));
-        assert(!world.intent_exists(intent));
-        assert(!world.system_has_behavior<TemperatureSystem>(first));
-        assert(world.system_has_behavior<TemperatureSystem>(second));
+        REQUIRE(!world.behavior_exists(first));
+        REQUIRE(!world.intent_exists(intent));
+        REQUIRE(!world.system_has_behavior<TemperatureSystem>(first));
+        REQUIRE(world.system_has_behavior<TemperatureSystem>(second));
 
         expect_throw([&] {
             world.get_components(temperatureType, first);
@@ -449,10 +508,11 @@ int main()
 
         BehaviorId recycled = world.create_behavior();
 
-        assert(recycled == first);
-        assert(world.get_components(temperatureType, recycled).empty());
-        assert(!world.behavior_signature(recycled).test(temperatureType.id));
-        assert(!world.system_has_behavior<TemperatureSystem>(recycled));
+        REQUIRE(recycled.slot == first.slot);
+        REQUIRE(recycled.generation > first.generation);
+        REQUIRE(world.get_components(temperatureType, recycled).empty());
+        REQUIRE(!world.behavior_signature(recycled).test(temperatureType.id));
+        REQUIRE(!world.system_has_behavior<TemperatureSystem>(recycled));
     }
 
     {
@@ -485,12 +545,12 @@ int main()
             world.destroy_behavior(behavior);
         });
 
-        assert(!world.behavior_exists(behavior));
-        assert(!world.intent_exists(intent));
-        assert(!world.system_has_behavior<ThrowingRemovalSystem>(behavior));
-        assert(!world.system_has_behavior<RemovalObserverSystem>(behavior));
-        assert((world.get_system<ThrowingRemovalSystem>().removed == std::vector<BehaviorId>{behavior}));
-        assert((world.get_system<RemovalObserverSystem>().removed == std::vector<BehaviorId>{behavior}));
+        REQUIRE(!world.behavior_exists(behavior));
+        REQUIRE(!world.intent_exists(intent));
+        REQUIRE(!world.system_has_behavior<ThrowingRemovalSystem>(behavior));
+        REQUIRE(!world.system_has_behavior<RemovalObserverSystem>(behavior));
+        REQUIRE((world.get_system<ThrowingRemovalSystem>().removed == std::vector<BehaviorId>{behavior}));
+        REQUIRE((world.get_system<RemovalObserverSystem>().removed == std::vector<BehaviorId>{behavior}));
     }
 
     {
@@ -512,11 +572,11 @@ int main()
         });
 
         IntentId writerIntent = world.create_intent(writer, lightType, slot, IntentLifetime::persistent(), Light{80});
-        assert(world.intent_exists(writerIntent));
+        REQUIRE(world.intent_exists(writerIntent));
 
         world.grant_component_access(lightType, writer, "officeLight", ComponentAccessMode::Read);
 
-        assert(!world.intent_exists(writerIntent));
+        REQUIRE(!world.intent_exists(writerIntent));
 
         expect_throw([&] {
             world.create_intent(writer, lightType, slot, IntentLifetime::persistent(), Light{90});
@@ -537,15 +597,17 @@ int main()
 
         world.remove_component(lightType, "officeLight");
 
-        assert(!world.intent_exists(intent));
-        assert(world.intents_for(lightType.id, slot).empty());
+        REQUIRE(!world.intent_exists(intent));
+        REQUIRE(world.intents_for(lightType.id, slot).empty());
 
         world.add_component(lightType, "taskLight", Light{55});
         world.grant_component_access(lightType, behavior, "taskLight", ComponentAccessMode::ReadWrite);
 
         ComponentSlotId reusedSlot = world.get_components(lightType, behavior).at("taskLight");
-        assert(reusedSlot == slot);
-        assert(world.intents_for(lightType.id, reusedSlot).empty());
+        REQUIRE(reusedSlot.slot == slot.slot);
+        REQUIRE(reusedSlot.generation == slot.generation + 1);
+        REQUIRE(reusedSlot != slot);
+        REQUIRE(world.intents_for(lightType.id, reusedSlot).empty());
     }
 
     {
@@ -562,7 +624,7 @@ int main()
 
         world.revoke_component_access(lightType, behavior, "officeLight");
 
-        assert(!world.intent_exists(intent));
+        REQUIRE(!world.intent_exists(intent));
 
         expect_throw([&] {
             world.create_intent(behavior, lightType, slot, IntentLifetime::persistent(), Light{90});
@@ -574,20 +636,20 @@ int main()
 
         world.register_system<ConfiguredSystem>(Signature{}, 4, "automatic");
         auto& configured = world.get_system<ConfiguredSystem>();
-        assert(configured.threshold == 4);
-        assert(configured.label == "automatic");
+        REQUIRE(configured.threshold == 4);
+        REQUIRE(configured.label == "automatic");
 
         BehaviorId behavior = world.create_behavior();
 
-        assert(world.system_has_behavior<ConfiguredSystem>(behavior));
-        assert(world.system_behavior_count<ConfiguredSystem>() == 1);
+        REQUIRE(world.system_has_behavior<ConfiguredSystem>(behavior));
+        REQUIRE(world.system_behavior_count<ConfiguredSystem>() == 1);
 
         world.destroy_behavior(behavior);
-        assert(!world.system_has_behavior<ConfiguredSystem>(behavior));
+        REQUIRE(!world.system_has_behavior<ConfiguredSystem>(behavior));
 
         world.destroy_system<ConfiguredSystem>();
-        assert(!world.system_exists<ConfiguredSystem>());
-        assert(world.system_count() == 0);
+        REQUIRE(!world.system_exists<ConfiguredSystem>());
+        REQUIRE(world.system_count() == 0);
     }
 
     {
@@ -601,28 +663,28 @@ int main()
 
         world.grant_component_access(lightType, behavior, "officeLight", ComponentAccessMode::Read);
         BehaviorAccessRevision officeRevision = world.behavior_access_revision(behavior);
-        assert(officeRevision > createdRevision);
+        REQUIRE(officeRevision > createdRevision);
 
         world.grant_component_access(lightType, behavior, "kitchenLight", ComponentAccessMode::Read);
         BehaviorAccessRevision kitchenRevision = world.behavior_access_revision(behavior);
-        assert(kitchenRevision > officeRevision);
+        REQUIRE(kitchenRevision > officeRevision);
 
         world.grant_component_access(lightType, behavior, "kitchenLight", ComponentAccessMode::ReadWrite);
         BehaviorAccessRevision modeRevision = world.behavior_access_revision(behavior);
-        assert(modeRevision > kitchenRevision);
-        assert(world.read_component(lightType, behavior, "kitchenLight") != nullptr);
-        assert(world.write_component(lightType, behavior, "kitchenLight") != nullptr);
+        REQUIRE(modeRevision > kitchenRevision);
+        REQUIRE(world.read_component(lightType, behavior, "kitchenLight") != nullptr);
+        REQUIRE(world.can_write_component(lightType, behavior, "kitchenLight"));
 
         world.grant_component_access(lightType, behavior, "kitchenLight", ComponentAccessMode::ReadWrite);
-        assert(world.behavior_access_revision(behavior) == modeRevision);
+        REQUIRE(world.behavior_access_revision(behavior) == modeRevision);
 
         world.revoke_component_access(lightType, behavior, "officeLight");
         BehaviorAccessRevision revokeRevision = world.behavior_access_revision(behavior);
-        assert(revokeRevision > modeRevision);
-        assert(world.get_components(lightType, behavior).count("kitchenLight") == 1);
+        REQUIRE(revokeRevision > modeRevision);
+        REQUIRE(world.get_components(lightType, behavior).count("kitchenLight") == 1);
 
         world.revoke_component_access(lightType, behavior, "officeLight");
-        assert(world.behavior_access_revision(behavior) == revokeRevision);
+        REQUIRE(world.behavior_access_revision(behavior) == revokeRevision);
 
         expect_throw([&] {
             world.grant_component_access(
@@ -632,7 +694,7 @@ int main()
                 ComponentAccessMode::Read
             );
         });
-        assert(world.behavior_access_revision(behavior) == revokeRevision);
+        REQUIRE(world.behavior_access_revision(behavior) == revokeRevision);
 
         expect_throw([&] {
             world.grant_component_access(
@@ -642,9 +704,9 @@ int main()
                 static_cast<ComponentAccessMode>(255)
             );
         });
-        assert(world.behavior_access_revision(behavior) == revokeRevision);
-        assert(world.read_component(lightType, behavior, "kitchenLight") != nullptr);
-        assert(world.write_component(lightType, behavior, "kitchenLight") != nullptr);
+        REQUIRE(world.behavior_access_revision(behavior) == revokeRevision);
+        REQUIRE(world.read_component(lightType, behavior, "kitchenLight") != nullptr);
+        REQUIRE(world.can_write_component(lightType, behavior, "kitchenLight"));
     }
 
     {
@@ -669,12 +731,12 @@ int main()
 
         BehaviorAccessRevision firstAfter = world.behavior_access_revision(first);
         BehaviorAccessRevision secondAfter = world.behavior_access_revision(second);
-        assert(firstAfter > firstBefore);
-        assert(secondAfter > secondBefore);
-        assert(firstAfter != secondAfter);
-        assert(world.behavior_access_revision(unaffected) == unaffectedBefore);
-        assert(world.get_components(lightType, first).count("kitchenLight") == 1);
-        assert(world.get_components(lightType, second).empty());
+        REQUIRE(firstAfter > firstBefore);
+        REQUIRE(secondAfter > secondBefore);
+        REQUIRE(firstAfter != secondAfter);
+        REQUIRE(world.behavior_access_revision(unaffected) == unaffectedBefore);
+        REQUIRE(world.get_components(lightType, first).count("kitchenLight") == 1);
+        REQUIRE(world.get_components(lightType, second).empty());
     }
 
     {
@@ -697,9 +759,9 @@ int main()
             );
         });
 
-        assert(world.behavior_access_revision(behavior) > before);
-        assert(world.get_components(lightType, behavior).count("officeLight") == 1);
-        assert(world.system_has_behavior<ThrowingAdditionSystem>(behavior));
+        REQUIRE(world.behavior_access_revision(behavior) > before);
+        REQUIRE(world.get_components(lightType, behavior).count("officeLight") == 1);
+        REQUIRE(world.system_has_behavior<ThrowingAdditionSystem>(behavior));
     }
 
     {
@@ -719,11 +781,11 @@ int main()
             world.remove_component(lightType, "officeLight");
         });
 
-        assert(world.behavior_access_revision(behavior) > before);
-        assert(!world.has_component_named(lightType, "officeLight"));
-        assert(!world.system_has_behavior<ThrowingRemovalSystem>(behavior));
-        assert(world.get_system<ThrowingRemovalSystem>().removed.size() == 1);
-        assert(world.get_system<ThrowingRemovalSystem>().removed.front() == behavior);
+        REQUIRE(world.behavior_access_revision(behavior) > before);
+        REQUIRE(!world.has_component_named(lightType, "officeLight"));
+        REQUIRE(!world.system_has_behavior<ThrowingRemovalSystem>(behavior));
+        REQUIRE(world.get_system<ThrowingRemovalSystem>().removed.size() == 1);
+        REQUIRE(world.get_system<ThrowingRemovalSystem>().removed.front() == behavior);
     }
 
     {
@@ -738,9 +800,9 @@ int main()
 
         BehaviorId recycled = world.create_behavior();
         BehaviorAccessRevision recycledRevision = world.behavior_access_revision(recycled);
-        assert(recycled == original);
-        assert(recycledRevision > originalRevision);
+        REQUIRE(recycled.slot == original.slot);
+        REQUIRE(recycled.generation > original.generation);
+        REQUIRE(recycledRevision > originalRevision);
     }
 
-    return 0;
 }

@@ -1,0 +1,63 @@
+@PACKAGE_INIT@
+
+set(_Liquid_known_components Core Lua Simulation)
+
+if(NOT Liquid_FIND_COMPONENTS)
+    set(Liquid_FIND_COMPONENTS Core)
+endif()
+set(Liquid_FIND_REQUIRED_Core TRUE)
+
+foreach(_Liquid_component IN LISTS Liquid_FIND_COMPONENTS)
+    if(NOT _Liquid_component IN_LIST _Liquid_known_components)
+        set(Liquid_${_Liquid_component}_FOUND FALSE)
+        if(Liquid_FIND_REQUIRED_${_Liquid_component})
+            set(Liquid_NOT_FOUND_MESSAGE
+                "Liquid does not provide the requested component: ${_Liquid_component}")
+        endif()
+    endif()
+endforeach()
+
+# Every public component depends on Core. Load it first so exported target
+# dependencies resolve regardless of the order used in find_package().
+set(_Liquid_components_to_load Core)
+if("Simulation" IN_LIST Liquid_FIND_COMPONENTS AND
+   NOT "Lua" IN_LIST _Liquid_components_to_load)
+    list(APPEND _Liquid_components_to_load Lua)
+endif()
+foreach(_Liquid_component IN LISTS Liquid_FIND_COMPONENTS)
+    if(_Liquid_component IN_LIST _Liquid_known_components AND
+       NOT _Liquid_component IN_LIST _Liquid_components_to_load)
+        list(APPEND _Liquid_components_to_load "${_Liquid_component}")
+    endif()
+endforeach()
+
+foreach(_Liquid_component IN LISTS _Liquid_components_to_load)
+    set(_Liquid_targets_file
+        "${CMAKE_CURRENT_LIST_DIR}/Liquid${_Liquid_component}Targets.cmake")
+
+    if(EXISTS "${_Liquid_targets_file}")
+        include("${_Liquid_targets_file}")
+    endif()
+
+    if(TARGET Liquid::${_Liquid_component})
+        set(Liquid_${_Liquid_component}_FOUND TRUE)
+    else()
+        set(Liquid_${_Liquid_component}_FOUND FALSE)
+    endif()
+endforeach()
+
+if(NOT Liquid_Core_FOUND)
+    set(Liquid_FOUND FALSE)
+    foreach(_Liquid_component IN LISTS Liquid_FIND_COMPONENTS)
+        set(Liquid_${_Liquid_component}_FOUND FALSE)
+    endforeach()
+    set(Liquid_NOT_FOUND_MESSAGE
+        "Liquid::Core is required by every Liquid package component")
+endif()
+
+check_required_components(Liquid)
+
+unset(_Liquid_component)
+unset(_Liquid_components_to_load)
+unset(_Liquid_known_components)
+unset(_Liquid_targets_file)

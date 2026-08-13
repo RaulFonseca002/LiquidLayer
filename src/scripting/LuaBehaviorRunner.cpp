@@ -1086,13 +1086,38 @@ LuaExecutionResult LuaBehaviorRunner::execute(
     IntentTime now,
     std::string_view source
 ) {
+    LuaExecutionResult result;
     try {
-        return impl->run(world, owner, now, source);
+        result = impl->run(world, owner, now, source);
     } catch (const std::exception& exception) {
-        return impl->failure_result(LuaExecutionStatus::HostError, exception.what());
+        result = impl->failure_result(LuaExecutionStatus::HostError, exception.what());
     } catch (...) {
-        return impl->failure_result(LuaExecutionStatus::HostError, "unknown Lua host error");
+        result = impl->failure_result(LuaExecutionStatus::HostError, "unknown Lua host error");
     }
+    constexpr std::uint64_t offset = 14695981039346656037ULL;
+    constexpr std::uint64_t prime = 1099511628211ULL;
+    std::uint64_t hash = offset;
+    for (const unsigned char byte : source) {
+        hash ^= byte;
+        hash *= prime;
+    }
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string sourceHash(16, '0');
+    for (std::size_t index = 0; index < sourceHash.size(); ++index) {
+        sourceHash[sourceHash.size() - index - 1] = digits[hash & 0x0fU];
+        hash >>= 4U;
+    }
+    world.record_script_execution(ScriptExecutionEvidence{
+        owner,
+        now,
+        impl->limits.recordFullSource ? std::string{source} : std::string{},
+        "fnv1a64:" + sourceHash,
+        impl->limits.recordFullSource,
+        static_cast<std::uint32_t>(result.status),
+        result.diagnostic,
+        result.createdIntents.size()
+    });
+    return result;
 }
 
 }

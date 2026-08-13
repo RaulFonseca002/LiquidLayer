@@ -1,10 +1,13 @@
-#include "liquid/BehaviorRegistry.hpp"
+#include "liquid/detail/BehaviorRegistry.hpp"
 
 #include "liquid/Ids.hpp"
 
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <set>
+
+using namespace liquid;
+using liquid::detail::BehaviorRegistry;
 
 template <typename Function>
 void expect_throw(Function function)
@@ -17,10 +20,10 @@ void expect_throw(Function function)
         thrown = true;
     }
 
-    assert(thrown);
+    REQUIRE(thrown);
 }
 
-int main()
+TEST_CASE("test_behavior_registry")
 {
     {
         BehaviorRegistry behaviors;
@@ -29,13 +32,13 @@ int main()
         BehaviorId second = behaviors.create();
         BehaviorId third = behaviors.create();
 
-        assert(first == 0);
-        assert(second == 1);
-        assert(third == 2);
-        assert(behaviors.exists(first));
-        assert(behaviors.exists(second));
-        assert(behaviors.exists(third));
-        assert(behaviors.size() == 3);
+        REQUIRE(first.slot == 0);
+        REQUIRE(second.slot == 1);
+        REQUIRE(third.slot == 2);
+        REQUIRE(behaviors.exists(first));
+        REQUIRE(behaviors.exists(second));
+        REQUIRE(behaviors.exists(third));
+        REQUIRE(behaviors.size() == 3);
     }
 
     {
@@ -44,8 +47,8 @@ int main()
         BehaviorId id = behaviors.create();
         behaviors.destroy(id);
 
-        assert(!behaviors.exists(id));
-        assert(behaviors.size() == 0);
+        REQUIRE(!behaviors.exists(id));
+        REQUIRE(behaviors.size() == 0);
 
         expect_throw([&] {
             behaviors.destroy(id);
@@ -61,16 +64,19 @@ int main()
 
         behaviors.destroy(second);
         BehaviorId recycledSecond = behaviors.create();
-        assert(recycledSecond == second);
+        REQUIRE(recycledSecond.slot == second.slot);
+        REQUIRE(recycledSecond.generation > second.generation);
 
         behaviors.destroy(first);
         behaviors.destroy(third);
 
         BehaviorId recycledThird = behaviors.create();
         BehaviorId recycledFirst = behaviors.create();
-        assert(recycledThird == third);
-        assert(recycledFirst == first);
-        assert(behaviors.size() == 3);
+        REQUIRE(recycledThird.slot == third.slot);
+        REQUIRE(recycledThird.generation > third.generation);
+        REQUIRE(recycledFirst.slot == first.slot);
+        REQUIRE(recycledFirst.generation > first.generation);
+        REQUIRE(behaviors.size() == 3);
     }
 
     {
@@ -80,31 +86,30 @@ int main()
             behaviors.destroy(42);
         });
 
-        assert(!behaviors.exists(42));
-        assert(behaviors.size() == 0);
+        REQUIRE(!behaviors.exists(42));
+        REQUIRE(behaviors.size() == 0);
     }
 
     {
         BehaviorRegistry behaviors;
         std::set<BehaviorId> created;
 
-        for (std::size_t i = 0; i < MAX_BEHAVIOURS; ++i) {
+        for (std::size_t i = 0; i < MaxBehaviours; ++i) {
             BehaviorId id = behaviors.create();
             bool inserted = created.insert(id).second;
-            assert(inserted);
-            assert(behaviors.exists(id));
+            REQUIRE(inserted);
+            REQUIRE(behaviors.exists(id));
         }
 
-        assert(behaviors.size() == MAX_BEHAVIOURS);
-        assert(created.size() == MAX_BEHAVIOURS);
+        REQUIRE(behaviors.size() == MaxBehaviours);
+        REQUIRE(created.size() == MaxBehaviours);
 
         expect_throw([&] {
             behaviors.create();
         });
 
         for (BehaviorId id : created)
-            assert(behaviors.exists(id));
+            REQUIRE(behaviors.exists(id));
     }
 
-    return 0;
 }

@@ -240,6 +240,9 @@ LuaComponentCodec<Light> light_codec() {
 }
 
 class LuaScenarioSystem : public System {
+public:
+    static constexpr std::string_view stableName = "apps.SimulationCli.cpp.LuaScenarioSystem";
+    static constexpr std::uint32_t version = 1;
 private:
     LuaBehaviorRunner* runner;
     BehaviorId owner;
@@ -268,6 +271,9 @@ public:
 };
 
 class TrackingSystem : public System {
+public:
+    static constexpr std::string_view stableName = "apps.SimulationCli.cpp.TrackingSystem";
+    static constexpr std::uint32_t version = 1;
 private:
     std::size_t completedRuns = 0;
 

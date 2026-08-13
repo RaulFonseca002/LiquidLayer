@@ -1,20 +1,26 @@
-#include "liquid/BehaviorRegistry.hpp"
+#include "liquid/detail/BehaviorRegistry.hpp"
 
 #include <numeric>
+#include <limits>
 #include <stdexcept>
 
-BehaviorRegistry::BehaviorRegistry() {
-    availableIds.resize(MAX_BEHAVIOURS);
-    std::iota(availableIds.rbegin(), availableIds.rend(), 0);
+namespace liquid::detail {
+
+BehaviorRegistry::BehaviorRegistry(WorldInstanceId world)
+    : worldId(world),
+      generations(MaxBehaviours, 1) {
+    availableSlots.resize(MaxBehaviours);
+    std::iota(availableSlots.rbegin(), availableSlots.rend(), 0);
 }
 
 BehaviorId BehaviorRegistry::create() {
-    if (availableIds.empty())
+    if (availableSlots.empty())
         throw std::runtime_error("all behavior ids are already in use");
 
 
-    BehaviorId behavior = availableIds.back();
-    availableIds.pop_back();
+    std::uint16_t slot = availableSlots.back();
+    availableSlots.pop_back();
+    BehaviorId behavior{worldId, slot, generations.at(slot)};
 
     try {
         auto [position, inserted] = active.emplace(behavior);
@@ -23,7 +29,7 @@ BehaviorId BehaviorRegistry::create() {
         if (!inserted)
             throw std::logic_error("behavior id already active");
     } catch (...) {
-        availableIds.push_back(behavior);
+        availableSlots.push_back(slot);
         throw;
     }
 
@@ -35,7 +41,12 @@ void BehaviorRegistry::destroy(BehaviorId id) {
         throw std::runtime_error("behavior id not found");
 
     active.erase(id);
-    availableIds.push_back(id);
+
+    if (generations.at(id.slot) == std::numeric_limits<std::uint32_t>::max())
+        return;
+
+    ++generations.at(id.slot);
+    availableSlots.push_back(id.slot);
 }
 
 bool BehaviorRegistry::exists(BehaviorId id) const {
@@ -44,4 +55,6 @@ bool BehaviorRegistry::exists(BehaviorId id) const {
 
 std::size_t BehaviorRegistry::size() const {
     return active.size();
+}
+
 }

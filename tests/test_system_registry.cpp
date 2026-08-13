@@ -1,12 +1,17 @@
-#include "liquid/SystemRegistry.hpp"
+#include "liquid/detail/SystemRegistry.hpp"
 
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <string>
 #include <utility>
 #include <vector>
 
+using namespace liquid;
+using liquid::detail::SystemRegistry;
+
 struct TrackingSystem : System {
+    static constexpr std::string_view stableName = "tests.test.system.registry.cpp.TrackingSystem";
+    static constexpr std::uint32_t version = 1;
     std::vector<std::string> events;
 
     void on_behavior_added(BehaviorId behavior) override {
@@ -27,9 +32,13 @@ struct TrackingSystem : System {
 };
 
 struct CallbackRegisteredSystem : System {
+    static constexpr std::string_view stableName = "tests.test.system.registry.cpp.CallbackRegisteredSystem";
+    static constexpr std::uint32_t version = 1;
 };
 
 struct RegistryMutatingCallbackSystem : System {
+    static constexpr std::string_view stableName = "tests.test.system.registry.cpp.RegistryMutatingCallbackSystem";
+    static constexpr std::uint32_t version = 1;
     SystemRegistry& registry;
     bool mutationRejected = false;
 
@@ -50,6 +59,8 @@ struct RegistryMutatingCallbackSystem : System {
 };
 
 struct LightingSystem : System {
+    static constexpr std::string_view stableName = "tests.test.system.registry.cpp.LightingSystem";
+    static constexpr std::uint32_t version = 1;
     std::vector<BehaviorId> added;
     std::vector<BehaviorId> removed;
 
@@ -63,6 +74,8 @@ struct LightingSystem : System {
 };
 
 struct ClimateSystem : System {
+    static constexpr std::string_view stableName = "tests.test.system.registry.cpp.ClimateSystem";
+    static constexpr std::uint32_t version = 1;
     std::vector<BehaviorId> added;
     std::vector<BehaviorId> removed;
 
@@ -76,6 +89,8 @@ struct ClimateSystem : System {
 };
 
 struct ConfiguredSystem : System {
+    static constexpr std::string_view stableName = "tests.test.system.registry.cpp.ConfiguredSystem";
+    static constexpr std::uint32_t version = 1;
     int threshold = 0;
     std::string label;
 
@@ -97,20 +112,20 @@ void expect_throw(Function function)
         thrown = true;
     }
 
-    assert(thrown);
+    REQUIRE(thrown);
 }
 
-int main()
+TEST_CASE("test_system_registry")
 {
     {
         SystemRegistry systems;
 
         systems.register_system<TrackingSystem>(Signature{});
 
-        assert(systems.exists<TrackingSystem>());
-        assert(systems.size() == 1);
-        assert(systems.signature<TrackingSystem>().none());
-        assert(systems.behavior_count<TrackingSystem>() == 0);
+        REQUIRE(systems.exists<TrackingSystem>());
+        REQUIRE(systems.size() == 1);
+        REQUIRE(systems.signature<TrackingSystem>().none());
+        REQUIRE(systems.behavior_count<TrackingSystem>() == 0);
 
         expect_throw([&] {
             systems.register_system<TrackingSystem>(Signature{});
@@ -155,8 +170,8 @@ int main()
         systems.register_system<ConfiguredSystem>(Signature{}, 8, "focus");
 
         auto& configured = systems.get_system<ConfiguredSystem>();
-        assert(configured.threshold == 8);
-        assert(configured.label == "focus");
+        REQUIRE(configured.threshold == 8);
+        REQUIRE(configured.label == "focus");
     }
 
     {
@@ -168,18 +183,18 @@ int main()
         systems.update_behavior(7, {});
         systems.update_behavior(7, {});
 
-        assert(systems.has_behavior<TrackingSystem>(7));
-        assert(systems.behavior_count<TrackingSystem>() == 1);
-        assert(tracking.exposed_count() == 1);
-        assert(tracking.exposes(7));
-        assert((tracking.events == std::vector<std::string>{"+7"}));
+        REQUIRE(systems.has_behavior<TrackingSystem>(7));
+        REQUIRE(systems.behavior_count<TrackingSystem>() == 1);
+        REQUIRE(tracking.exposed_count() == 1);
+        REQUIRE(tracking.exposes(7));
+        REQUIRE((tracking.events == std::vector<std::string>{"+7"}));
 
         systems.remove_behavior<TrackingSystem>(7);
         systems.remove_behavior<TrackingSystem>(7);
 
-        assert(!systems.has_behavior<TrackingSystem>(7));
-        assert(systems.behavior_count<TrackingSystem>() == 0);
-        assert((tracking.events == std::vector<std::string>{"+7", "-7"}));
+        REQUIRE(!systems.has_behavior<TrackingSystem>(7));
+        REQUIRE(systems.behavior_count<TrackingSystem>() == 0);
+        REQUIRE((tracking.events == std::vector<std::string>{"+7", "-7"}));
     }
 
     {
@@ -195,27 +210,27 @@ int main()
 
         systems.update_behavior(10, lightSignature);
 
-        assert(systems.has_behavior<LightingSystem>(10));
-        assert(!systems.has_behavior<ClimateSystem>(10));
+        REQUIRE(systems.has_behavior<LightingSystem>(10));
+        REQUIRE(!systems.has_behavior<ClimateSystem>(10));
 
         Signature both = lightSignature | temperatureSignature;
         systems.update_behavior(10, both);
 
-        assert(systems.has_behavior<LightingSystem>(10));
-        assert(systems.has_behavior<ClimateSystem>(10));
+        REQUIRE(systems.has_behavior<LightingSystem>(10));
+        REQUIRE(systems.has_behavior<ClimateSystem>(10));
 
         systems.update_behavior(10, temperatureSignature);
 
-        assert(!systems.has_behavior<LightingSystem>(10));
-        assert(systems.has_behavior<ClimateSystem>(10));
+        REQUIRE(!systems.has_behavior<LightingSystem>(10));
+        REQUIRE(systems.has_behavior<ClimateSystem>(10));
 
         auto& lighting = systems.get_system<LightingSystem>();
         auto& climate = systems.get_system<ClimateSystem>();
 
-        assert((lighting.added == std::vector<BehaviorId>{10}));
-        assert((lighting.removed == std::vector<BehaviorId>{10}));
-        assert((climate.added == std::vector<BehaviorId>{10}));
-        assert(climate.removed.empty());
+        REQUIRE((lighting.added == std::vector<BehaviorId>{10}));
+        REQUIRE((lighting.removed == std::vector<BehaviorId>{10}));
+        REQUIRE((climate.added == std::vector<BehaviorId>{10}));
+        REQUIRE(climate.removed.empty());
     }
 
     {
@@ -228,15 +243,15 @@ int main()
         systems.add_behavior<TrackingSystem>(2);
         systems.add_behavior<TrackingSystem>(1);
 
-        assert(systems.behavior_count<TrackingSystem>() == 2);
-        assert((tracking.events == std::vector<std::string>{"+1", "+2"}));
+        REQUIRE(systems.behavior_count<TrackingSystem>() == 2);
+        REQUIRE((tracking.events == std::vector<std::string>{"+1", "+2"}));
 
         systems.remove_behavior(1);
         systems.remove_behavior(1);
 
-        assert(!systems.has_behavior<TrackingSystem>(1));
-        assert(systems.has_behavior<TrackingSystem>(2));
-        assert((tracking.events == std::vector<std::string>{"+1", "+2", "-1"}));
+        REQUIRE(!systems.has_behavior<TrackingSystem>(1));
+        REQUIRE(systems.has_behavior<TrackingSystem>(2));
+        REQUIRE((tracking.events == std::vector<std::string>{"+1", "+2", "-1"}));
     }
 
     {
@@ -247,8 +262,8 @@ int main()
 
         systems.destroy_system<TrackingSystem>();
 
-        assert(!systems.exists<TrackingSystem>());
-        assert(systems.size() == 0);
+        REQUIRE(!systems.exists<TrackingSystem>());
+        REQUIRE(systems.size() == 0);
 
         expect_throw([&] {
             systems.get_system<TrackingSystem>();
@@ -262,10 +277,9 @@ int main()
         systems.update_behavior(7, Signature{});
 
         auto& system = systems.get_system<RegistryMutatingCallbackSystem>();
-        assert(system.mutationRejected);
-        assert(systems.has_behavior<RegistryMutatingCallbackSystem>(7));
-        assert(!systems.exists<CallbackRegisteredSystem>());
+        REQUIRE(system.mutationRejected);
+        REQUIRE(systems.has_behavior<RegistryMutatingCallbackSystem>(7));
+        REQUIRE(!systems.exists<CallbackRegisteredSystem>());
     }
 
-    return 0;
 }

@@ -1,13 +1,16 @@
-#include "liquid/IntentRegistry.hpp"
+#include "liquid/detail/IntentRegistry.hpp"
 
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
 #include <map>
+
+using namespace liquid;
+using liquid::detail::IntentRegistry;
 
 struct Light {
     int brightness = 0;
 };
 
-int main()
+TEST_CASE("test_intent_resolution")
 {
     {
         IntentRegistry intents;
@@ -28,12 +31,12 @@ int main()
 
         std::map<ComponentName, IntentId> selected = intents.resolve(lightType.id, components, 0);
 
-        assert(selected.size() == 1);
-        assert(selected.at("officeLight") == high);
-        assert(intents.intent(medium).priority == IntentPriority::Medium);
-        assert(intents.exists(low));
-        assert(intents.exists(medium));
-        assert(intents.exists(high));
+        REQUIRE(selected.size() == 1);
+        REQUIRE(selected.at("officeLight") == high);
+        REQUIRE(intents.intent(medium).priority == IntentPriority::Medium);
+        REQUIRE(intents.exists(low));
+        REQUIRE(intents.exists(medium));
+        REQUIRE(intents.exists(high));
     }
 
     {
@@ -47,7 +50,7 @@ int main()
 
         IntentId older = intents.create(owner, lightType, officeSlot, IntentLifetime::persistent(), Light{10}, IntentPriority::Medium);
         IntentId newer = intents.create(owner, lightType, officeSlot, IntentLifetime::persistent(), Light{90}, IntentPriority::Medium);
-        assert(newer > older);
+        REQUIRE(newer > older);
 
         std::map<ComponentName, ComponentSlotId> components{
             {"officeLight", officeSlot}
@@ -55,8 +58,8 @@ int main()
 
         std::map<ComponentName, IntentId> selected = intents.resolve(lightType.id, components, 0);
 
-        assert(selected.size() == 1);
-        assert(selected.at("officeLight") == newer);
+        REQUIRE(selected.size() == 1);
+        REQUIRE(selected.at("officeLight") == newer);
     }
 
     {
@@ -95,15 +98,17 @@ int main()
             IntentPriority::Medium
         );
 
-        assert(recycled == lower);
+        REQUIRE(recycled.slot == lower.slot);
+        REQUIRE(recycled.generation > lower.generation);
+        REQUIRE(higher != recycled);
 
         std::map<ComponentName, ComponentSlotId> components{
             {"officeLight", officeSlot}
         };
         std::map<ComponentName, IntentId> selected = intents.resolve(lightType.id, components, 0);
 
-        assert(selected.size() == 1);
-        assert(selected.at("officeLight") == higher);
+        REQUIRE(selected.size() == 1);
+        REQUIRE(selected.at("officeLight") == recycled);
     }
 
     {
@@ -124,10 +129,10 @@ int main()
 
         std::map<ComponentName, IntentId> selected = intents.resolve(lightType.id, components, 5);
 
-        assert(!intents.exists(expiredHigh));
-        assert(intents.exists(persistentLow));
-        assert(selected.size() == 1);
-        assert(selected.at("officeLight") == persistentLow);
+        REQUIRE(!intents.exists(expiredHigh));
+        REQUIRE(intents.exists(persistentLow));
+        REQUIRE(selected.size() == 1);
+        REQUIRE(selected.at("officeLight") == persistentLow);
     }
 
     {
@@ -152,9 +157,9 @@ int main()
 
         std::map<ComponentName, IntentId> selected = intents.resolve(lightType.id, components, 0);
 
-        assert(selected.size() == 1);
-        assert(selected.at("officeLight") == live);
-        assert(!selected.contains("deskLight"));
+        REQUIRE(selected.size() == 1);
+        REQUIRE(selected.at("officeLight") == live);
+        REQUIRE(!selected.contains("deskLight"));
     }
 
     {
@@ -177,10 +182,9 @@ int main()
 
         std::map<ComponentName, IntentId> selected = intents.resolve(lightType.id, components, 0);
 
-        assert(selected.size() == 2);
-        assert(selected.at("officeLight") == office);
-        assert(selected.at("deskLight") == desk);
+        REQUIRE(selected.size() == 2);
+        REQUIRE(selected.at("officeLight") == office);
+        REQUIRE(selected.at("deskLight") == desk);
     }
 
-    return 0;
 }

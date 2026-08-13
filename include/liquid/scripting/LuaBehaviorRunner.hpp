@@ -62,6 +62,7 @@ struct LuaExecutionLimits {
     std::size_t maxTableEntries = 4'096;
     std::size_t maxStringBytes = 64 * 1024;
     std::size_t maxBufferedValueBytes = 8 * 1024 * 1024;
+    bool recordFullSource = true;
 };
 
 enum class LuaExecutionStatus {

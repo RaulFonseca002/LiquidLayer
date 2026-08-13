@@ -2,10 +2,9 @@ if(NOT DEFINED CLI OR NOT DEFINED WORK_DIR)
     message(FATAL_ERROR "CLI and WORK_DIR are required")
 endif()
 
-set(process_directory "${WORK_DIR}/simulation_cli_process_workspace")
-if(EXISTS "${process_directory}")
-    message(FATAL_ERROR "process-test workspace already exists: ${process_directory}")
-endif()
+string(RANDOM LENGTH 16 ALPHABET 0123456789abcdef process_nonce)
+set(process_directory
+    "${WORK_DIR}/simulation_cli_process_workspace_${process_nonce}")
 
 file(MAKE_DIRECTORY "${process_directory}")
 set(success_script "${process_directory}/success.lua")

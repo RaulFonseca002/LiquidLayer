@@ -1,7 +1,7 @@
 #include "SimulationCli.hpp"
 #include "liquid/scripting/LuaBehaviorRunner.hpp"
 
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -9,6 +9,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+using namespace liquid;
 
 using liquid::simulation::ExitCode;
 using liquid::simulation::run_cli;
@@ -25,8 +27,8 @@ public:
         : directoryPath(std::filesystem::current_path() / "test_simulation_cli_workspace") {
         std::error_code error;
         owned = std::filesystem::create_directory(directoryPath, error);
-        assert(!error);
-        assert(owned);
+        REQUIRE(!error);
+        REQUIRE(owned);
     }
 
     ~TemporaryDirectory() {
@@ -40,9 +42,9 @@ public:
     std::string write_script(const std::string& name, const std::string& source) const {
         std::filesystem::path scriptPath = directoryPath / name;
         std::ofstream script(scriptPath, std::ios::binary);
-        assert(script);
+        REQUIRE(script);
         script << source;
-        assert(script);
+        REQUIRE(script);
         return scriptPath.string();
     }
 };
@@ -62,23 +64,23 @@ Invocation invoke(const std::vector<std::string>& arguments) {
 
 }
 
-int main() {
+TEST_CASE("test_simulation_cli") {
     TemporaryDirectory temporaryDirectory;
 
     {
         Invocation help = invoke({"--help"});
-        assert(help.status == static_cast<int>(ExitCode::Success));
-        assert(help.output ==
+        REQUIRE(help.status == static_cast<int>(ExitCode::Success));
+        REQUIRE(help.output ==
             "Usage: liquid_sim_cli --initial-brightness <0..100> --script <lua-file> "
             "--frame-time <milliseconds> [--frame-time <milliseconds> ...]\n");
-        assert(help.error.empty());
+        REQUIRE(help.error.empty());
     }
 
     {
         Invocation missing = invoke({});
-        assert(missing.status == static_cast<int>(ExitCode::UsageError));
-        assert(missing.output.empty());
-        assert(missing.error ==
+        REQUIRE(missing.status == static_cast<int>(ExitCode::UsageError));
+        REQUIRE(missing.output.empty());
+        REQUIRE(missing.error ==
             "error: missing required options\n"
             "Try 'liquid_sim_cli --help' for usage.\n");
     }
@@ -106,14 +108,14 @@ int main() {
         "final component=Light.officeLight brightness=10 tracking_system_runs=2 frames_completed=2 faulted=false\n";
 
     Invocation firstSuccess = invoke(successArguments);
-    assert(firstSuccess.status == static_cast<int>(ExitCode::Success));
-    assert(firstSuccess.output == expectedSuccess);
-    assert(firstSuccess.error.empty());
+    REQUIRE(firstSuccess.status == static_cast<int>(ExitCode::Success));
+    REQUIRE(firstSuccess.output == expectedSuccess);
+    REQUIRE(firstSuccess.error.empty());
 
     Invocation replay = invoke(successArguments);
-    assert(replay.status == firstSuccess.status);
-    assert(replay.output == firstSuccess.output);
-    assert(replay.error == firstSuccess.error);
+    REQUIRE(replay.status == firstSuccess.status);
+    REQUIRE(replay.output == firstSuccess.output);
+    REQUIRE(replay.error == firstSuccess.error);
 
     std::string failureScript = temporaryDirectory.write_script(
         "failure.lua",
@@ -127,22 +129,22 @@ int main() {
         "--frame-time", "100"
     });
 
-    assert(failure.status == static_cast<int>(ExitCode::ScriptError));
-    assert(failure.output ==
+    REQUIRE(failure.status == static_cast<int>(ExitCode::ScriptError));
+    REQUIRE(failure.output ==
         "scenario initial_brightness=10 frame_count=1\n"
         "script status=runtime_error created_intents=0 intent_ids=- diagnostic=\"script\\nfailure\\xc2\\xa0\"\n"
         "frame number=0 now_ms=100 completed=true phases=begin_frame,expire_intents,run_systems,resolve_intents,end_frame expired_intents=0 resolution_requests=1 selected_intents=0 systems_completed=2\n"
         "final component=Light.officeLight brightness=10 tracking_system_runs=1 frames_completed=1 faulted=false\n");
-    assert(failure.error.empty());
+    REQUIRE(failure.error.empty());
 
     Invocation failureReplay = invoke({
         "--initial-brightness", "10",
         "--script", failureScript,
         "--frame-time", "100"
     });
-    assert(failureReplay.status == failure.status);
-    assert(failureReplay.output == failure.output);
-    assert(failureReplay.error == failure.error);
+    REQUIRE(failureReplay.status == failure.status);
+    REQUIRE(failureReplay.output == failure.output);
+    REQUIRE(failureReplay.error == failure.error);
 
     {
         Invocation invalidBrightness = invoke({
@@ -150,9 +152,9 @@ int main() {
             "--script", successScript,
             "--frame-time", "100"
         });
-        assert(invalidBrightness.status == static_cast<int>(ExitCode::UsageError));
-        assert(invalidBrightness.output.empty());
-        assert(invalidBrightness.error ==
+        REQUIRE(invalidBrightness.status == static_cast<int>(ExitCode::UsageError));
+        REQUIRE(invalidBrightness.output.empty());
+        REQUIRE(invalidBrightness.error ==
             "error: initial brightness must be an integer from 0 to 100\n"
             "Try 'liquid_sim_cli --help' for usage.\n");
     }
@@ -164,9 +166,9 @@ int main() {
             "--frame-time", "100",
             "--frame-time", "99"
         });
-        assert(decreasingTime.status == static_cast<int>(ExitCode::UsageError));
-        assert(decreasingTime.output.empty());
-        assert(decreasingTime.error ==
+        REQUIRE(decreasingTime.status == static_cast<int>(ExitCode::UsageError));
+        REQUIRE(decreasingTime.output.empty());
+        REQUIRE(decreasingTime.error ==
             "error: frame times must be nondecreasing\n"
             "Try 'liquid_sim_cli --help' for usage.\n");
     }
@@ -177,27 +179,27 @@ int main() {
             "--script", "missing_simulation_script.lua",
             "--frame-time", "100"
         });
-        assert(missingScript.status == static_cast<int>(ExitCode::UsageError));
-        assert(missingScript.output.empty());
-        assert(missingScript.error ==
+        REQUIRE(missingScript.status == static_cast<int>(ExitCode::UsageError));
+        REQUIRE(missingScript.output.empty());
+        REQUIRE(missingScript.error ==
             "error: could not open script file\n"
             "Try 'liquid_sim_cli --help' for usage.\n");
     }
 
     {
         Invocation unknownOption = invoke({"--unknown"});
-        assert(unknownOption.status == static_cast<int>(ExitCode::UsageError));
-        assert(unknownOption.output.empty());
-        assert(unknownOption.error ==
+        REQUIRE(unknownOption.status == static_cast<int>(ExitCode::UsageError));
+        REQUIRE(unknownOption.output.empty());
+        REQUIRE(unknownOption.error ==
             "error: unknown option: --unknown\n"
             "Try 'liquid_sim_cli --help' for usage.\n");
     }
 
     {
         Invocation missingValue = invoke({"--script"});
-        assert(missingValue.status == static_cast<int>(ExitCode::UsageError));
-        assert(missingValue.output.empty());
-        assert(missingValue.error ==
+        REQUIRE(missingValue.status == static_cast<int>(ExitCode::UsageError));
+        REQUIRE(missingValue.output.empty());
+        REQUIRE(missingValue.error ==
             "error: missing value for --script\n"
             "Try 'liquid_sim_cli --help' for usage.\n");
     }
@@ -210,9 +212,9 @@ int main() {
             "--script", successScript,
             "--frame-time", std::to_string(outsideLuaRange)
         });
-        assert(invalidTime.status == static_cast<int>(ExitCode::UsageError));
-        assert(invalidTime.output.empty());
-        assert(invalidTime.error ==
+        REQUIRE(invalidTime.status == static_cast<int>(ExitCode::UsageError));
+        REQUIRE(invalidTime.output.empty());
+        REQUIRE(invalidTime.error ==
             "error: frame time exceeds the Lua integer range\n"
             "Try 'liquid_sim_cli --help' for usage.\n");
     }
@@ -227,13 +229,13 @@ int main() {
             "--frame-time", "100"
         });
 
-        assert(oversized.status == static_cast<int>(ExitCode::ScriptError));
-        assert(oversized.output ==
+        REQUIRE(oversized.status == static_cast<int>(ExitCode::ScriptError));
+        REQUIRE(oversized.output ==
             "scenario initial_brightness=10 frame_count=1\n"
             "script status=source_limit_exceeded created_intents=0 intent_ids=- diagnostic=\"Lua source exceeds size limit\"\n"
             "frame number=0 now_ms=100 completed=true phases=begin_frame,expire_intents,run_systems,resolve_intents,end_frame expired_intents=0 resolution_requests=1 selected_intents=0 systems_completed=2\n"
             "final component=Light.officeLight brightness=10 tracking_system_runs=1 frames_completed=1 faulted=false\n");
-        assert(oversized.error.empty());
+        REQUIRE(oversized.error.empty());
     }
 
     {
@@ -241,9 +243,8 @@ int main() {
         failedOutput.setstate(std::ios::badbit);
         std::ostringstream error;
         int status = run_cli({"--help"}, failedOutput, error);
-        assert(status == static_cast<int>(ExitCode::HostError));
-        assert(error.str() == "error: host failure: \"could not write simulation output\"\n");
+        REQUIRE(status == static_cast<int>(ExitCode::HostError));
+        REQUIRE(error.str() == "error: host failure: \"could not write simulation output\"\n");
     }
 
-    return 0;
 }

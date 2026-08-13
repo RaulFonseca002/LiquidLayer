@@ -1,9 +1,14 @@
-#include "liquid/ComponentRegistry.hpp"
+#include "liquid/detail/ComponentRegistry.hpp"
 
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
+
+using namespace liquid;
+using liquid::detail::ComponentRegistry;
 
 struct Light {
     int brightness = 0;
@@ -28,10 +33,10 @@ void expect_throw(Function function)
         thrown = true;
     }
 
-    assert(thrown);
+    REQUIRE(thrown);
 }
 
-int main()
+TEST_CASE("test_component_registry")
 {
     {
         ComponentRegistry registry;
@@ -43,10 +48,10 @@ int main()
         ComponentType<Light> lightType = registry.register_component<Light>("Light");
         ComponentType<Temperature> temperatureType = registry.register_component<Temperature>("Temperature");
 
-        assert(lightType.id == 0);
-        assert(temperatureType.id == 1);
-        assert(registry.component_type("Light") == lightType);
-        assert(registry.component_type(lightType) == lightType.id);
+        REQUIRE(lightType.id == 0);
+        REQUIRE(temperatureType.id == 1);
+        REQUIRE(registry.component_type("Light") == lightType);
+        REQUIRE(registry.component_type(lightType) == lightType.id);
 
         expect_throw([&] {
             registry.register_component<Light>("Light");
@@ -60,9 +65,9 @@ int main()
     {
         ComponentRegistry registry;
 
-        for (std::size_t i = 0; i < MAX_COMPONENT_TYPES; ++i) {
+        for (std::size_t i = 0; i < MaxComponentTypes; ++i) {
             ComponentType<Marker> type = registry.register_component<Marker>("Marker" + std::to_string(i));
-            assert(type.id == i);
+            REQUIRE(type.id == i);
         }
 
         expect_throw([&] {
@@ -83,13 +88,13 @@ int main()
         registry.add_component(lightType, "officeLight", Light{40});
         registry.add_component(temperatureType, "officeTemperature", Temperature{22});
 
-        assert(registry.has_component_named(lightType, "officeLight"));
-        assert(!registry.has_component_named(lightType, "missing"));
-        assert(registry.get_component_named(lightType, "officeLight")->brightness == 40);
-        assert(static_cast<const ComponentRegistry&>(registry).get_component_named(lightType, "officeLight")->brightness == 40);
+        REQUIRE(registry.has_component_named(lightType, "officeLight"));
+        REQUIRE(!registry.has_component_named(lightType, "missing"));
+        REQUIRE(registry.get_component_named(lightType, "officeLight")->brightness == 40);
+        REQUIRE(static_cast<const ComponentRegistry&>(registry).get_component_named(lightType, "officeLight")->brightness == 40);
 
         registry.get_component_named(lightType, "officeLight")->brightness = 45;
-        assert(registry.get_component_named(lightType, "officeLight")->brightness == 45);
+        REQUIRE(registry.get_component_named(lightType, "officeLight")->brightness == 45);
 
         expect_throw([&] {
             registry.add_component(lightType, "officeLight", Light{80});
@@ -112,16 +117,16 @@ int main()
             registry.add_component(wrongType, "badTemperature", Temperature{1});
         });
 
-        assert(!registry.has_component_named(wrongType, "officeLight"));
+        REQUIRE(!registry.has_component_named(wrongType, "officeLight"));
 
         ComponentType<Light> invalidType;
         expect_throw([&] {
             registry.add_component(invalidType, "badLight", Light{1});
         });
 
-        assert(!registry.has_component_named(invalidType, "badLight"));
-        assert(!registry.can_read(invalidType, 1, "badLight"));
-        assert(!registry.can_write(invalidType, 1, "badLight"));
+        REQUIRE(!registry.has_component_named(invalidType, "badLight"));
+        REQUIRE(!registry.can_read(invalidType, 1, "badLight"));
+        REQUIRE(!registry.can_write(invalidType, 1, "badLight"));
     }
 
     {
@@ -147,48 +152,48 @@ int main()
         auto focusLights = registry.get_components(lightType, focusBehavior);
         auto trackingTemperatures = registry.get_components(temperatureType, trackingBehavior);
 
-        assert(trackingLights.size() == 1);
-        assert(focusLights.size() == 1);
-        assert(trackingTemperatures.size() == 1);
-        assert(trackingLights.at("officeLight") == 0);
-        assert(focusLights.at("officeLight") == 0);
-        assert(trackingTemperatures.at("officeTemperature") == 0);
-        assert(registry.resolve_component(lightType, trackingLights.at("officeLight")) == registry.get_component_named(lightType, "officeLight"));
-        assert(static_cast<const ComponentRegistry&>(registry).resolve_component(lightType, focusLights.at("officeLight")) == registry.get_component_named(lightType, "officeLight"));
+        REQUIRE(trackingLights.size() == 1);
+        REQUIRE(focusLights.size() == 1);
+        REQUIRE(trackingTemperatures.size() == 1);
+        REQUIRE(trackingLights.at("officeLight").slot == 0);
+        REQUIRE(focusLights.at("officeLight").slot == 0);
+        REQUIRE(trackingTemperatures.at("officeTemperature").slot == 0);
+        REQUIRE(registry.resolve_component(lightType, trackingLights.at("officeLight")) == registry.get_component_named(lightType, "officeLight"));
+        REQUIRE(static_cast<const ComponentRegistry&>(registry).resolve_component(lightType, focusLights.at("officeLight")) == registry.get_component_named(lightType, "officeLight"));
 
-        assert(registry.can_read(lightType, trackingBehavior, "officeLight"));
-        assert(registry.can_write(lightType, trackingBehavior, "officeLight"));
-        assert(registry.can_read(lightType, focusBehavior, "officeLight"));
-        assert(!registry.can_write(lightType, focusBehavior, "officeLight"));
-        assert(!registry.can_read(lightType, writeOnlyBehavior, "officeLight"));
-        assert(registry.can_write(lightType, writeOnlyBehavior, "officeLight"));
-        assert(!registry.can_read(lightType, 99, "officeLight"));
-        assert(!registry.can_write(lightType, 99, "officeLight"));
-        assert(!registry.can_read(lightType, trackingBehavior, "missing"));
-        assert(!registry.can_write(lightType, trackingBehavior, "missing"));
+        REQUIRE(registry.can_read(lightType, trackingBehavior, "officeLight"));
+        REQUIRE(registry.can_write(lightType, trackingBehavior, "officeLight"));
+        REQUIRE(registry.can_read(lightType, focusBehavior, "officeLight"));
+        REQUIRE(!registry.can_write(lightType, focusBehavior, "officeLight"));
+        REQUIRE(!registry.can_read(lightType, writeOnlyBehavior, "officeLight"));
+        REQUIRE(registry.can_write(lightType, writeOnlyBehavior, "officeLight"));
+        REQUIRE(!registry.can_read(lightType, 99, "officeLight"));
+        REQUIRE(!registry.can_write(lightType, 99, "officeLight"));
+        REQUIRE(!registry.can_read(lightType, trackingBehavior, "missing"));
+        REQUIRE(!registry.can_write(lightType, trackingBehavior, "missing"));
 
         std::vector<BehaviorId> behaviors = registry.behaviors_with_access(lightType);
-        assert((behaviors == std::vector<BehaviorId>{focusBehavior, writeOnlyBehavior, trackingBehavior}));
+        REQUIRE((behaviors == std::vector<BehaviorId>{focusBehavior, writeOnlyBehavior, trackingBehavior}));
 
         registry.grant_access(lightType, focusBehavior, "officeLight", ComponentAccessMode::Write);
 
         focusLights = registry.get_components(lightType, focusBehavior);
-        assert(focusLights.size() == 1);
-        assert(!registry.can_read(lightType, focusBehavior, "officeLight"));
-        assert(registry.can_write(lightType, focusBehavior, "officeLight"));
+        REQUIRE(focusLights.size() == 1);
+        REQUIRE(!registry.can_read(lightType, focusBehavior, "officeLight"));
+        REQUIRE(registry.can_write(lightType, focusBehavior, "officeLight"));
 
         registry.revoke_access(lightType, focusBehavior, "officeLight");
 
-        assert(registry.get_components(lightType, focusBehavior).empty());
-        assert(!registry.can_read(lightType, focusBehavior, "officeLight"));
-        assert(!registry.can_write(lightType, focusBehavior, "officeLight"));
+        REQUIRE(registry.get_components(lightType, focusBehavior).empty());
+        REQUIRE(!registry.can_read(lightType, focusBehavior, "officeLight"));
+        REQUIRE(!registry.can_write(lightType, focusBehavior, "officeLight"));
 
         registry.remove_behavior(trackingBehavior);
 
-        assert(registry.get_components(lightType, trackingBehavior).empty());
-        assert(registry.get_components(temperatureType, trackingBehavior).empty());
-        assert(!registry.can_read(lightType, trackingBehavior, "officeLight"));
-        assert(!registry.can_read(temperatureType, trackingBehavior, "officeTemperature"));
+        REQUIRE(registry.get_components(lightType, trackingBehavior).empty());
+        REQUIRE(registry.get_components(temperatureType, trackingBehavior).empty());
+        REQUIRE(!registry.can_read(lightType, trackingBehavior, "officeLight"));
+        REQUIRE(!registry.can_read(temperatureType, trackingBehavior, "officeTemperature"));
     }
 
     {
@@ -202,25 +207,77 @@ int main()
         BehaviorId focusBehavior = 2;
         registry.grant_access(lightType, trackingBehavior, "officeLight", ComponentAccessMode::ReadWrite);
         registry.grant_access(lightType, focusBehavior, "officeLight", ComponentAccessMode::Read);
+        const ComponentSlotId removedSlot =
+            registry.component_slot(lightType, "officeLight");
 
         registry.remove_component(lightType, "officeLight");
 
-        assert(!registry.has_component_named(lightType, "officeLight"));
-        assert(registry.get_components(lightType, trackingBehavior).empty());
-        assert(registry.get_components(lightType, focusBehavior).empty());
-        assert(registry.behaviors_with_access(lightType).empty());
-        assert(registry.resolve_component(lightType, 0) == nullptr);
+        REQUIRE(!registry.has_component_named(lightType, "officeLight"));
+        REQUIRE(registry.get_components(lightType, trackingBehavior).empty());
+        REQUIRE(registry.get_components(lightType, focusBehavior).empty());
+        REQUIRE(registry.behaviors_with_access(lightType).empty());
+        expect_throw([&] {
+            registry.resolve_component(lightType, removedSlot);
+        });
 
         registry.add_component(lightType, "reusedLight", Light{90});
         auto reused = registry.get_component_named(lightType, "reusedLight");
-        assert(reused != nullptr);
-        assert(reused->brightness == 90);
+        REQUIRE(reused != nullptr);
+        REQUIRE(reused->brightness == 90);
+        const ComponentSlotId reusedSlot =
+            registry.component_slot(lightType, "reusedLight");
+        REQUIRE(reusedSlot.slot == removedSlot.slot);
+        REQUIRE(reusedSlot.generation == removedSlot.generation + 1);
+        REQUIRE(reusedSlot != removedSlot);
 
         registry.grant_access(lightType, trackingBehavior, "reusedLight", ComponentAccessMode::Read);
         auto lights = registry.get_components(lightType, trackingBehavior);
-        assert(lights.size() == 1);
-        assert(lights.at("reusedLight") == 0);
+        REQUIRE(lights.size() == 1);
+        REQUIRE(lights.at("reusedLight").slot == 0);
     }
 
-    return 0;
+}
+
+TEST_CASE("component slot handles reject stale and cross-world use") {
+    ComponentRegistry first{11};
+    ComponentRegistry second{22};
+    const auto firstType = first.register_component<Light>("Light");
+    const auto secondType = second.register_component<Light>("Light");
+    first.add_component(firstType, "office", Light{40});
+    second.add_component(secondType, "office", Light{20});
+
+    const ComponentSlotId firstSlot = first.component_slot(firstType, "office");
+    const ComponentSlotId secondSlot = second.component_slot(secondType, "office");
+    REQUIRE(firstSlot.world == 11);
+    REQUIRE(secondSlot.world == 22);
+    REQUIRE(firstSlot != secondSlot);
+    expect_throw([&] {
+        second.resolve_component(secondType, firstSlot);
+    });
+
+    first.remove_component(firstType, "office");
+    first.add_component(firstType, "replacement", Light{50});
+    const ComponentSlotId replacement =
+        first.component_slot(firstType, "replacement");
+    REQUIRE(replacement.slot == firstSlot.slot);
+    REQUIRE(replacement.generation == firstSlot.generation + 1);
+    expect_throw([&] {
+        first.resolve_component(firstType, firstSlot);
+    });
+}
+
+TEST_CASE("exhausted component slot generations retire the physical slot") {
+    ComponentRegistry registry{11};
+    const auto type = registry.register_component<Light>("Light");
+    registry.add_component(type, "last", Light{10});
+    const ComponentSlotId exhausted = registry.set_slot_generation_for_test(
+        type, "last", std::numeric_limits<std::uint32_t>::max());
+    registry.remove_component(type, "last");
+    registry.add_component(type, "replacement", Light{20});
+    const ComponentSlotId replacement =
+        registry.component_slot(type, "replacement");
+    REQUIRE(replacement.slot != exhausted.slot);
+    expect_throw([&] {
+        registry.resolve_component(type, exhausted);
+    });
 }

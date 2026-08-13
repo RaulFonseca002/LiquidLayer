@@ -1,61 +1,87 @@
 #include "liquid/Ids.hpp"
+#include "liquid/world/World.hpp"
 
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <limits>
 #include <type_traits>
+
+using namespace liquid;
 
 struct Light {
     int brightness = 0;
 };
 
-int main()
+TEST_CASE("test_ids")
 {
-    static_assert(std::is_same_v<BehaviorId, std::uint16_t>);
-    static_assert(std::is_same_v<IntentId, std::uint32_t>);
+    static_assert(!std::is_integral_v<BehaviorId>);
+    static_assert(!std::is_integral_v<IntentId>);
     static_assert(std::is_same_v<ComponentTypeId, std::uint16_t>);
-    static_assert(std::is_same_v<ComponentSlotId, Slot>);
+    static_assert(!std::is_integral_v<ComponentSlotId>);
 
-    assert(MaxBehaviours == MAX_BEHAVIOURS);
-    assert(MaxIntents == MAX_INTENTS);
-    assert(MaxComponentTypes == MAX_COMPONENT_TYPES);
-    assert(MaxComponentSlots == MAX_COMPONENT_SLOTS);
-    assert(MaxComponentTypes == 64);
-    assert(InvalidComponentTypeId == std::numeric_limits<ComponentTypeId>::max());
+    REQUIRE(MaxBehaviours == MaxBehaviours);
+    REQUIRE(MaxIntents == MaxIntents);
+    REQUIRE(MaxComponentTypes == MaxComponentTypes);
+    REQUIRE(MaxComponentSlots == MaxComponentSlots);
+    REQUIRE(MaxComponentTypes == 64);
+    REQUIRE(InvalidComponentTypeId == std::numeric_limits<ComponentTypeId>::max());
 
     ComponentType<Light> invalidType;
-    assert(invalidType.id == InvalidComponentTypeId);
+    REQUIRE(invalidType.id == InvalidComponentTypeId);
 
     ComponentType<Light> lightType{7};
     ComponentTypeId converted = lightType;
-    assert(converted == 7);
+    REQUIRE(converted == 7);
 
     Signature empty;
-    assert(empty.none());
-    assert(empty.count() == 0);
+    REQUIRE(empty.none());
+    REQUIRE(empty.count() == 0);
 
     Signature behaviorSignature;
     behaviorSignature.set(0);
     behaviorSignature.set(MaxComponentTypes - 1);
 
-    assert(behaviorSignature.test(0));
-    assert(behaviorSignature.test(MaxComponentTypes - 1));
-    assert(behaviorSignature.count() == 2);
+    REQUIRE(behaviorSignature.test(0));
+    REQUIRE(behaviorSignature.test(MaxComponentTypes - 1));
+    REQUIRE(behaviorSignature.count() == 2);
 
     Signature lightRequirement;
     lightRequirement.set(0);
-    assert((behaviorSignature & lightRequirement) == lightRequirement);
+    REQUIRE((behaviorSignature & lightRequirement) == lightRequirement);
 
     Signature missingRequirement;
     missingRequirement.set(1);
-    assert((behaviorSignature & missingRequirement) != missingRequirement);
+    REQUIRE((behaviorSignature & missingRequirement) != missingRequirement);
 
     behaviorSignature.reset(0);
-    assert(!behaviorSignature.test(0));
-    assert(behaviorSignature.count() == 1);
+    REQUIRE(!behaviorSignature.test(0));
+    REQUIRE(behaviorSignature.count() == 1);
 
     behaviorSignature.flip(MaxComponentTypes - 1);
-    assert(behaviorSignature.none());
+    REQUIRE(behaviorSignature.none());
 
-    return 0;
+    World firstWorld;
+    World secondWorld;
+    auto firstLight = firstWorld.register_component<Light>("test.Light");
+    REQUIRE(firstLight.world == firstWorld.instance_id());
+    bool crossWorldRejected = false;
+    try {
+        secondWorld.add_component(firstLight, "foreign", Light{});
+    } catch (const std::runtime_error&) {
+        crossWorldRejected = true;
+    }
+    REQUIRE(crossWorldRejected);
+
+    BehaviorId first = firstWorld.create_behavior();
+    REQUIRE(first.world == firstWorld.instance_id());
+    REQUIRE(first.generation != 0);
+    REQUIRE(!secondWorld.behavior_exists(first));
+
+    firstWorld.destroy_behavior(first);
+    BehaviorId recycled = firstWorld.create_behavior();
+    REQUIRE(recycled.slot == first.slot);
+    REQUIRE(recycled.generation > first.generation);
+    REQUIRE(!firstWorld.behavior_exists(first));
+    REQUIRE(firstWorld.behavior_exists(recycled));
+
 }

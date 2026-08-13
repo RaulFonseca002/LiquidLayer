@@ -1,8 +1,10 @@
-#include "liquid/world/Coordinator.hpp"
+#include "liquid/detail/Coordinator.hpp"
 
 #include <exception>
 #include <limits>
 #include <stdexcept>
+
+namespace liquid::detail {
 
 Coordinator::Coordinator(WorldState& worldState)
     : state(worldState)
@@ -137,6 +139,14 @@ const IntentTargetIndex& Coordinator::intent_target_index() const {
     return state.intents.target_index();
 }
 
+const std::vector<IntentLifecycleRecord>& Coordinator::intent_lifecycle_records() const {
+    return state.intents.lifecycle_records();
+}
+
+void Coordinator::clear_intent_lifecycle_records() {
+    state.intents.clear_lifecycle_records();
+}
+
 std::map<ComponentName, IntentId> Coordinator::resolve_intents(
     ComponentTypeId type,
     const std::map<ComponentName, ComponentSlotId>& components,
@@ -177,9 +187,10 @@ std::size_t Coordinator::run_systems(
     World& world,
     FrameNumber frame,
     IntentTime now,
-    std::size_t* completedSystems
+    std::size_t* completedSystems,
+    std::string* failingSystem
 ) {
-    return state.systems.run_systems(world, frame, now, completedSystems);
+    return state.systems.run_systems(world, frame, now, completedSystems, failingSystem);
 }
 
 Signature Coordinator::behavior_signature(BehaviorId behavior) const {
@@ -211,4 +222,6 @@ void Coordinator::update_all_system_memberships() {
 
     if (firstException)
         std::rethrow_exception(firstException);
+}
+
 }

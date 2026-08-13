@@ -4,6 +4,8 @@
 
 # CMake and build outputs
 build/
+build-*/
+install-test/
 build_sanitized/
 cmake-build-*/
 CMakeFiles/
