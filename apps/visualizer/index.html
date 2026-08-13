@@ -61,19 +61,18 @@
                 </div>
                 <div class="editor-shell" id="editor-shell">
                     <div class="editor-gutter" id="editor-gutter" aria-hidden="true"></div>
-                    <textarea id="script-source" name="script" rows="14" spellcheck="false" aria-describedby="script-help">access.Light.officeLight.propose({
+                    <textarea id="script-source" name="script" rows="14" spellcheck="false" aria-describedby="script-help">local light = access.Light.officeLight
+
+light.propose({
     value = { brightness = 30 },
     priority = "low",
-    lifetime = { kind = "persistent" }
+    lifetime = "persistent"
 })
 
-access.Light.officeLight.propose({
+light.propose({
     value = { brightness = 70 },
     priority = "high",
-    lifetime = {
-        kind = "duration",
-        milliseconds = 5
-    }
+    duration_ms = 5
 })</textarea>
                 </div>
                 <p class="field-help" id="script-help">The editor indicates the observed script boundary only. Solid does not report source-line execution.</p>

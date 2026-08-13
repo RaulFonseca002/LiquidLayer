@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+from html.parser import HTMLParser
 import importlib.util
 import json
 from pathlib import Path
@@ -17,6 +18,30 @@ SPEC = importlib.util.spec_from_file_location("solid_scope_integration_server", 
 assert SPEC is not None and SPEC.loader is not None
 server_module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(server_module)
+
+
+class DefaultScriptParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_script_source = False
+        self.fragments: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attributes: list[tuple[str, str | None]]
+    ) -> None:
+        if tag == "textarea" and dict(attributes).get("id") == "script-source":
+            self.in_script_source = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "textarea" and self.in_script_source:
+            self.in_script_source = False
+
+    def handle_data(self, data: str) -> None:
+        if self.in_script_source:
+            self.fragments.append(data)
+
+    def source(self) -> str:
+        return "".join(self.fragments)
 
 
 def main() -> int:
@@ -39,16 +64,16 @@ def main() -> int:
         token_match = re.search(rb'<meta name="solid-scope-token" content="([A-Za-z0-9_-]+)">', index)
         assert token_match is not None
         token = token_match.group(1).decode("ascii")
+        parser = DefaultScriptParser()
+        parser.feed(index.decode("utf-8"))
+        default_script = parser.source()
+        assert default_script
         connection.close()
 
         scenario = json.dumps(
             {
                 "initial_brightness": 10,
-                "script": (
-                    "local light = access.Light.officeLight\n"
-                    "light.propose({ value = { brightness = 30 }, priority = 'low' })\n"
-                    "light.propose({ value = { brightness = 70 }, priority = 'high', duration_ms = 5 })\n"
-                ),
+                "script": default_script,
                 "frame_times": [100, 105],
             },
             separators=(",", ":"),
