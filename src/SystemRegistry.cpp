@@ -115,6 +115,7 @@ std::size_t SystemRegistry::run_systems(
     World& world,
     FrameNumber frame,
     IntentTime now,
+    SystemPhase phase,
     std::size_t* completedSystems,
     std::string* failingSystem
 ) {
@@ -127,6 +128,8 @@ std::size_t SystemRegistry::run_systems(
 
     for (const std::type_index& type : registrationOrder) {
         const auto& record = systems.at(type);
+        if (record.phase != phase)
+            continue;
         if (failingSystem)
             *failingSystem = record.stableName + "@" + std::to_string(record.version);
         record.system->run(world, frame, now);

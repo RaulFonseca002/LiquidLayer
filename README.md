@@ -66,6 +66,7 @@ branch coverage over `include/liquid` and `src`.
 
 - [Public API](docs/PUBLIC_API.md), [compatibility](docs/COMPATIBILITY.md), and [support boundaries](docs/SUPPORT.md)
 - [Adapter contract](docs/ADAPTER_CONTRACT.md) and [adapter integration guide](docs/ADAPTER_GUIDE.md)
+- [Lifecycle scripting and frame phases](docs/LIFECYCLE_SCRIPTING.md)
 - [Replay contract](docs/REPLAY.md) and [replay operations guide](docs/REPLAY_GUIDE.md)
 - [Event format v1](docs/EVENT_FORMAT_V1.md) and [file-store guide](docs/FILE_FORMAT_GUIDE.md)
 - [Threading](docs/THREADING.md) and [security boundary](docs/SECURITY_BOUNDARY.md)

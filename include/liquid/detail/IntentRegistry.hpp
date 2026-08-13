@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -79,6 +80,7 @@ private:
     std::vector<IntentLifecycleRecord> lifecycleRecords;
 
     std::map<BehaviorId, std::set<IntentId>> byOwner;
+    std::map<BehaviorId, std::map<IntentName, IntentId>> byOwnerName;
     IntentTargetIndex byTarget;
 
     IntentId next_intent_id();
@@ -110,7 +112,8 @@ public:
         IntentLifetime lifetime,
         Component value,
         IntentPriority priority = IntentPriority::Medium,
-        liquid::Value encodedValue = liquid::Value{}
+        liquid::Value encodedValue = liquid::Value{},
+        IntentName name = {}
     );
 
     void destroy(IntentId id);
@@ -127,6 +130,9 @@ public:
     IntentLifetime lifetime_of(IntentId id) const;
 
     std::vector<IntentId> live_intent_ids() const;
+    std::vector<IntentId> intents_owned_by(BehaviorId owner) const;
+    std::optional<IntentId> intent_named(
+        BehaviorId owner, const IntentName& name) const;
     std::vector<IntentId> intents_for(ComponentTypeId type, ComponentSlotId slot) const;
     const IntentTargetIndex& target_index() const;
     std::map<ComponentName, IntentId> select(ComponentTypeId type, const std::map<ComponentName, ComponentSlotId>& components) const;
@@ -175,7 +181,7 @@ std::shared_ptr<const IntentStorage<Component>> IntentRegistry::storage_for(Comp
 }
 
 template <typename Component>
-IntentId IntentRegistry::create(BehaviorId owner, ComponentType<Component> type, ComponentSlotId slot, IntentLifetime lifetime, Component value, IntentPriority priority, liquid::Value encodedValue) {
+IntentId IntentRegistry::create(BehaviorId owner, ComponentType<Component> type, ComponentSlotId slot, IntentLifetime lifetime, Component value, IntentPriority priority, liquid::Value encodedValue, IntentName name) {
     if (!byOwner.contains(owner))
         throw std::runtime_error("behavior intent pool not found");
 
@@ -186,6 +192,11 @@ IntentId IntentRegistry::create(BehaviorId owner, ComponentType<Component> type,
         throw std::runtime_error("invalid component slot id");
 
     validate_metadata(lifetime, priority);
+    if (name.size() > 128)
+        throw std::invalid_argument("intent name exceeds 128 bytes");
+    if (!name.empty() && byOwnerName.at(owner).contains(name))
+        throw std::invalid_argument("intent name is already live for this behavior");
+    const IntentName stableName = name;
 
     std::shared_ptr<IntentStorage<Component>> storage = storage_for(type);
     IntentId id = next_intent_id();
@@ -196,7 +207,8 @@ IntentId IntentRegistry::create(BehaviorId owner, ComponentType<Component> type,
 
     try {
         ComponentIntent<Component> record{
-            {id, owner, {type.id, slot}, lifetime, priority, sequence, std::move(encodedValue)},
+            {id, owner, {type.id, slot}, lifetime, priority, sequence,
+                std::move(encodedValue), std::move(name)},
             std::move(value)
         };
         storage->add(std::move(record));
@@ -217,6 +229,9 @@ IntentId IntentRegistry::create(BehaviorId owner, ComponentType<Component> type,
             throw std::logic_error("intent id already indexed by owner");
 
         ownerIndexed = true;
+
+        if (!storage->intent(id).name.empty())
+            byOwnerName.at(owner).emplace(storage->intent(id).name, id);
 
         auto [targetPosition, targetInserted] = byTarget[type.id][slot].emplace(id);
         (void)targetPosition;
@@ -248,6 +263,9 @@ IntentId IntentRegistry::create(BehaviorId owner, ComponentType<Component> type,
 
         if (ownerIndexed)
             byOwner.at(owner).erase(id);
+
+        if (!stableName.empty())
+            byOwnerName.at(owner).erase(stableName);
 
         if (typeIndexed)
             intentTypes.erase(id);

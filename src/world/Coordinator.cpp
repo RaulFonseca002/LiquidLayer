@@ -131,6 +131,15 @@ std::vector<IntentId> Coordinator::live_intent_ids() const {
     return state.intents.live_intent_ids();
 }
 
+std::vector<IntentId> Coordinator::intents_owned_by(BehaviorId owner) const {
+    return state.intents.intents_owned_by(owner);
+}
+
+std::optional<IntentId> Coordinator::intent_named(
+    BehaviorId owner, const IntentName& name) const {
+    return state.intents.intent_named(owner, name);
+}
+
 std::vector<IntentId> Coordinator::intents_for(ComponentTypeId type, ComponentSlotId slot) const {
     return state.intents.intents_for(type, slot);
 }
@@ -187,10 +196,12 @@ std::size_t Coordinator::run_systems(
     World& world,
     FrameNumber frame,
     IntentTime now,
+    SystemPhase phase,
     std::size_t* completedSystems,
     std::string* failingSystem
 ) {
-    return state.systems.run_systems(world, frame, now, completedSystems, failingSystem);
+    return state.systems.run_systems(
+        world, frame, now, phase, completedSystems, failingSystem);
 }
 
 Signature Coordinator::behavior_signature(BehaviorId behavior) const {

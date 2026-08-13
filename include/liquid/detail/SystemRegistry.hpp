@@ -24,6 +24,7 @@ private:
         std::shared_ptr<System> system;
         std::string stableName;
         std::uint32_t version = 0;
+        SystemPhase phase = SystemPhase::Decision;
     };
 
     std::unordered_map<std::type_index, SystemRecord> systems;
@@ -52,7 +53,13 @@ public:
     SystemRegistry& operator=(SystemRegistry&&) = delete;
 
     template <typename SystemType, typename... Args>
-    void register_system(Signature signature, Args&&... args);
+    void register_system(Signature signature, SystemPhase phase, Args&&... args);
+
+    template <typename SystemType, typename... Args>
+    void register_system(Signature signature, Args&&... args) {
+        register_system<SystemType>(
+            signature, SystemPhase::Decision, std::forward<Args>(args)...);
+    }
 
     template <typename SystemType>
     void destroy_system();
@@ -93,13 +100,18 @@ public:
         World& world,
         FrameNumber frame,
         IntentTime now,
+        SystemPhase phase,
         std::size_t* completedSystems = nullptr,
         std::string* failingSystem = nullptr
     );
 };
 
 template <typename SystemType, typename... Args>
-void SystemRegistry::register_system(Signature signature, Args&&... args) {
+void SystemRegistry::register_system(
+    Signature signature,
+    SystemPhase phase,
+    Args&&... args
+) {
     static_assert(std::is_base_of_v<System, SystemType>, "registered systems must inherit from System");
     ensure_structural_mutation_allowed();
 
@@ -121,7 +133,7 @@ void SystemRegistry::register_system(Signature signature, Args&&... args) {
 
     registrationOrder.reserve(registrationOrder.size() + 1);
     auto [position, inserted] = systems.emplace(type, SystemRecord{
-        signature, std::move(system), stableName, version});
+        signature, std::move(system), stableName, version, phase});
     (void)position;
 
     if (!inserted)

@@ -10,6 +10,12 @@ namespace liquid {
 class World;
 namespace detail { class SystemRegistry; }
 
+enum class SystemPhase {
+    Input,
+    Behavior,
+    Decision
+};
+
 class System {
 private:
     std::set<BehaviorId> behaviours;

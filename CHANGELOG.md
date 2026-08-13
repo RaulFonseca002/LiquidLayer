@@ -13,6 +13,9 @@ All notable framework changes will be recorded here. Dates are release dates, no
   and Lua execution evidence; Lua source is retained by default with an
   explicit hash-only option.
 - Adapter command lifecycle with deferred or immediate feedback, supersession, deterministic retries, and indeterminate recovery.
+- Ordered Input/Behavior/Decision systems, revisioned external observations,
+  bidirectional effect projection, and transactional Lua lifecycle callbacks
+  with watches and owner-scoped named-intent cancellation.
 - Bounded feedback, dispatcher caches, simulator queues, command history, and
   world evidence journals, with deterministic 5,000-target/1,000-frame stress.
 - Source-tree and installed-package consumers across the supported compiler platforms.

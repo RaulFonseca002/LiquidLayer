@@ -97,6 +97,14 @@ enum class FeedbackTiming {
     Immediate
 };
 
+struct StateRevision {
+    std::uint64_t value = 0;
+
+    bool valid() const { return value != 0; }
+    bool operator==(const StateRevision&) const = default;
+    auto operator<=>(const StateRevision&) const = default;
+};
+
 struct ResolvedEffect {
     AdapterRoute adapterRoute;
     EffectTarget target;
@@ -123,8 +131,43 @@ struct EffectReport {
     std::optional<Value> observedValue;
     std::string diagnostic;
     std::uint64_t reportedAtMs = 0;
+    StateRevision stateRevision;
+
+    EffectReport() = default;
+    EffectReport(
+        SessionId session,
+        CommandId command,
+        AdapterRoute route,
+        EffectTarget effectTarget,
+        CommandStatus outcome,
+        std::optional<Value> observed,
+        std::string detail,
+        std::uint64_t reportedAt,
+        StateRevision revision = {})
+        : sessionId(session),
+          commandId(command),
+          adapterRoute(std::move(route)),
+          target(std::move(effectTarget)),
+          status(outcome),
+          observedValue(std::move(observed)),
+          diagnostic(std::move(detail)),
+          reportedAtMs(reportedAt),
+          stateRevision(revision.valid()
+              ? revision : StateRevision{command.value}) {
+    }
 
     bool operator==(const EffectReport&) const = default;
+};
+
+struct ExternalObservation {
+    SessionId sessionId;
+    AdapterRoute adapterRoute;
+    EffectTarget target;
+    Value observedValue;
+    StateRevision stateRevision;
+    std::uint64_t observedAtMs = 0;
+
+    bool operator==(const ExternalObservation&) const = default;
 };
 
 struct RetryPolicy {
@@ -177,6 +220,7 @@ struct DispatchResult {
 
 void validate_effect_command(const EffectCommand& command);
 void validate_effect_report(const EffectReport& report);
+void validate_external_observation(const ExternalObservation& observation);
 void validate_dispatch_result_for_command(
     const DispatchResult& result,
     const EffectCommand& command

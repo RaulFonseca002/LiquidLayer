@@ -33,6 +33,7 @@ public:
     FeedbackSender() = default;
 
     FeedbackSendResult try_send(EffectReport report) const;
+    FeedbackSendResult try_send(ExternalObservation observation) const;
     bool is_closed() const;
 };
 
@@ -52,7 +53,9 @@ public:
     ~FeedbackReceiver();
 
     std::optional<EffectReport> try_receive();
+    std::optional<ExternalObservation> try_receive_observation();
     std::vector<EffectReport> drain();
+    std::vector<ExternalObservation> drain_observations();
     std::size_t pending() const;
     void shutdown();
     bool is_shutdown() const;

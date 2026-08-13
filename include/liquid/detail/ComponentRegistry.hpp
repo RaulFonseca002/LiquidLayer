@@ -20,11 +20,21 @@ private:
     class IComponentCodec {
     public:
         virtual ~IComponentCodec() = default;
+        virtual liquid::Value encode_slot(
+            const IComponentStorage& storage, Slot slot) const = 0;
+        virtual liquid::Value replace_slot(
+            IComponentStorage& storage, Slot slot,
+            const liquid::Value& value) const = 0;
     };
 
     class IEffectCodec {
     public:
         virtual ~IEffectCodec() = default;
+        virtual const AdapterRoute& route() const = 0;
+        virtual std::optional<liquid::ResolvedEffect> encode(
+            const ComponentName& name, const liquid::Value& value) const = 0;
+        virtual liquid::Value decode_observed(
+            const liquid::Value& value) const = 0;
     };
 
     template <typename Component>
@@ -35,15 +45,73 @@ private:
         explicit ComponentCodecModel(liquid::ComponentCodec<Component> configuredCodec)
             : codec(std::move(configuredCodec)) {
         }
+
+        liquid::Value encode_slot(
+            const IComponentStorage& storage, Slot slot) const override {
+            const auto& typed = dynamic_cast<const ComponentStorage<Component>&>(storage);
+            liquid::Value encoded = codec.encode(typed[slot]);
+            encoded.validate();
+            return encoded;
+        }
+
+        liquid::Value replace_slot(
+            IComponentStorage& storage, Slot slot,
+            const liquid::Value& value) const override {
+            value.validate();
+            Component decoded = codec.decode(value);
+            liquid::Value canonical = codec.encode(decoded);
+            canonical.validate();
+            if (canonical != value)
+                throw std::invalid_argument("component codec is not canonical");
+            auto& typed = dynamic_cast<ComponentStorage<Component>&>(storage);
+            typed.replace(slot, std::move(decoded));
+            return canonical;
+        }
     };
 
     template <typename Component>
     class EffectCodecModel : public IEffectCodec {
     public:
         liquid::EffectCodec<Component> codec;
+        liquid::ComponentCodec<Component> componentCodec;
 
-        explicit EffectCodecModel(liquid::EffectCodec<Component> configuredCodec)
-            : codec(std::move(configuredCodec)) {
+        EffectCodecModel(
+            liquid::EffectCodec<Component> configuredCodec,
+            liquid::ComponentCodec<Component> configuredComponentCodec)
+            : codec(std::move(configuredCodec)),
+              componentCodec(std::move(configuredComponentCodec)) {
+        }
+
+        const AdapterRoute& route() const override {
+            return codec.adapterRoute;
+        }
+
+        std::optional<liquid::ResolvedEffect> encode(
+            const ComponentName& name,
+            const liquid::Value& value) const override {
+            value.validate();
+            Component decoded = componentCodec.decode(value);
+            liquid::Value canonical = componentCodec.encode(decoded);
+            canonical.validate();
+            if (canonical != value)
+                throw std::invalid_argument("component codec is not canonical");
+            auto effect = codec.encode(name, decoded);
+            if (!effect)
+                return std::nullopt;
+            if (effect->adapterRoute != codec.adapterRoute)
+                throw std::invalid_argument(
+                    "effect codec returned an unstable adapter route");
+            effect->desiredValue.validate();
+            return effect;
+        }
+
+        liquid::Value decode_observed(
+            const liquid::Value& value) const override {
+            value.validate();
+            Component decoded = codec.decodeObserved(value);
+            liquid::Value canonical = componentCodec.encode(decoded);
+            canonical.validate();
+            return canonical;
         }
     };
 
@@ -151,6 +219,21 @@ public:
         ComponentType<Component> type,
         const ComponentName& name,
         const Component& component) const;
+
+    const AdapterRoute& effect_route(ComponentTypeId type) const;
+    std::optional<liquid::ResolvedEffect> encode_effect(
+        ComponentTypeId type,
+        const ComponentName& name,
+        const liquid::Value& value) const;
+    liquid::Value decode_observed(
+        ComponentTypeId type, const liquid::Value& value) const;
+    liquid::Value encode_component(
+        ComponentTypeId type, ComponentSlotId slot) const;
+    liquid::Value replace_component(
+        ComponentTypeId type, ComponentSlotId slot,
+        const liquid::Value& value);
+    const ComponentName& component_name(
+        ComponentTypeId type, ComponentSlotId slot) const;
 
     ComponentTypeId component_type(const TypeName& typeName) const;
     bool component_type_exists(ComponentTypeId type) const;
@@ -410,13 +493,15 @@ void ComponentRegistry::register_effect_codec(
     liquid::EffectCodec<Component> codec
 ) {
     component_type(type);
-    if (!codec.encode)
-        throw std::invalid_argument("effect codec must provide encode");
+    if (!codec.encode || !codec.decodeObserved)
+        throw std::invalid_argument(
+            "effect codec must provide encode and decodeObserved");
     if (effectCodecs.contains(type.id))
         throw std::invalid_argument("effect codec already registered");
     effectCodecs.emplace(
         type.id,
-        std::make_shared<EffectCodecModel<Component>>(std::move(codec)));
+        std::make_shared<EffectCodecModel<Component>>(
+            std::move(codec), component_codec(type)));
 }
 
 template <typename Component>

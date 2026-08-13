@@ -6,8 +6,11 @@
 
 #include <map>
 #include <set>
+#include <string>
 
 namespace liquid {
+
+using IntentName = std::string;
 
 struct Intent {
     IntentId id = 0;
@@ -17,6 +20,7 @@ struct Intent {
     IntentPriority priority = IntentPriority::Medium;
     IntentSequence sequence = 0;
     Value encodedValue;
+    IntentName name;
 };
 
 template <typename Component>

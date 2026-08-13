@@ -27,6 +27,7 @@ struct SerializedWorldState {
     std::vector<EventRecord> resolutions;
     std::vector<EventRecord> commandAttempts;
     std::vector<EventRecord> reports;
+    std::vector<EventRecord> observations;
     std::vector<EventRecord> failures;
     std::vector<EventRecord> recoveries;
     std::vector<EventRecord> retentions;

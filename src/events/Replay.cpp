@@ -112,7 +112,8 @@ std::vector<EventRecord> records_field_or_empty(const Value::Object& checkpoint,
         const Value::Object& object = require_object(encoded, "checkpoint event");
         const std::uint64_t type = require_unsigned(object, "type", "checkpoint event");
         if (type < static_cast<std::uint64_t>(EventType::SessionStarted) ||
-            type > static_cast<std::uint64_t>(EventType::ScriptExecuted)) {
+            type > static_cast<std::uint64_t>(
+                EventType::ExternalObservationReceived)) {
             throw EventStoreError("checkpoint event has an unknown type");
         }
         const std::uint64_t version = require_unsigned(
@@ -234,6 +235,7 @@ void restore_checkpoint(SerializedWorldState& state, const EventRecord& record) 
     state.resolutions = records_field_or_empty(checkpoint, "resolutions");
     state.commandAttempts = records_field_or_empty(checkpoint, "command_attempts");
     state.reports = records_field_or_empty(checkpoint, "reports");
+    state.observations = records_field_or_empty(checkpoint, "observations");
     state.failures = records_field_or_empty(checkpoint, "failures");
     state.recoveries = records_field_or_empty(checkpoint, "recoveries");
     state.retentions = records_field_or_empty(checkpoint, "retentions");
@@ -321,6 +323,9 @@ SerializedWorldState ReplayProjector::project(
         case EventType::ReportReceived:
             state.reports.push_back(record);
             break;
+        case EventType::ExternalObservationReceived:
+            state.observations.push_back(record);
+            break;
         case EventType::Recovery:
             state.recoveries.push_back(record);
             break;
@@ -383,6 +388,7 @@ Value ReplayProjector::checkpoint_payload(const SerializedWorldState& state) con
     checkpoint.emplace("resolutions", records_value(state.resolutions));
     checkpoint.emplace("command_attempts", records_value(state.commandAttempts));
     checkpoint.emplace("reports", records_value(state.reports));
+    checkpoint.emplace("observations", records_value(state.observations));
     checkpoint.emplace("failures", records_value(state.failures));
     checkpoint.emplace("recoveries", records_value(state.recoveries));
     checkpoint.emplace("retentions", records_value(state.retentions));

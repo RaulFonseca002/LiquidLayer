@@ -35,7 +35,8 @@ enum class EventType : std::uint16_t {
     Recovery = 17,
     Retention = 18,
     ConfigurationChanged = 19,
-    ScriptExecuted = 20
+    ScriptExecuted = 20,
+    ExternalObservationReceived = 21
 };
 
 struct EventData {

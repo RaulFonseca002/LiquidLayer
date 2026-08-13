@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -81,9 +82,29 @@ private:
         const std::map<ComponentName, ComponentSlotId>& components,
         IntentTime now
     );
+    std::map<ComponentTypeId,
+        std::map<ComponentName, ComponentSlotId>> resolution_targets() const;
+    const AdapterRoute& effect_route(ComponentTypeId type) const;
+    std::optional<ResolvedEffect> encode_effect(
+        ComponentTarget target,
+        const ComponentName& name,
+        const Value& desired) const;
+    Value component_value(ComponentTarget target) const;
+    Value decode_observed(
+        ComponentTarget target, const Value& observed) const;
+    Value replace_component_value(
+        ComponentTarget target,
+        const ComponentName& name,
+        const Value& replacement);
+
+    template <typename Component>
+    ComponentTarget component_target(
+        ComponentType<Component> type,
+        const ComponentName& name) const;
     std::size_t run_systems(
         FrameNumber frame,
         IntentTime now,
+        SystemPhase phase,
         std::size_t* completedSystems = nullptr,
         std::string* failingSystem = nullptr
     );
@@ -109,12 +130,18 @@ public:
     IntentLifetime intent_lifetime(IntentId id);
     const Intent& intent(IntentId id) const;
     std::vector<IntentId> live_intent_ids() const;
+    std::vector<IntentId> intents_owned_by(BehaviorId owner) const;
+    std::optional<IntentId> intent_named(
+        BehaviorId owner, const IntentName& name) const;
     std::vector<IntentId> intents_for(ComponentTypeId type, ComponentSlotId slot) const;
     const IntentTargetIndex& intent_target_index() const;
     std::size_t intent_count(BehaviorId owner);
 
     template <typename SystemType, typename... Args>
     void register_system(Signature signature, Args&&... args);
+
+    template <typename SystemType, typename... Args>
+    void register_system(Signature signature, SystemPhase phase, Args&&... args);
 
     template <typename SystemType>
     void destroy_system();
@@ -234,7 +261,8 @@ public:
         ComponentSlotId slot,
         IntentLifetime lifetime,
         Component value,
-        IntentPriority priority = IntentPriority::Medium
+        IntentPriority priority = IntentPriority::Medium,
+        IntentName name = {}
     );
 
     template <typename Component>
@@ -263,6 +291,28 @@ void World::register_system(Signature signature, Args&&... args) {
     value.emplace("name", Value{std::string{SystemType::stableName}});
     value.emplace("version", Value{static_cast<std::uint64_t>(SystemType::version)});
     value.emplace("signature", Value{signature.to_string()});
+    value.emplace("phase", Value{"decision"});
+    record_topology(
+        "system:" + std::string{SystemType::stableName},
+        Value{std::move(value)});
+}
+
+template <typename SystemType, typename... Args>
+void World::register_system(
+    Signature signature,
+    SystemPhase phase,
+    Args&&... args
+) {
+    ensure_structural_mutation_allowed();
+    coordinator.register_system<SystemType>(
+        signature, phase, std::forward<Args>(args)...);
+    Value::Object value;
+    value.emplace("name", Value{std::string{SystemType::stableName}});
+    value.emplace("version", Value{static_cast<std::uint64_t>(SystemType::version)});
+    value.emplace("signature", Value{signature.to_string()});
+    value.emplace("phase", Value{
+        phase == SystemPhase::Input ? "input" :
+        phase == SystemPhase::Behavior ? "behavior" : "decision"});
     record_topology(
         "system:" + std::string{SystemType::stableName},
         Value{std::move(value)});
@@ -274,6 +324,16 @@ void World::destroy_system() {
     coordinator.destroy_system<SystemType>();
     record_topology(
         "system:" + std::string{SystemType::stableName}, Value{}, true);
+}
+
+template <typename Component>
+ComponentTarget World::component_target(
+    ComponentType<Component> type,
+    const ComponentName& name
+) const {
+    ensure_owner_thread();
+    return ComponentTarget{
+        type.id, coordinator.component_slot(type, name)};
 }
 
 template <typename SystemType>
@@ -572,9 +632,11 @@ IntentId World::create_intent(
     ComponentSlotId slot,
     IntentLifetime lifetime,
     Component value,
-    IntentPriority priority
+    IntentPriority priority,
+    IntentName name
 ) {
-    return coordinator.create_intent(owner, type, slot, lifetime, std::move(value), priority);
+    return coordinator.create_intent(
+        owner, type, slot, lifetime, std::move(value), priority, std::move(name));
 }
 
 template <typename Component>

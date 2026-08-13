@@ -394,7 +394,8 @@ ScanResult scan_batches(std::span<const std::uint8_t> bytes,
 
                 if (static_cast<std::uint16_t>(type) < 1 ||
                     static_cast<std::uint16_t>(type) >
-                        static_cast<std::uint16_t>(EventType::ScriptExecuted)) {
+                        static_cast<std::uint16_t>(
+                            EventType::ExternalObservationReceived)) {
                     throw EventStoreError("unknown event record type");
                 }
 

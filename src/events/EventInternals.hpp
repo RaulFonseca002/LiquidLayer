@@ -51,7 +51,8 @@ inline void validate_metadata(const EventStoreMetadata& metadata) {
 inline void validate_event(const EventData& event) {
     const auto type = static_cast<std::uint16_t>(event.type);
     if (type < static_cast<std::uint16_t>(EventType::SessionStarted) ||
-        type > static_cast<std::uint16_t>(EventType::ScriptExecuted)) {
+        type > static_cast<std::uint16_t>(
+            EventType::ExternalObservationReceived)) {
         throw EventStoreError("unknown event type");
     }
 

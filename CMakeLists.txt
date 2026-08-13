@@ -125,6 +125,7 @@ add_library(Liquid::Core ALIAS liquid)
 if(LIQUID_BUILD_LUA)
 add_library(liquid_lua_component STATIC
     src/scripting/LuaBehaviorRunner.cpp
+    src/scripting/LuaLifecycleSystem.cpp
 )
 target_compile_features(liquid_lua_component PUBLIC cxx_std_20)
 target_include_directories(liquid_lua_component PRIVATE ${lua_SOURCE_DIR}/src)
@@ -417,10 +418,13 @@ if(BUILD_TESTING)
         test_system_registry
     )
     if(LIQUID_BUILD_LUA)
-        list(APPEND LIQUID_TESTS test_lua_behavior test_stress)
+        list(APPEND LIQUID_TESTS test_lua_behavior test_lua_lifecycle test_stress)
     endif()
     if(LIQUID_BUILD_SIMULATION)
-        list(APPEND LIQUID_TESTS test_simulation_cli test_simulation_adapter)
+        list(APPEND LIQUID_TESTS
+            test_simulation_cli
+            test_simulation_adapter
+            test_full_loop_simulation)
     endif()
 
     foreach(test_name IN LISTS LIQUID_TESTS)
@@ -436,9 +440,13 @@ if(BUILD_TESTING)
                 LIQUID_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         endif()
 
-        if(test_name STREQUAL "test_simulation_cli" OR test_name STREQUAL "test_simulation_adapter")
+        if(test_name STREQUAL "test_simulation_cli" OR
+           test_name STREQUAL "test_simulation_adapter" OR
+           test_name STREQUAL "test_full_loop_simulation")
             set(liquid_test_component liquid_simulation)
-        elseif(test_name STREQUAL "test_lua_behavior" OR test_name STREQUAL "test_stress")
+        elseif(test_name STREQUAL "test_lua_behavior" OR
+               test_name STREQUAL "test_lua_lifecycle" OR
+               test_name STREQUAL "test_stress")
             set(liquid_test_component liquid_lua_component)
         else()
             set(liquid_test_component liquid)

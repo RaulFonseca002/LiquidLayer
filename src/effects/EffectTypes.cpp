@@ -134,11 +134,23 @@ void validate_effect_report(const EffectReport& report) {
         throw std::invalid_argument("pending is not a report outcome");
     if (report.status == CommandStatus::Applied && !report.observedValue)
         throw std::invalid_argument("an applied report requires an observed value");
+    if (report.status == CommandStatus::Applied && !report.stateRevision.valid())
+        throw std::invalid_argument("an applied report requires a state revision");
     if (report.status != CommandStatus::Applied && report.observedValue)
         throw std::invalid_argument("only an applied report may carry an observed value");
     if (report.observedValue)
         report.observedValue->validate();
     validate_diagnostic(report.diagnostic);
+}
+
+void validate_external_observation(const ExternalObservation& observation) {
+    if (!observation.sessionId.valid())
+        throw std::invalid_argument(
+            "external observation requires a valid session ID");
+    if (!observation.stateRevision.valid())
+        throw std::invalid_argument(
+            "external observation requires a state revision");
+    observation.observedValue.validate();
 }
 
 void validate_dispatch_result_for_command(

@@ -92,6 +92,11 @@ void IntentRegistry::erase_from_indexes(const Intent& intent) {
 
     if (owner != byOwner.end())
         owner->second.erase(intent.id);
+    if (!intent.name.empty()) {
+        auto names = byOwnerName.find(intent.owner);
+        if (names != byOwnerName.end())
+            names->second.erase(intent.name);
+    }
 
     auto type = byTarget.find(intent.target.type);
 
@@ -178,6 +183,28 @@ std::vector<IntentId> IntentRegistry::live_intent_ids() const {
     }
 
     return live;
+}
+
+std::vector<IntentId> IntentRegistry::intents_owned_by(
+    BehaviorId owner
+) const {
+    const auto found = byOwner.find(owner);
+    if (found == byOwner.end())
+        return {};
+    return {found->second.begin(), found->second.end()};
+}
+
+std::optional<IntentId> IntentRegistry::intent_named(
+    BehaviorId owner,
+    const IntentName& name
+) const {
+    const auto owners = byOwnerName.find(owner);
+    if (owners == byOwnerName.end())
+        return std::nullopt;
+    const auto found = owners->second.find(name);
+    if (found == owners->second.end())
+        return std::nullopt;
+    return found->second;
 }
 
 std::vector<IntentId> IntentRegistry::intents_for(ComponentTypeId type, ComponentSlotId slot) const {
@@ -275,6 +302,7 @@ std::size_t IntentRegistry::size() const {
 void IntentRegistry::create_behavior_pool(BehaviorId id) {
     destroy_owned_by(id);
     byOwner[id];
+    byOwnerName[id];
 }
 
 }

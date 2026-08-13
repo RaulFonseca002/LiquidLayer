@@ -314,4 +314,50 @@ TEST_CASE("test_intent_registry")
         REQUIRE(intents.size(owner) == MaxIntents);
     }
 
+    {
+        IntentRegistry intents;
+        BehaviorId owner = 12;
+        ComponentType<Light> lightType{0};
+        ComponentSlotId slot = 1;
+        intents.create_behavior_pool(owner);
+
+        IntentId named = intents.create(
+            owner,
+            lightType,
+            slot,
+            IntentLifetime::persistent(),
+            Light{70},
+            IntentPriority::High,
+            Value{std::int64_t{70}},
+            "evening-light");
+
+        REQUIRE(intents.intent(named).name == "evening-light");
+        REQUIRE(intents.intent_named(owner, "evening-light") == named);
+        REQUIRE(intents.intents_owned_by(owner) == std::vector<IntentId>{named});
+        expect_throw([&] {
+            (void)intents.create(
+                owner,
+                lightType,
+                slot,
+                IntentLifetime::persistent(),
+                Light{30},
+                IntentPriority::Medium,
+                Value{std::int64_t{30}},
+                "evening-light");
+        });
+
+        intents.destroy(named);
+        REQUIRE(!intents.intent_named(owner, "evening-light").has_value());
+        IntentId replacement = intents.create(
+            owner,
+            lightType,
+            slot,
+            IntentLifetime::persistent(),
+            Light{30},
+            IntentPriority::Medium,
+            Value{std::int64_t{30}},
+            "evening-light");
+        REQUIRE(intents.intent_named(owner, "evening-light") == replacement);
+    }
+
 }

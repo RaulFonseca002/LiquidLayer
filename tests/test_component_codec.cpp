@@ -104,6 +104,12 @@ TEST_CASE("test_component_codec") {
                 liquid::EffectTarget{name},
                 liquid::Value{static_cast<std::int64_t>(component.values->at(0))}
             };
+        },
+        [](const liquid::Value& observed) {
+            return AliasedComponent{
+                std::make_shared<std::vector<std::int64_t>>(
+                    std::initializer_list<std::int64_t>{
+                        observed.as_signed_integer()})};
         }
     });
     const auto effect = world.resolve_effect(type, behavior, "shared");
@@ -133,6 +139,12 @@ TEST_CASE("effect codecs cannot change their registered adapter route") {
                 liquid::EffectTarget{name},
                 liquid::Value{component.values->at(0)}
             };
+        },
+        [](const liquid::Value& observed) {
+            return AliasedComponent{
+                std::make_shared<std::vector<std::int64_t>>(
+                    std::initializer_list<std::int64_t>{
+                        observed.as_signed_integer()})};
         }
     });
 

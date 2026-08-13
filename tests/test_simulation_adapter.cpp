@@ -370,6 +370,54 @@ TEST_CASE("simulator remains bounded across 1000 frames and 5000 effect targets"
         adapter.state(liquid::EffectTarget{"target-4999"}));
 }
 
+TEST_CASE("simulator publishes revisioned unsolicited device observations") {
+    auto options = simulation_options(26, liquid::FeedbackTiming::Deferred);
+    Runtime runtime{options};
+    liquid::simulation::InMemoryAdapter adapter{
+        liquid::AdapterRoute{"sim.observed"}};
+    runtime.register_adapter(adapter);
+
+    const liquid::EffectTarget target{"office"};
+    REQUIRE(adapter.observe(
+        liquid::SessionId{26},
+        target,
+        liquid::Value{std::uint64_t{10}},
+        0,
+        5,
+        runtime.feedback_sender()) == liquid::StateRevision{1});
+    REQUIRE(adapter.deliver_through(4) == 0);
+    REQUIRE(adapter.deliver_through(5) == 1);
+
+    const auto observed = runtime.run_frame(liquid::FrameInput{5, {}, {}});
+    REQUIRE(observed.observations.size() == 1);
+    REQUIRE(runtime.observed_state(
+        liquid::AdapterRoute{"sim.observed"}, target) ==
+        std::optional<liquid::Value>{liquid::Value{std::uint64_t{10}}});
+
+    const auto issued = runtime.run_frame(liquid::FrameInput{
+        6, {}, {simulated_effect("sim.observed", "office", 30)}});
+    REQUIRE(issued.commands.size() == 1);
+    REQUIRE(adapter.revision(target) ==
+        std::optional<liquid::StateRevision>{liquid::StateRevision{2}});
+    REQUIRE(runtime.run_frame(liquid::FrameInput{7, {}, {}}).reports.size() == 1);
+    REQUIRE(runtime.observed_state(
+        liquid::AdapterRoute{"sim.observed"}, target) ==
+        std::optional<liquid::Value>{liquid::Value{std::uint64_t{30}}});
+
+    REQUIRE(adapter.observe(
+        liquid::SessionId{26},
+        target,
+        liquid::Value{std::uint64_t{20}},
+        8,
+        8,
+        runtime.feedback_sender()) == liquid::StateRevision{3});
+    REQUIRE(adapter.deliver_through(8) == 1);
+    REQUIRE(runtime.run_frame(liquid::FrameInput{8, {}, {}}).observations.size() == 1);
+    REQUIRE(runtime.observed_state(
+        liquid::AdapterRoute{"sim.observed"}, target) ==
+        std::optional<liquid::Value>{liquid::Value{std::uint64_t{20}}});
+}
+
 TEST_CASE("durable simulator records project and verify without the runtime") {
     TemporarySimulationFile file;
     liquid::EventStoreMetadata metadata;

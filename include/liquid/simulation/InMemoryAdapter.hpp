@@ -34,6 +34,11 @@ class InMemoryAdapter final : public EffectAdapter {
         FeedbackSender sender;
     };
 
+    struct PendingObservation {
+        ExternalObservation observation;
+        FeedbackSender sender;
+    };
+
     struct CachedOutcome {
         EffectCommand command;
         DispatchResult result;
@@ -44,8 +49,10 @@ class InMemoryAdapter final : public EffectAdapter {
     AdapterBehavior adapterBehavior;
     AdapterLimits adapterLimits;
     std::multimap<std::uint64_t, PendingReport> pendingReports;
+    std::multimap<std::uint64_t, PendingObservation> pendingObservations;
     std::map<CommandKey, CachedOutcome> cachedOutcomes;
     std::map<std::string, Value> deviceState;
+    std::map<std::string, StateRevision> deviceRevisions;
 
     void validate_behavior(const AdapterBehavior& behavior) const;
     DispatchResult cache_outcome(
@@ -69,8 +76,17 @@ public:
     ) override;
 
     std::size_t deliver_through(std::uint64_t now);
+    StateRevision observe(
+        SessionId session,
+        const EffectTarget& target,
+        Value value,
+        std::uint64_t observedAtMs,
+        std::uint64_t deliverAtMs,
+        FeedbackSender feedback
+    );
     void set_behavior(AdapterBehavior behavior);
     std::optional<Value> state(const EffectTarget& target) const;
+    std::optional<StateRevision> revision(const EffectTarget& target) const;
     std::size_t pending() const;
 };
 

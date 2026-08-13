@@ -41,6 +41,13 @@ struct FrameResult {
     FrameLog frame;
     std::vector<EffectCommand> commands;
     std::vector<EffectReport> reports;
+    std::vector<ExternalObservation> observations;
+};
+
+enum class ComponentControl {
+    SelectionOnly,
+    InternalState,
+    ExternalEffect
 };
 
 struct RuntimeOptions {
@@ -59,6 +66,13 @@ class RuntimeEffectsState;
 
 class Runtime {
 private:
+    struct ExternalComponentBinding {
+        ComponentTarget component;
+        ComponentName name;
+        AdapterRoute route;
+        EffectTarget target;
+    };
+
     World ownedWorld;
     FrameNumber currentFrame = 0;
     FrameLog latestFrameLog;
@@ -66,6 +80,10 @@ private:
     bool faultedState = false;
     std::thread::id ownerThread = std::this_thread::get_id();
     std::unique_ptr<detail::RuntimeEffectsState> effectsState;
+    std::map<ComponentTarget, ComponentControl> componentControls;
+    std::map<ComponentTarget, ExternalComponentBinding> effectBindings;
+    std::map<std::pair<std::string, std::string>, ComponentTarget>
+        componentsByEffectTarget;
 
     void ensure_owner_thread() const;
     void validate_frame_start(
@@ -79,6 +97,11 @@ private:
             std::map<ComponentName, ComponentSlotId>>& resolutions
     );
     void record_world_evidence();
+    std::vector<ResolvedEffect> apply_selections(const FrameLog& frame);
+    void project_authoritative_reports(
+        const std::vector<EffectReport>& reports);
+    void project_authoritative_observations(
+        const std::vector<ExternalObservation>& observations);
 
 public:
     Runtime();
@@ -100,6 +123,17 @@ public:
     );
     FrameResult run_frame(FrameInput input);
     void register_adapter(std::shared_ptr<EffectAdapter> adapter);
+    template <typename Component>
+    void configure_component(
+        ComponentType<Component> type,
+        const ComponentName& name,
+        ComponentControl control);
+
+    template <typename Component>
+    void bind_effect_component(
+        ComponentType<Component> type,
+        const ComponentName& name,
+        EffectTarget target);
 #ifdef LIQUID_ENABLE_LEGACY_INTERNAL_COMPONENT_REGISTRATION
     void register_adapter(EffectAdapter& adapter) {
         register_adapter(std::shared_ptr<EffectAdapter>(
@@ -122,5 +156,56 @@ public:
     RecordId checkpoint();
     const FrameLog& last_frame_log() const;
 };
+
+template <typename Component>
+void Runtime::configure_component(
+    ComponentType<Component> type,
+    const ComponentName& name,
+    ComponentControl control
+) {
+    ensure_owner_thread();
+    if (!effectsState)
+        throw std::logic_error(
+            "component controls require an effects-configured runtime");
+    if (frameInProgress)
+        throw std::logic_error(
+            "component control cannot change during a frame");
+    if (control == ComponentControl::ExternalEffect)
+        throw std::invalid_argument(
+            "external components require bind_effect_component");
+    const ComponentTarget target = ownedWorld.component_target(type, name);
+    componentControls.insert_or_assign(target, control);
+    effectBindings.erase(target);
+}
+
+template <typename Component>
+void Runtime::bind_effect_component(
+    ComponentType<Component> type,
+    const ComponentName& name,
+    EffectTarget target
+) {
+    ensure_owner_thread();
+    if (!effectsState)
+        throw std::logic_error(
+            "effect bindings require an effects-configured runtime");
+    if (frameInProgress)
+        throw std::logic_error(
+            "effect binding cannot change during a frame");
+    const ComponentTarget component = ownedWorld.component_target(type, name);
+    const AdapterRoute route = ownedWorld.effect_route(type.id);
+    const std::pair<std::string, std::string> key{
+        route.value(), target.value()};
+    const auto existing = componentsByEffectTarget.find(key);
+    if (existing != componentsByEffectTarget.end() &&
+        existing->second != component) {
+        throw std::invalid_argument(
+            "effect route and target are already bound");
+    }
+    componentControls.insert_or_assign(
+        component, ComponentControl::ExternalEffect);
+    effectBindings.insert_or_assign(component, ExternalComponentBinding{
+        component, name, route, std::move(target)});
+    componentsByEffectTarget.insert_or_assign(key, component);
+}
 
 }

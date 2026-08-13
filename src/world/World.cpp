@@ -118,6 +118,17 @@ std::vector<IntentId> World::live_intent_ids() const {
     return coordinator.live_intent_ids();
 }
 
+std::vector<IntentId> World::intents_owned_by(BehaviorId owner) const {
+    ensure_owner_thread();
+    return coordinator.intents_owned_by(owner);
+}
+
+std::optional<IntentId> World::intent_named(
+    BehaviorId owner, const IntentName& name) const {
+    ensure_owner_thread();
+    return coordinator.intent_named(owner, name);
+}
+
 std::vector<IntentId> World::intents_for(ComponentTypeId type, ComponentSlotId slot) const {
     ensure_owner_thread();
     return coordinator.intents_for(type, slot);
@@ -163,6 +174,63 @@ std::map<ComponentName, IntentId> World::resolve_intents(
     return coordinator.resolve_intents(type, components, now);
 }
 
+std::map<ComponentTypeId,
+    std::map<ComponentName, ComponentSlotId>> World::resolution_targets() const {
+    ensure_owner_thread();
+    std::map<ComponentTypeId, std::map<ComponentName, ComponentSlotId>> targets;
+    for (const auto& [type, bySlot] : coordinator.intent_target_index()) {
+        for (const auto& [slot, intents] : bySlot) {
+            if (!intents.empty())
+                targets[type].emplace(
+                    coordinator.component_name(type, slot), slot);
+        }
+    }
+    return targets;
+}
+
+const AdapterRoute& World::effect_route(ComponentTypeId type) const {
+    ensure_owner_thread();
+    return coordinator.effect_route(type);
+}
+
+std::optional<ResolvedEffect> World::encode_effect(
+    ComponentTarget target,
+    const ComponentName& name,
+    const Value& desired
+) const {
+    ensure_owner_thread();
+    return coordinator.encode_effect(target.type, name, desired);
+}
+
+Value World::component_value(ComponentTarget target) const {
+    ensure_owner_thread();
+    return coordinator.encode_component(target.type, target.slot);
+}
+
+Value World::decode_observed(
+    ComponentTarget target,
+    const Value& observed
+) const {
+    ensure_owner_thread();
+    return coordinator.decode_observed(target.type, observed);
+}
+
+Value World::replace_component_value(
+    ComponentTarget target,
+    const ComponentName& name,
+    const Value& replacement
+) {
+    ensure_owner_thread();
+    const Value before = coordinator.encode_component(target.type, target.slot);
+    if (before == replacement)
+        return before;
+    Value after = coordinator.replace_component(
+        target.type, target.slot, replacement);
+    record_component_mutation(ComponentMutation{
+        target, name, before, after, false});
+    return after;
+}
+
 std::size_t World::intent_count(BehaviorId owner) {
     ensure_owner_thread();
     return coordinator.intent_count(owner);
@@ -176,6 +244,7 @@ std::size_t World::system_count() const {
 std::size_t World::run_systems(
     FrameNumber frame,
     IntentTime now,
+    SystemPhase phase,
     std::size_t* completedSystems,
     std::string* failingSystem
 ) {
@@ -187,7 +256,7 @@ std::size_t World::run_systems(
 
     try {
         std::size_t systemsRun = coordinator.run_systems(
-            *this, frame, now, completedSystems, failingSystem);
+            *this, frame, now, phase, completedSystems, failingSystem);
         systemsRunning = false;
         return systemsRun;
     } catch (...) {

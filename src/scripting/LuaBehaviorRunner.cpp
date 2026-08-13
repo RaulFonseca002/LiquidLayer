@@ -6,6 +6,7 @@ extern "C" {
 #include <lualib.h>
 }
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -112,6 +113,8 @@ namespace {
 constexpr int InstructionHookStep = 100;
 char EnvironmentRegistryKey;
 char ArrayMetatableRegistryKey;
+char CapabilityRegistryKey;
+char IntentRegistryKey;
 
 struct LuaMemoryBudget {
     std::size_t current = 0;
@@ -537,9 +540,19 @@ struct LuaBehaviorRunner::Impl {
 
     struct ExecutionContext {
         Impl* runner = nullptr;
+        World* world = nullptr;
+        BehaviorId owner{};
         IntentTime now = 0;
+        FrameNumber frame = 0;
+        IntentTime delta = 0;
+        bool lifecycle = false;
+        bool start = false;
+        const std::vector<LuaBehaviorRunner::ComponentChange>* changes = nullptr;
         std::vector<ExecutionCapability> capabilities;
         std::vector<std::unique_ptr<PendingIntent>> pending;
+        std::vector<LuaExecutionResult::Watch> watches;
+        std::vector<IntentId> ownedIntentIds;
+        std::set<IntentId> pendingCancellations;
         LuaExecutionStatus stickyStatus = LuaExecutionStatus::Success;
         std::string stickyDiagnostic;
         std::size_t instructions = 0;
@@ -626,7 +639,8 @@ struct LuaBehaviorRunner::Impl {
     }
 
     static bool allowed_request_field(std::string_view field) {
-        return field == "value" || field == "priority" || field == "lifetime" || field == "duration_ms";
+        return field == "name" || field == "value" || field == "priority" ||
+            field == "lifetime" || field == "duration_ms";
     }
 
     static void validate_request_fields(lua_State* state, int requestIndex) {
@@ -730,6 +744,37 @@ struct LuaBehaviorRunner::Impl {
         return IntentLifetime::until_time(now + duration);
     }
 
+    static IntentName read_intent_name(
+        lua_State* state,
+        int requestIndex,
+        bool required
+    ) {
+        raw_get_string(state, requestIndex, "name");
+        if (lua_isnil(state, -1)) {
+            lua_pop(state, 1);
+            if (required)
+                throw ExecutionFailure(
+                    LuaExecutionStatus::InvalidProposal,
+                    "lifecycle intent request requires a stable name");
+            return {};
+        }
+        if (lua_type(state, -1) != LUA_TSTRING) {
+            lua_pop(state, 1);
+            throw ExecutionFailure(
+                LuaExecutionStatus::InvalidProposal,
+                "intent name must be a string");
+        }
+        std::size_t length = 0;
+        const char* value = lua_tolstring(state, -1, &length);
+        IntentName result(value, length);
+        lua_pop(state, 1);
+        if (result.empty() || result.size() > 128)
+            throw ExecutionFailure(
+                LuaExecutionStatus::InvalidProposal,
+                "intent name must contain between 1 and 128 bytes");
+        return result;
+    }
+
     static void append_proposal(lua_State* state, ExecutionContext& context, std::size_t capabilityIndex) {
         if (lua_gettop(state) != 1 || lua_type(state, 1) != LUA_TTABLE)
             throw ExecutionFailure(LuaExecutionStatus::InvalidProposal, "propose expects one request table");
@@ -745,6 +790,7 @@ struct LuaBehaviorRunner::Impl {
             throw ExecutionFailure(LuaExecutionStatus::IntentLimitExceeded, "Lua intent limit exceeded");
 
         validate_request_fields(state, 1);
+        IntentName intentName = read_intent_name(state, 1, context.lifecycle);
         IntentPriority priority = read_priority(state, 1);
         IntentLifetime lifetime = read_lifetime(state, 1, context.now);
 
@@ -768,7 +814,8 @@ struct LuaBehaviorRunner::Impl {
             capability.description.name,
             value,
             lifetime,
-            priority
+            priority,
+            std::move(intentName)
         ));
     }
 
@@ -790,6 +837,152 @@ struct LuaBehaviorRunner::Impl {
         const std::string& diagnostic = context.stickyDiagnostic;
         lua_pushlstring(state, diagnostic.data(), diagnostic.size());
         return lua_error(state);
+    }
+
+    static int watch_callback(lua_State* state) noexcept {
+        ExecutionContext& context = context_from_upvalue(state);
+        try {
+            if (!context.lifecycle)
+                throw ExecutionFailure(
+                    LuaExecutionStatus::RuntimeError,
+                    "solid.watch is available only during lifecycle execution");
+            if (lua_gettop(state) != 1 || lua_type(state, 1) != LUA_TTABLE)
+                throw ExecutionFailure(
+                    LuaExecutionStatus::RuntimeError,
+                    "solid.watch expects one component capability");
+            lua_rawgetp(state, 1, &CapabilityRegistryKey);
+            if (!lua_isinteger(state, -1)) {
+                lua_pop(state, 1);
+                throw ExecutionFailure(
+                    LuaExecutionStatus::RuntimeError,
+                    "solid.watch requires a component capability from access");
+            }
+            lua_Integer rawIndex = lua_tointeger(state, -1);
+            lua_pop(state, 1);
+            if (rawIndex < 0 || static_cast<std::size_t>(rawIndex) >= context.capabilities.size())
+                throw ExecutionFailure(LuaExecutionStatus::HostError, "Lua capability index is invalid");
+
+            const auto& capability = context.capabilities[static_cast<std::size_t>(rawIndex)];
+            const Binding& binding = context.runner->bindings.at(capability.description.binding);
+            LuaExecutionResult::Watch watch{binding.scriptName, capability.description.name};
+            if (std::find(context.watches.begin(), context.watches.end(), watch) == context.watches.end()) {
+                if (context.watches.size() >= context.runner->limits.maxWatches)
+                    throw ExecutionFailure(LuaExecutionStatus::RuntimeError, "Lua watch limit exceeded");
+                context.watches.push_back(std::move(watch));
+            }
+            return 0;
+        } catch (const ExecutionFailure& failure) {
+            context.runner->set_sticky(context, failure.status, failure.what());
+        } catch (const std::exception& exception) {
+            context.runner->set_sticky(context, LuaExecutionStatus::RuntimeError, exception.what());
+        } catch (...) {
+            context.runner->set_sticky(context, LuaExecutionStatus::RuntimeError, "unknown watch error");
+        }
+        const std::string& diagnostic = context.stickyDiagnostic;
+        lua_pushlstring(state, diagnostic.data(), diagnostic.size());
+        return lua_error(state);
+    }
+
+    static int cancel_callback(lua_State* state) noexcept {
+        ExecutionContext& context = context_from_upvalue(state);
+        try {
+            if (!context.lifecycle)
+                throw ExecutionFailure(
+                    LuaExecutionStatus::RuntimeError,
+                    "solid.cancel is available only during lifecycle execution");
+            if (lua_gettop(state) != 1 || lua_type(state, 1) != LUA_TTABLE)
+                throw ExecutionFailure(
+                    LuaExecutionStatus::InvalidProposal,
+                    "solid.cancel expects one owned intent snapshot");
+            lua_rawgetp(state, 1, &IntentRegistryKey);
+            if (!lua_isinteger(state, -1)) {
+                lua_pop(state, 1);
+                throw ExecutionFailure(
+                    LuaExecutionStatus::InvalidProposal,
+                    "solid.cancel requires an intent from solid.owned_intents");
+            }
+            lua_Integer rawIndex = lua_tointeger(state, -1);
+            lua_pop(state, 1);
+            if (rawIndex < 0 || static_cast<std::size_t>(rawIndex) >= context.ownedIntentIds.size())
+                throw ExecutionFailure(LuaExecutionStatus::HostError, "Lua owned intent index is invalid");
+            IntentId id = context.ownedIntentIds[static_cast<std::size_t>(rawIndex)];
+            if (context.pendingCancellations.contains(id))
+                return 0;
+            if (context.pendingCancellations.size() >= context.runner->limits.maxCancelledIntents)
+                throw ExecutionFailure(LuaExecutionStatus::IntentLimitExceeded, "Lua cancellation limit exceeded");
+            context.pendingCancellations.insert(id);
+            return 0;
+        } catch (const ExecutionFailure& failure) {
+            context.runner->set_sticky(context, failure.status, failure.what());
+        } catch (const std::exception& exception) {
+            context.runner->set_sticky(context, LuaExecutionStatus::InvalidProposal, exception.what());
+        } catch (...) {
+            context.runner->set_sticky(context, LuaExecutionStatus::InvalidProposal, "unknown cancellation error");
+        }
+        const std::string& diagnostic = context.stickyDiagnostic;
+        lua_pushlstring(state, diagnostic.data(), diagnostic.size());
+        return lua_error(state);
+    }
+
+    static const char* priority_name(IntentPriority priority) {
+        if (priority == IntentPriority::Low)
+            return "low";
+        if (priority == IntentPriority::High)
+            return "high";
+        return "medium";
+    }
+
+    static void build_solid_table(
+        lua_State* state,
+        ExecutionContext& context,
+        int environmentIndex
+    ) {
+        lua_createtable(state, 0, 4);
+        int solidIndex = lua_absindex(state, -1);
+
+        lua_pushlightuserdata(state, &context);
+        lua_pushcclosure(state, watch_callback, 1);
+        raw_set_string(state, solidIndex, "watch");
+        lua_pushlightuserdata(state, &context);
+        lua_pushcclosure(state, cancel_callback, 1);
+        raw_set_string(state, solidIndex, "cancel");
+
+        const std::vector<IntentId> owned = context.world->intents_owned_by(context.owner);
+        lua_createtable(state, 0, static_cast<int>(owned.size()));
+        int intentsIndex = lua_absindex(state, -1);
+        for (IntentId id : owned) {
+            const Intent& intent = context.world->intent(id);
+            if (intent.name.empty())
+                continue;
+            const std::size_t opaqueIndex = context.ownedIntentIds.size();
+            context.ownedIntentIds.push_back(id);
+            lua_createtable(state, 0, 4);
+            int intentIndex = lua_absindex(state, -1);
+            lua_pushlstring(state, intent.name.data(), intent.name.size());
+            raw_set_string(state, intentIndex, "name");
+            lua_pushstring(state, priority_name(intent.priority));
+            raw_set_string(state, intentIndex, "priority");
+
+            for (const ExecutionCapability& capability : context.capabilities) {
+                const Binding& binding = context.runner->bindings.at(capability.description.binding);
+                if (binding.type == intent.target.type && capability.description.slot == intent.target.slot) {
+                    lua_pushlstring(state, binding.scriptName.data(), binding.scriptName.size());
+                    raw_set_string(state, intentIndex, "type");
+                    lua_pushlstring(
+                        state,
+                        capability.description.name.data(),
+                        capability.description.name.size());
+                    raw_set_string(state, intentIndex, "component");
+                    break;
+                }
+            }
+
+            lua_pushinteger(state, static_cast<lua_Integer>(opaqueIndex));
+            lua_rawsetp(state, intentIndex, &IntentRegistryKey);
+            raw_set_string(state, intentsIndex, intent.name);
+        }
+        raw_set_string(state, solidIndex, "owned_intents");
+        raw_set_string(state, environmentIndex, "solid");
     }
 
     static void add_allowed_base(lua_State* state, int environmentIndex) {
@@ -864,6 +1057,9 @@ struct LuaBehaviorRunner::Impl {
                 lua_createtable(state, 0, 2);
                 int componentIndex = lua_absindex(state, -1);
 
+                lua_pushinteger(state, static_cast<lua_Integer>(current));
+                lua_rawsetp(state, componentIndex, &CapabilityRegistryKey);
+
                 if (capability.snapshot) {
                     std::size_t entries = 0;
                     push_lua_value(state, *capability.snapshot, 0, entries, context.runner->limits);
@@ -884,6 +1080,7 @@ struct LuaBehaviorRunner::Impl {
         }
 
         raw_set_string(state, environmentIndex, "access");
+        build_solid_table(state, context, environmentIndex);
         lua_pushvalue(state, environmentIndex);
         lua_rawsetp(state, LUA_REGISTRYINDEX, &EnvironmentRegistryKey);
         lua_pop(state, 1);
@@ -908,11 +1105,94 @@ struct LuaBehaviorRunner::Impl {
         return lua_error(state);
     }
 
+    static void push_frame(lua_State* state, const ExecutionContext& context) {
+        lua_createtable(state, 0, 3);
+        int frameIndex = lua_absindex(state, -1);
+        lua_pushinteger(state, static_cast<lua_Integer>(context.frame));
+        raw_set_string(state, frameIndex, "number");
+        lua_pushinteger(state, static_cast<lua_Integer>(context.now));
+        raw_set_string(state, frameIndex, "now_ms");
+        lua_pushinteger(state, static_cast<lua_Integer>(context.delta));
+        raw_set_string(state, frameIndex, "delta_ms");
+    }
+
+    static void push_changes(lua_State* state, ExecutionContext& context) {
+        const auto& changes = *context.changes;
+        lua_createtable(state, static_cast<int>(changes.size()), 0);
+        int changesIndex = lua_absindex(state, -1);
+        for (std::size_t index = 0; index < changes.size(); ++index) {
+            const auto& change = changes[index];
+            lua_createtable(state, 0, 4);
+            int changeIndex = lua_absindex(state, -1);
+            lua_pushlstring(state, change.type.data(), change.type.size());
+            raw_set_string(state, changeIndex, "type");
+            lua_pushlstring(state, change.name.data(), change.name.size());
+            raw_set_string(state, changeIndex, "name");
+            std::size_t beforeEntries = 0;
+            push_lua_value(
+                state, change.before, 0, beforeEntries, context.runner->limits);
+            raw_set_string(state, changeIndex, "before");
+            std::size_t afterEntries = 0;
+            push_lua_value(
+                state, change.after, 0, afterEntries, context.runner->limits);
+            raw_set_string(state, changeIndex, "after");
+            lua_rawseti(state, changesIndex, static_cast<lua_Integer>(index + 1));
+        }
+    }
+
+    static int push_callback(lua_State* state, std::string_view name) {
+        lua_rawgetp(state, LUA_REGISTRYINDEX, &EnvironmentRegistryKey);
+        int environmentIndex = lua_absindex(state, -1);
+        raw_get_string(state, environmentIndex, name);
+        lua_remove(state, environmentIndex);
+        if (lua_isnil(state, -1)) {
+            lua_pop(state, 1);
+            return 0;
+        }
+        if (!lua_isfunction(state, -1))
+            throw ExecutionFailure(
+                LuaExecutionStatus::RuntimeError,
+                std::string(name) + " must be a function");
+        return 1;
+    }
+
+    static int call_lifecycle_callbacks(
+        lua_State* state,
+        ExecutionContext& context
+    ) {
+        auto call = [&](std::string_view name, bool includeChanges) {
+            if (push_callback(state, name) == 0)
+                return LUA_OK;
+            push_frame(state, context);
+            int argumentCount = 1;
+            if (includeChanges) {
+                push_changes(state, context);
+                argumentCount++;
+            }
+            return lua_pcall(state, argumentCount, 0, 0);
+        };
+
+        if (context.start) {
+            int status = call("on_start", false);
+            if (status != LUA_OK)
+                return status;
+        }
+        if (!context.changes->empty()) {
+            int status = call("on_components_changed", true);
+            if (status != LUA_OK)
+                return status;
+        }
+        return call("on_frame", false);
+    }
+
     LuaExecutionResult failure_result(
         LuaExecutionStatus status,
         std::string_view diagnostic
     ) const {
-        return {status, bounded_diagnostic(diagnostic, limits.maxDiagnosticBytes), {}};
+        LuaExecutionResult result;
+        result.status = status;
+        result.diagnostic = bounded_diagnostic(diagnostic, limits.maxDiagnosticBytes);
+        return result;
     }
 
     LuaExecutionResult lua_error_result(
@@ -936,13 +1216,25 @@ struct LuaBehaviorRunner::Impl {
         return failure_result(fallbackStatus, std::string_view(message, length));
     }
 
-    LuaExecutionResult run(World& world, BehaviorId owner, IntentTime now, std::string_view source) {
+    LuaExecutionResult run(
+        World& world,
+        BehaviorId owner,
+        IntentTime now,
+        std::string_view source,
+        FrameNumber frame = 0,
+        IntentTime delta = 0,
+        bool start = false,
+        const std::vector<LuaBehaviorRunner::ComponentChange>* changes = nullptr
+    ) {
         started = true;
 
         if (!world.behavior_exists(owner))
             return failure_result(LuaExecutionStatus::InvalidBehavior, "behavior id not found");
         if (now > static_cast<IntentTime>(std::numeric_limits<lua_Integer>::max()))
             return failure_result(LuaExecutionStatus::HostError, "Lua time exceeds signed integer range");
+        if (frame > static_cast<FrameNumber>(std::numeric_limits<lua_Integer>::max()) ||
+            delta > static_cast<IntentTime>(std::numeric_limits<lua_Integer>::max()))
+            return failure_result(LuaExecutionStatus::HostError, "Lua frame metadata exceeds signed integer range");
         if (source.size() > limits.maxSourceBytes)
             return failure_result(LuaExecutionStatus::SourceLimitExceeded, "Lua source exceeds size limit");
         if (source.find('\0') != std::string_view::npos)
@@ -950,7 +1242,14 @@ struct LuaBehaviorRunner::Impl {
 
         ExecutionContext context;
         context.runner = this;
+        context.world = &world;
+        context.owner = owner;
         context.now = now;
+        context.frame = frame;
+        context.delta = delta;
+        context.lifecycle = changes != nullptr;
+        context.start = start;
+        context.changes = changes;
 
         try {
             const auto& descriptions = capabilities_for(world, owner);
@@ -1018,6 +1317,16 @@ struct LuaBehaviorRunner::Impl {
         context.instructionStep = static_cast<std::size_t>(hookStep);
         lua_sethook(state, instruction_hook, LUA_MASKCOUNT, hookStep);
         int callStatus = lua_pcall(state, 0, 0, 0);
+
+        if (callStatus == LUA_OK && context.lifecycle) {
+            try {
+                callStatus = call_lifecycle_callbacks(state, context);
+            } catch (const ExecutionFailure& failure) {
+                lua_sethook(state, nullptr, 0, 0);
+                lua_close(state);
+                return failure_result(failure.status, failure.what());
+            }
+        }
         lua_sethook(state, nullptr, 0, 0);
 
         if (callStatus != LUA_OK || context.stickyStatus != LuaExecutionStatus::Success || context.instructionExceeded) {
@@ -1029,7 +1338,30 @@ struct LuaBehaviorRunner::Impl {
         lua_close(state);
 
         std::vector<IntentId> created;
+        std::vector<IntentId> cancelled;
         try {
+            std::set<IntentName> pendingNames;
+            for (const auto& pending : context.pending) {
+                pending->validate(world, owner);
+                const IntentName& name = pending->intent_name();
+                if (name.empty())
+                    continue;
+                if (!pendingNames.insert(name).second)
+                    throw std::runtime_error("Lua transaction contains duplicate intent names");
+                std::optional<IntentId> existing = world.intent_named(owner, name);
+                if (existing && !context.pendingCancellations.contains(*existing))
+                    throw std::runtime_error("intent name is already live for this behavior");
+            }
+            for (IntentId id : context.pendingCancellations) {
+                if (!world.intent_exists(id) || world.intent_owner(id) != owner)
+                    throw std::runtime_error("owned intent changed before Lua transaction commit");
+            }
+
+            cancelled.reserve(context.pendingCancellations.size());
+            for (IntentId id : context.pendingCancellations) {
+                world.destroy_intent(id);
+                cancelled.push_back(id);
+            }
             created.reserve(context.pending.size());
             for (const auto& pending : context.pending)
                 created.push_back(pending->commit(world, owner));
@@ -1049,7 +1381,11 @@ struct LuaBehaviorRunner::Impl {
             return failure_result(LuaExecutionStatus::CommitFailed, "unknown intent commit error");
         }
 
-        return {LuaExecutionStatus::Success, {}, std::move(created)};
+        LuaExecutionResult result;
+        result.createdIntents = std::move(created);
+        result.cancelledIntents = std::move(cancelled);
+        result.watches = std::move(context.watches);
+        return result;
     }
 };
 
@@ -1118,6 +1454,73 @@ LuaExecutionResult LuaBehaviorRunner::execute(
         result.createdIntents.size()
     });
     return result;
+}
+
+LuaExecutionResult LuaBehaviorRunner::execute_lifecycle(
+    World& world,
+    BehaviorId owner,
+    FrameNumber frame,
+    IntentTime now,
+    IntentTime delta,
+    bool start,
+    const std::vector<ComponentChange>& changes,
+    std::string_view source
+) {
+    LuaExecutionResult result;
+    try {
+        result = impl->run(world, owner, now, source, frame, delta, start, &changes);
+    } catch (const std::exception& exception) {
+        result = impl->failure_result(LuaExecutionStatus::HostError, exception.what());
+    } catch (...) {
+        result = impl->failure_result(LuaExecutionStatus::HostError, "unknown Lua host error");
+    }
+
+    constexpr std::uint64_t offset = 14695981039346656037ULL;
+    constexpr std::uint64_t prime = 1099511628211ULL;
+    std::uint64_t hash = offset;
+    for (const unsigned char byte : source) {
+        hash ^= byte;
+        hash *= prime;
+    }
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string sourceHash(16, '0');
+    for (std::size_t index = 0; index < sourceHash.size(); ++index) {
+        sourceHash[sourceHash.size() - index - 1] = digits[hash & 0x0fU];
+        hash >>= 4U;
+    }
+    world.record_script_execution(ScriptExecutionEvidence{
+        owner,
+        now,
+        impl->limits.recordFullSource ? std::string{source} : std::string{},
+        "fnv1a64:" + sourceHash,
+        impl->limits.recordFullSource,
+        static_cast<std::uint32_t>(result.status),
+        result.diagnostic,
+        result.createdIntents.size()
+    });
+    return result;
+}
+
+std::optional<LuaValue> LuaBehaviorRunner::snapshot(
+    World& world,
+    BehaviorId owner,
+    const LuaExecutionResult::Watch& watch
+) {
+    if (!world.behavior_exists(owner))
+        return std::nullopt;
+    for (const Binding& binding : impl->bindings) {
+        if (binding.scriptName != watch.type)
+            continue;
+        const auto& capabilities = impl->capabilities_for(world, owner);
+        for (const CapabilityDescription& capability : capabilities) {
+            if (capability.binding < impl->bindings.size() &&
+                impl->bindings[capability.binding].scriptName == watch.type &&
+                capability.name == watch.name && capability.readable)
+                return binding.snapshot(world, owner, watch.name);
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
 }
 
 }

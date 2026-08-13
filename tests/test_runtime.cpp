@@ -71,6 +71,24 @@ struct SecondOrderSystem : System {
     }
 };
 
+template <int PhaseIndex>
+struct PhaseOrderSystem : System {
+    static constexpr std::string_view stableName =
+        PhaseIndex == 0 ? "tests.runtime.InputPhase" :
+        PhaseIndex == 1 ? "tests.runtime.BehaviorPhase" :
+            "tests.runtime.DecisionPhase";
+    static constexpr std::uint32_t version = 1;
+    std::vector<int>* order = nullptr;
+
+    explicit PhaseOrderSystem(std::vector<int>* executionOrder)
+        : order(executionOrder) {
+    }
+
+    void run(World&, FrameNumber, IntentTime) override {
+        order->push_back(PhaseIndex);
+    }
+};
+
 struct IntentCreatingSystem : System {
     static constexpr std::string_view stableName = "tests.test.runtime.cpp.IntentCreatingSystem";
     static constexpr std::uint32_t version = 1;
@@ -302,7 +320,9 @@ TEST_CASE("test_runtime")
         std::vector<std::string> expectedPhases{
             "begin_frame",
             "expire_intents",
-            "run_systems",
+            "run_input_systems",
+            "run_behavior_systems",
+            "run_decision_systems",
             "resolve_intents",
             "end_frame"
         };
@@ -361,6 +381,22 @@ TEST_CASE("test_runtime")
 
         REQUIRE(log.systems_run == 2);
         REQUIRE((order == std::vector<std::string>{"first:0", "second:0"}));
+    }
+
+    {
+        Runtime runtime;
+        World& world = runtime.world();
+        std::vector<int> order;
+        world.register_system<PhaseOrderSystem<2>>(
+            Signature{}, SystemPhase::Decision, &order);
+        world.register_system<PhaseOrderSystem<0>>(
+            Signature{}, SystemPhase::Input, &order);
+        world.register_system<PhaseOrderSystem<1>>(
+            Signature{}, SystemPhase::Behavior, &order);
+
+        const FrameLog log = runtime.run_frame(3);
+        REQUIRE(log.systems_run == 3);
+        REQUIRE(order == std::vector<int>{0, 1, 2});
     }
 
     {
@@ -443,7 +479,7 @@ TEST_CASE("test_runtime")
         REQUIRE(runtime.frame() == 0);
         REQUIRE(system.runs == 1);
         REQUIRE(!runtime.last_frame_log().completed);
-        REQUIRE(runtime.last_frame_log().failure_phase == "run_systems");
+        REQUIRE(runtime.last_frame_log().failure_phase == "run_decision_systems");
         REQUIRE(runtime.last_frame_log().failure_message == "system failed");
         REQUIRE(runtime.last_frame_log().failure_system ==
                "tests.test.runtime.cpp.ThrowingSystem@1");

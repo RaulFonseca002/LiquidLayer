@@ -31,6 +31,7 @@ struct EffectCodec {
     AdapterRoute adapterRoute;
     std::function<std::optional<ResolvedEffect>(
         const ComponentName&, const Component&)> encode;
+    std::function<Component(const Value&)> decodeObserved;
 };
 
 }

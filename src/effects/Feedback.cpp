@@ -13,6 +13,7 @@ public:
 
     mutable std::mutex mutex;
     std::deque<EffectReport> reports;
+    std::deque<ExternalObservation> observations;
     std::size_t capacity;
     bool shutdown = false;
 };
@@ -35,10 +36,29 @@ FeedbackSendResult FeedbackSender::try_send(EffectReport report) const {
     std::lock_guard lock(sharedState->mutex);
     if (sharedState->shutdown)
         return FeedbackSendResult::Closed;
-    if (sharedState->reports.size() >= sharedState->capacity)
+    if (sharedState->reports.size() + sharedState->observations.size() >=
+        sharedState->capacity)
         return FeedbackSendResult::Full;
 
     sharedState->reports.push_back(std::move(report));
+    return FeedbackSendResult::Sent;
+}
+
+FeedbackSendResult FeedbackSender::try_send(
+    ExternalObservation observation
+) const {
+    validate_external_observation(observation);
+    const auto sharedState = state.lock();
+    if (!sharedState)
+        return FeedbackSendResult::Closed;
+    std::lock_guard lock(sharedState->mutex);
+    if (sharedState->shutdown)
+        return FeedbackSendResult::Closed;
+    if (sharedState->reports.size() + sharedState->observations.size() >=
+        sharedState->capacity) {
+        return FeedbackSendResult::Full;
+    }
+    sharedState->observations.push_back(std::move(observation));
     return FeedbackSendResult::Sent;
 }
 
@@ -81,6 +101,18 @@ std::optional<EffectReport> FeedbackReceiver::try_receive() {
     return report;
 }
 
+std::optional<ExternalObservation> FeedbackReceiver::try_receive_observation() {
+    if (!state)
+        return std::nullopt;
+    std::lock_guard lock(state->mutex);
+    if (state->observations.empty())
+        return std::nullopt;
+    ExternalObservation observation =
+        std::move(state->observations.front());
+    state->observations.pop_front();
+    return observation;
+}
+
 std::vector<EffectReport> FeedbackReceiver::drain() {
     std::vector<EffectReport> drained;
     if (!state)
@@ -99,12 +131,29 @@ std::vector<EffectReport> FeedbackReceiver::drain() {
     return drained;
 }
 
+std::vector<ExternalObservation> FeedbackReceiver::drain_observations() {
+    std::vector<ExternalObservation> drained;
+    if (!state)
+        return drained;
+    std::deque<ExternalObservation> queued;
+    {
+        std::lock_guard lock(state->mutex);
+        queued.swap(state->observations);
+    }
+    drained.reserve(queued.size());
+    while (!queued.empty()) {
+        drained.push_back(std::move(queued.front()));
+        queued.pop_front();
+    }
+    return drained;
+}
+
 std::size_t FeedbackReceiver::pending() const {
     if (!state)
         return 0;
 
     std::lock_guard lock(state->mutex);
-    return state->reports.size();
+    return state->reports.size() + state->observations.size();
 }
 
 void FeedbackReceiver::shutdown() {

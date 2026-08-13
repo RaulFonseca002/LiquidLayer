@@ -51,6 +51,9 @@ public:
     IntentLifetime intent_lifetime(IntentId id);
     const Intent& intent(IntentId id) const;
     std::vector<IntentId> live_intent_ids() const;
+    std::vector<IntentId> intents_owned_by(BehaviorId owner) const;
+    std::optional<IntentId> intent_named(
+        BehaviorId owner, const IntentName& name) const;
     std::vector<IntentId> intents_for(ComponentTypeId type, ComponentSlotId slot) const;
     const IntentTargetIndex& intent_target_index() const;
     const std::vector<IntentLifecycleRecord>& intent_lifecycle_records() const;
@@ -65,6 +68,9 @@ public:
     template <typename SystemType, typename... Args>
     void register_system(Signature signature, Args&&... args);
 
+    template <typename SystemType, typename... Args>
+    void register_system(Signature signature, SystemPhase phase, Args&&... args);
+
     template <typename SystemType>
     void destroy_system();
 
@@ -76,6 +82,7 @@ public:
         World& world,
         FrameNumber frame,
         IntentTime now,
+        SystemPhase phase,
         std::size_t* completedSystems = nullptr,
         std::string* failingSystem = nullptr
     );
@@ -121,6 +128,21 @@ public:
         const ComponentName& name,
         const Component& component) const;
 
+    const AdapterRoute& effect_route(ComponentTypeId type) const;
+    std::optional<liquid::ResolvedEffect> encode_effect(
+        ComponentTypeId type,
+        const ComponentName& name,
+        const liquid::Value& value) const;
+    liquid::Value decode_observed(
+        ComponentTypeId type, const liquid::Value& value) const;
+    liquid::Value encode_component(
+        ComponentTypeId type, ComponentSlotId slot) const;
+    liquid::Value replace_component(
+        ComponentTypeId type, ComponentSlotId slot,
+        const liquid::Value& value);
+    const ComponentName& component_name(
+        ComponentTypeId type, ComponentSlotId slot) const;
+
     template <typename Component>
     const liquid::ComponentSchema& component_schema(ComponentType<Component> type) const;
 
@@ -141,6 +163,10 @@ public:
 
     template <typename Component>
     bool has_component_named(ComponentType<Component> type, const std::string& name) const;
+
+    template <typename Component>
+    ComponentSlotId component_slot(
+        ComponentType<Component> type, const std::string& name) const;
 
     template <typename Component>
     Component* get_component_named(ComponentType<Component> type, const std::string& name);
@@ -187,7 +213,15 @@ public:
     const Component* resolve_component(ComponentType<Component> type, ComponentSlotId slot) const;
 
     template <typename Component>
-    IntentId create_intent(BehaviorId owner, ComponentType<Component> type, ComponentSlotId slot, IntentLifetime lifetime, Component value, IntentPriority priority = IntentPriority::Medium);
+    IntentId create_intent(
+        BehaviorId owner,
+        ComponentType<Component> type,
+        ComponentSlotId slot,
+        IntentLifetime lifetime,
+        Component value,
+        IntentPriority priority = IntentPriority::Medium,
+        IntentName name = {}
+    );
 
     template <typename Component>
     const ComponentIntent<Component>& typed_intent(ComponentType<Component> type, IntentId id) const;
@@ -238,6 +272,47 @@ std::optional<liquid::ResolvedEffect> Coordinator::encode_effect(
     return state.components.encode_effect(type, name, component);
 }
 
+inline const AdapterRoute& Coordinator::effect_route(ComponentTypeId type) const {
+    return state.components.effect_route(type);
+}
+
+inline std::optional<liquid::ResolvedEffect> Coordinator::encode_effect(
+    ComponentTypeId type,
+    const ComponentName& name,
+    const liquid::Value& value
+) const {
+    return state.components.encode_effect(type, name, value);
+}
+
+inline liquid::Value Coordinator::decode_observed(
+    ComponentTypeId type,
+    const liquid::Value& value
+) const {
+    return state.components.decode_observed(type, value);
+}
+
+inline liquid::Value Coordinator::encode_component(
+    ComponentTypeId type,
+    ComponentSlotId slot
+) const {
+    return state.components.encode_component(type, slot);
+}
+
+inline liquid::Value Coordinator::replace_component(
+    ComponentTypeId type,
+    ComponentSlotId slot,
+    const liquid::Value& value
+) {
+    return state.components.replace_component(type, slot, value);
+}
+
+inline const ComponentName& Coordinator::component_name(
+    ComponentTypeId type,
+    ComponentSlotId slot
+) const {
+    return state.components.component_name(type, slot);
+}
+
 template <typename Component>
 const liquid::ComponentSchema& Coordinator::component_schema(
     ComponentType<Component> type
@@ -279,6 +354,23 @@ inline bool Coordinator::system_membership_dispatching() const {
 template <typename SystemType, typename... Args>
 void Coordinator::register_system(Signature signature, Args&&... args) {
     state.systems.register_system<SystemType>(signature, std::forward<Args>(args)...);
+
+    try {
+        update_all_system_memberships();
+    } catch (...) {
+        state.systems.destroy_system<SystemType>();
+        throw;
+    }
+}
+
+template <typename SystemType, typename... Args>
+void Coordinator::register_system(
+    Signature signature,
+    SystemPhase phase,
+    Args&&... args
+) {
+    state.systems.register_system<SystemType>(
+        signature, phase, std::forward<Args>(args)...);
 
     try {
         update_all_system_memberships();
@@ -335,7 +427,7 @@ ComponentTypeId Coordinator::component_type(ComponentType<Component> type) const
 }
 
 template <typename Component>
-IntentId Coordinator::create_intent(BehaviorId owner, ComponentType<Component> type, ComponentSlotId slot, IntentLifetime lifetime, Component value, IntentPriority priority) {
+IntentId Coordinator::create_intent(BehaviorId owner, ComponentType<Component> type, ComponentSlotId slot, IntentLifetime lifetime, Component value, IntentPriority priority, IntentName name) {
     if (!state.behaviors.exists(owner))
         throw std::runtime_error("behavior id not found");
 
@@ -364,7 +456,8 @@ IntentId Coordinator::create_intent(BehaviorId owner, ComponentType<Component> t
         lifetime,
         std::move(value),
         priority,
-        std::move(encodedValue)
+        std::move(encodedValue),
+        std::move(name)
     );
 }
 
@@ -410,6 +503,14 @@ void Coordinator::add_component(ComponentType<Component> type, std::string name,
 template <typename Component>
 bool Coordinator::has_component_named(ComponentType<Component> type, const std::string& name) const {
     return state.components.has_component_named(type, name);
+}
+
+template <typename Component>
+ComponentSlotId Coordinator::component_slot(
+    ComponentType<Component> type,
+    const std::string& name
+) const {
+    return state.components.component_slot(type, name);
 }
 
 template <typename Component>

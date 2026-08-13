@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <limits>
 #include <map>
+#include <set>
 #include <utility>
 
 namespace liquid::detail {
@@ -143,6 +144,7 @@ public:
     std::map<TargetKey, std::uint64_t> latestByTarget;
     std::map<TargetKey, std::uint64_t> authoritativeByTarget;
     std::map<TargetKey, Value> observed;
+    std::map<TargetKey, StateRevision> observedRevisions;
     std::deque<std::uint64_t> terminalOrder;
     std::deque<EffectReport> deferredSynchronousReports;
     std::size_t maximumRetainedCommands;
@@ -304,17 +306,48 @@ public:
     }
 
     void restore_observed_record(const Value::Object& object) {
-                const std::uint64_t id = required_unsigned(
-                    object, "command_id", "recorded observed state");
-                const auto command = commands.find(id);
-                if (command == commands.end())
-                    throw EventStoreError("observed state references unknown command");
-                const TargetKey key = target_key(
-                    command->second.command.effect.adapterRoute,
-                    command->second.command.effect.target);
-                observed.insert_or_assign(
-                    key, required_field(object, "observed", "recorded observed state"));
-                authoritativeByTarget.insert_or_assign(key, id);
+        TargetKey key;
+        const auto route = object.find("route");
+        const auto target = object.find("target");
+        if (route != object.end() && target != object.end()) {
+            if (route->second.kind() != Value::Kind::String ||
+                target->second.kind() != Value::Kind::String)
+                throw EventStoreError("recorded observed route and target must be strings");
+            key = target_key(
+                AdapterRoute{route->second.as_string()},
+                EffectTarget{target->second.as_string()});
+        } else {
+            const std::uint64_t id = required_unsigned(
+                object, "command_id", "recorded observed state");
+            const auto command = commands.find(id);
+            if (command == commands.end())
+                throw EventStoreError("observed state references unknown command");
+            key = target_key(
+                command->second.command.effect.adapterRoute,
+                command->second.command.effect.target);
+        }
+
+        observed.insert_or_assign(
+            key, required_field(object, "observed", "recorded observed state"));
+        const auto revision = object.find("state_revision");
+        if (revision != object.end()) {
+            if (revision->second.kind() != Value::Kind::UnsignedInteger)
+                throw EventStoreError("recorded observed revision must be unsigned");
+            StateRevision restored{revision->second.as_unsigned_integer()};
+            if (!restored.valid())
+                throw EventStoreError("recorded observed revision is invalid");
+            observedRevisions.insert_or_assign(key, restored);
+        }
+
+        const auto idField = object.find("command_id");
+        if (idField != object.end()) {
+            if (idField->second.kind() != Value::Kind::UnsignedInteger)
+                throw EventStoreError("recorded observed command id must be unsigned");
+            const std::uint64_t id = idField->second.as_unsigned_integer();
+            if (!commands.contains(id))
+                throw EventStoreError("observed state references unknown command");
+            authoritativeByTarget.insert_or_assign(key, id);
+        }
     }
 
     void restore_observed_checkpoint(const Value::Object& states) {
@@ -322,9 +355,8 @@ public:
             if (value.kind() != Value::Kind::Object)
                 continue;
             const auto& object = value.as_object();
-            const auto idField = object.find("command_id");
             const auto observedField = object.find("observed");
-            if (idField == object.end() || observedField == object.end())
+            if (observedField == object.end())
                 continue;
             restore_observed_record(object);
         }
@@ -505,9 +537,19 @@ public:
             return;
 
         const TargetKey key = target_key(report.adapterRoute, report.target);
-        const auto authority = authoritativeByTarget.find(key);
-        if (authority != authoritativeByTarget.end() &&
-            authority->second > report.commandId.value) {
+        const auto revision = observedRevisions.find(key);
+        if (revision != observedRevisions.end() &&
+            revision->second > report.stateRevision) {
+            return;
+        }
+        if (revision != observedRevisions.end() &&
+            revision->second == report.stateRevision) {
+            const auto prior = observed.find(key);
+            if (prior != observed.end() &&
+                prior->second == *report.observedValue) {
+                return;
+            }
+            record_report(report, "rejected-conflicting-state-revision");
             return;
         }
 
@@ -517,13 +559,70 @@ public:
             {"command_id", Value{report.commandId.value}},
             {"route", Value{report.adapterRoute.value()}},
             {"target", Value{report.target.value()}},
+            {"state_revision", Value{report.stateRevision.value}},
             {"observed", *report.observedValue}
         }));
         observed.insert_or_assign(key, *report.observedValue);
+        observedRevisions.insert_or_assign(key, report.stateRevision);
         authoritativeByTarget.insert_or_assign(key, report.commandId.value);
     }
 
-    void process_feedback(std::vector<EffectReport>& accepted) {
+    void apply_observation(
+        const ExternalObservation& observation,
+        std::vector<ExternalObservation>& accepted
+    ) {
+        validate_external_observation(observation);
+        const TargetKey key = target_key(
+            observation.adapterRoute, observation.target);
+        std::string disposition = "accepted";
+        if (observation.sessionId != session ||
+            adapters.find(observation.adapterRoute.value()) == adapters.end()) {
+            disposition = "rejected-unknown-or-cross-session";
+        } else {
+            const auto revision = observedRevisions.find(key);
+            if (revision != observedRevisions.end() &&
+                revision->second > observation.stateRevision) {
+                disposition = "stale";
+            } else if (revision != observedRevisions.end() &&
+                revision->second == observation.stateRevision) {
+                const auto prior = observed.find(key);
+                disposition = prior != observed.end() &&
+                    prior->second == observation.observedValue
+                    ? "duplicate" : "rejected-conflicting-revision";
+            }
+        }
+
+        append(EventType::ExternalObservationReceived, event_payload({
+            {"session", Value{observation.sessionId.value}},
+            {"route", Value{observation.adapterRoute.value()}},
+            {"target", Value{observation.target.value()}},
+            {"state_revision", Value{observation.stateRevision.value}},
+            {"observed_at", Value{observation.observedAtMs}},
+            {"observed", observation.observedValue},
+            {"disposition", Value{disposition}}
+        }));
+        if (disposition != "accepted")
+            return;
+
+        append(EventType::ObservedStateChanged, event_payload({
+            {"key", Value{observation.adapterRoute.value() + ":" +
+                observation.target.value()}},
+            {"value", observation.observedValue},
+            {"route", Value{observation.adapterRoute.value()}},
+            {"target", Value{observation.target.value()}},
+            {"state_revision", Value{observation.stateRevision.value}},
+            {"observed", observation.observedValue},
+            {"source", Value{"external"}}
+        }));
+        observed.insert_or_assign(key, observation.observedValue);
+        observedRevisions.insert_or_assign(key, observation.stateRevision);
+        accepted.push_back(observation);
+    }
+
+    void process_feedback(
+        std::vector<EffectReport>& accepted,
+        std::vector<ExternalObservation>& observations
+    ) {
         while (!deferredSynchronousReports.empty()) {
             apply_report(deferredSynchronousReports.front(), accepted);
             deferredSynchronousReports.pop_front();
@@ -536,6 +635,36 @@ public:
                 throw;
             }
         }
+        while (auto observation = feedback.receiver.try_receive_observation())
+            apply_observation(*observation, observations);
+    }
+
+    bool report_is_authoritative(const EffectReport& report) const {
+        if (report.status != CommandStatus::Applied)
+            return false;
+        const TargetKey key = target_key(
+            report.adapterRoute, report.target);
+        const auto authority = authoritativeByTarget.find(key);
+        const auto revision = observedRevisions.find(key);
+        const auto value = observed.find(key);
+        return authority != authoritativeByTarget.end() &&
+            authority->second == report.commandId.value &&
+            revision != observedRevisions.end() &&
+            revision->second == report.stateRevision &&
+            value != observed.end() && value->second == *report.observedValue;
+    }
+
+    bool observation_is_authoritative(
+        const ExternalObservation& observation
+    ) const {
+        const TargetKey key = target_key(
+            observation.adapterRoute, observation.target);
+        const auto revision = observedRevisions.find(key);
+        const auto value = observed.find(key);
+        return revision != observedRevisions.end() &&
+            revision->second == observation.stateRevision &&
+            value != observed.end() &&
+            value->second == observation.observedValue;
     }
 
     void dispatch(CommandState& state, std::uint64_t now,
@@ -678,6 +807,20 @@ public:
         dispatch(inserted->second, now, accepted);
         return command;
     }
+
+    void clear_desire(const AdapterRoute& route, const EffectTarget& target) {
+        const TargetKey key = target_key(route, target);
+        const auto latest = latestByTarget.find(key);
+        if (latest == latestByTarget.end())
+            return;
+        CommandState& prior = commands.at(latest->second);
+        if (prior.status == CommandStatus::Pending) {
+            transition(
+                prior,
+                CommandStatus::Superseded,
+                "selected desire disappeared");
+        }
+    }
 };
 
 }
@@ -774,6 +917,7 @@ FrameLog Runtime::execute_frame_phases(
     FrameLog log;
     log.frame = currentFrame;
     log.now = now;
+    std::size_t completedInPhase = 0;
 
     try {
         log.phases.push_back("begin_frame");
@@ -781,15 +925,38 @@ FrameLog Runtime::execute_frame_phases(
         log.phases.push_back("expire_intents");
         log.expired_intents = ownedWorld.destroy_expired_intents(now);
 
-        log.phases.push_back("run_systems");
+        log.phases.push_back("run_input_systems");
         ownedWorld.run_systems(
-            currentFrame, now, &log.systems_run, &log.failure_system);
+            currentFrame, now, SystemPhase::Input,
+            &completedInPhase, &log.failure_system);
+        log.systems_run += completedInPhase;
+        completedInPhase = 0;
+
+        log.phases.push_back("run_behavior_systems");
+        ownedWorld.run_systems(
+            currentFrame, now, SystemPhase::Behavior,
+            &completedInPhase, &log.failure_system);
+        log.systems_run += completedInPhase;
+        completedInPhase = 0;
+
+        log.phases.push_back("run_decision_systems");
+        ownedWorld.run_systems(
+            currentFrame, now, SystemPhase::Decision,
+            &completedInPhase, &log.failure_system);
+        log.systems_run += completedInPhase;
+        completedInPhase = 0;
 
         log.phases.push_back("resolve_intents");
         log.expired_intents += ownedWorld.destroy_expired_intents(now);
-        log.resolution_requests = resolutions.size();
-
+        auto resolvedTargets = ownedWorld.resolution_targets();
         for (const auto& [type, components] : resolutions) {
+            auto& targets = resolvedTargets[type];
+            for (const auto& [name, slot] : components)
+                targets.insert_or_assign(name, slot);
+        }
+        log.resolution_requests = resolvedTargets.size();
+
+        for (const auto& [type, components] : resolvedTargets) {
             std::map<ComponentName, IntentId> selected = ownedWorld.resolve_intents(type, components, now);
             log.selected_intents += selected.size();
             log.intent_selections.emplace(type, std::move(selected));
@@ -798,11 +965,13 @@ FrameLog Runtime::execute_frame_phases(
         log.phases.push_back("end_frame");
         log.completed = true;
     } catch (const std::exception& error) {
+        log.systems_run += completedInPhase;
         log.failure_phase = log.phases.empty() ? "begin_frame" : log.phases.back();
         log.failure_message = error.what();
         latestFrameLog = log;
         throw;
     } catch (...) {
+        log.systems_run += completedInPhase;
         log.failure_phase = log.phases.empty() ? "begin_frame" : log.phases.back();
         log.failure_message = "unknown exception";
         latestFrameLog = log;
@@ -887,6 +1056,7 @@ void Runtime::record_world_evidence() {
                     static_cast<std::uint64_t>(intent.target.slot.generation)}},
                 {"priority", liquid::Value{
                     static_cast<std::uint64_t>(intent.priority)}},
+                {"name", liquid::Value{intent.name}},
                 {"sequence", liquid::Value{intent.sequence}},
                 {"lifetime", liquid::Value{
                     intent.lifetime.kind == IntentLifetimeKind::Persistent
@@ -925,6 +1095,96 @@ void Runtime::record_world_evidence() {
     ownedWorld.clear_script_execution_evidence();
 }
 
+std::vector<ResolvedEffect> Runtime::apply_selections(
+    const FrameLog& frame
+) {
+    std::vector<ResolvedEffect> effects;
+    std::set<ComponentTarget> selectedExternalComponents;
+    for (const auto& [type, selections] : frame.intent_selections) {
+        for (const auto& [name, id] : selections) {
+            const Intent& selected = ownedWorld.intent(id);
+            const ComponentTarget target = selected.target;
+            const auto configured = componentControls.find(target);
+            const ComponentControl control = configured == componentControls.end()
+                ? ComponentControl::SelectionOnly
+                : configured->second;
+
+            if (control == ComponentControl::SelectionOnly)
+                continue;
+            if (control == ComponentControl::InternalState) {
+                ownedWorld.replace_component_value(
+                    target, name, selected.encodedValue);
+                continue;
+            }
+
+            const auto binding = effectBindings.find(target);
+            if (binding == effectBindings.end())
+                throw std::logic_error(
+                    "external component selection has no effect binding");
+            auto effect = ownedWorld.encode_effect(
+                target, name, selected.encodedValue);
+            if (!effect)
+                continue;
+            if (effect->adapterRoute != binding->second.route ||
+                effect->target != binding->second.target) {
+                throw std::invalid_argument(
+                    "effect codec output does not match the stable binding");
+            }
+            selectedExternalComponents.insert(target);
+            effects.push_back(std::move(*effect));
+        }
+    }
+    for (const auto& [target, binding] : effectBindings) {
+        if (!selectedExternalComponents.contains(target))
+            effectsState->clear_desire(binding.route, binding.target);
+    }
+    return effects;
+}
+
+void Runtime::project_authoritative_reports(
+    const std::vector<EffectReport>& reports
+) {
+    for (const EffectReport& report : reports) {
+        if (!effectsState->report_is_authoritative(report))
+            continue;
+        const auto bound = componentsByEffectTarget.find({
+            report.adapterRoute.value(), report.target.value()});
+        if (bound == componentsByEffectTarget.end())
+            continue;
+        const auto binding = effectBindings.find(bound->second);
+        if (binding == effectBindings.end())
+            throw std::logic_error("effect target binding is inconsistent");
+        Value projected = ownedWorld.decode_observed(
+            binding->second.component, *report.observedValue);
+        ownedWorld.replace_component_value(
+            binding->second.component,
+            binding->second.name,
+            projected);
+    }
+}
+
+void Runtime::project_authoritative_observations(
+    const std::vector<ExternalObservation>& observations
+) {
+    for (const ExternalObservation& observation : observations) {
+        if (!effectsState->observation_is_authoritative(observation))
+            continue;
+        const auto bound = componentsByEffectTarget.find({
+            observation.adapterRoute.value(), observation.target.value()});
+        if (bound == componentsByEffectTarget.end())
+            continue;
+        const auto binding = effectBindings.find(bound->second);
+        if (binding == effectBindings.end())
+            throw std::logic_error("effect target binding is inconsistent");
+        Value projected = ownedWorld.decode_observed(
+            binding->second.component, observation.observedValue);
+        ownedWorld.replace_component_value(
+            binding->second.component,
+            binding->second.name,
+            projected);
+    }
+}
+
 liquid::FrameResult Runtime::run_frame(liquid::FrameInput input) {
     ensure_owner_thread();
     if (!effectsState)
@@ -942,10 +1202,17 @@ liquid::FrameResult Runtime::run_frame(liquid::FrameInput input) {
                 {"frame", liquid::Value{currentFrame}},
                 {"now", liquid::Value{input.now}}
             }));
-        effectsState->process_feedback(result.reports);
+        effectsState->process_feedback(
+            result.reports, result.observations);
+        project_authoritative_reports(result.reports);
+        project_authoritative_observations(result.observations);
         result.frame = execute_frame_phases(input.now, input.resolutions);
-        worldEvidenceAttempted = true;
-        record_world_evidence();
+        std::vector<ResolvedEffect> resolvedEffects =
+            apply_selections(result.frame);
+        resolvedEffects.insert(
+            resolvedEffects.end(),
+            input.resolvedEffects.begin(), input.resolvedEffects.end());
+        effectsState->validate_effects(resolvedEffects);
         for (const auto& [type, selections] : result.frame.intent_selections) {
             for (const auto& [name, id] : selections) {
                 effectsState->append(liquid::EventType::ResolutionSelected,
@@ -963,12 +1230,15 @@ liquid::FrameResult Runtime::run_frame(liquid::FrameInput input) {
                     }));
             }
         }
-        for (const auto& effect : input.resolvedEffects) {
+        for (const auto& effect : resolvedEffects) {
             auto command = effectsState->issue(effect, input.now, result.reports);
             if (command)
                 result.commands.push_back(std::move(*command));
         }
         effectsState->retry_due(input.now, result.reports);
+        project_authoritative_reports(result.reports);
+        worldEvidenceAttempted = true;
+        record_world_evidence();
         effectsState->prune_terminal_history();
         effectsState->append(liquid::EventType::FrameCompleted,
             liquid::detail::event_payload({
@@ -1088,6 +1358,14 @@ void Runtime::reconcile_indeterminate(
         ? liquid::CommandStatus::Applied
         : liquid::CommandStatus::Failed;
     const liquid::Value reconciledObserved = observedValue;
+    std::uint64_t revisionValue = state.command.commandId.value;
+    const auto priorRevision = effectsState->observedRevisions.find(key);
+    if (priorRevision != effectsState->observedRevisions.end()) {
+        if (priorRevision->second.value == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("state revision exhausted");
+        revisionValue = priorRevision->second.value + 1;
+    }
+    const liquid::StateRevision revision{revisionValue};
     liquid::EffectReport terminalReport{
         effectsState->session,
         state.command.commandId,
@@ -1098,7 +1376,8 @@ void Runtime::reconcile_indeterminate(
             ? std::optional<liquid::Value>{observedValue}
             : std::nullopt,
         "host reconciliation",
-        state.command.issuedAtMs
+        state.command.issuedAtMs,
+        revision
     };
     effectsState->transition(state, reconciledStatus, "host reconciliation");
     effectsState->append(liquid::EventType::ObservedStateChanged,
@@ -1108,10 +1387,12 @@ void Runtime::reconcile_indeterminate(
             {"command_id", liquid::Value{state.command.commandId.value}},
             {"route", liquid::Value{route.value()}},
             {"target", liquid::Value{target.value()}},
+            {"state_revision", liquid::Value{revision.value}},
             {"observed", std::move(observedValue)}
         }));
     state.terminalReport = std::move(terminalReport);
     effectsState->observed.insert_or_assign(key, reconciledObserved);
+    effectsState->observedRevisions.insert_or_assign(key, revision);
     effectsState->authoritativeByTarget.insert_or_assign(
         key, state.command.commandId.value);
     effectsState->store->flush();

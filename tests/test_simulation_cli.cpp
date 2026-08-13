@@ -101,9 +101,9 @@ TEST_CASE("test_simulation_cli") {
     const std::string expectedSuccess =
         "scenario initial_brightness=10 frame_count=2\n"
         "script status=success created_intents=2 intent_ids=1,2 diagnostic=\"\"\n"
-        "frame number=0 now_ms=100 completed=true phases=begin_frame,expire_intents,run_systems,resolve_intents,end_frame expired_intents=0 resolution_requests=1 selected_intents=1 systems_completed=2\n"
+        "frame number=0 now_ms=100 completed=true phases=begin_frame,expire_intents,run_input_systems,run_behavior_systems,run_decision_systems,resolve_intents,end_frame expired_intents=0 resolution_requests=1 selected_intents=1 systems_completed=2\n"
         "selection frame=0 type=Light type_id=0 component=officeLight intent_id=2 brightness=70 priority=high lifetime=until_time expires_at_ms=105\n"
-        "frame number=1 now_ms=105 completed=true phases=begin_frame,expire_intents,run_systems,resolve_intents,end_frame expired_intents=1 resolution_requests=1 selected_intents=1 systems_completed=2\n"
+        "frame number=1 now_ms=105 completed=true phases=begin_frame,expire_intents,run_input_systems,run_behavior_systems,run_decision_systems,resolve_intents,end_frame expired_intents=1 resolution_requests=1 selected_intents=1 systems_completed=2\n"
         "selection frame=1 type=Light type_id=0 component=officeLight intent_id=1 brightness=30 priority=low lifetime=persistent\n"
         "final component=Light.officeLight brightness=10 tracking_system_runs=2 frames_completed=2 faulted=false\n";
 
@@ -133,7 +133,7 @@ TEST_CASE("test_simulation_cli") {
     REQUIRE(failure.output ==
         "scenario initial_brightness=10 frame_count=1\n"
         "script status=runtime_error created_intents=0 intent_ids=- diagnostic=\"script\\nfailure\\xc2\\xa0\"\n"
-        "frame number=0 now_ms=100 completed=true phases=begin_frame,expire_intents,run_systems,resolve_intents,end_frame expired_intents=0 resolution_requests=1 selected_intents=0 systems_completed=2\n"
+        "frame number=0 now_ms=100 completed=true phases=begin_frame,expire_intents,run_input_systems,run_behavior_systems,run_decision_systems,resolve_intents,end_frame expired_intents=0 resolution_requests=1 selected_intents=0 systems_completed=2\n"
         "final component=Light.officeLight brightness=10 tracking_system_runs=1 frames_completed=1 faulted=false\n");
     REQUIRE(failure.error.empty());
 
@@ -233,7 +233,7 @@ TEST_CASE("test_simulation_cli") {
         REQUIRE(oversized.output ==
             "scenario initial_brightness=10 frame_count=1\n"
             "script status=source_limit_exceeded created_intents=0 intent_ids=- diagnostic=\"Lua source exceeds size limit\"\n"
-            "frame number=0 now_ms=100 completed=true phases=begin_frame,expire_intents,run_systems,resolve_intents,end_frame expired_intents=0 resolution_requests=1 selected_intents=0 systems_completed=2\n"
+            "frame number=0 now_ms=100 completed=true phases=begin_frame,expire_intents,run_input_systems,run_behavior_systems,run_decision_systems,resolve_intents,end_frame expired_intents=0 resolution_requests=1 selected_intents=0 systems_completed=2\n"
             "final component=Light.officeLight brightness=10 tracking_system_runs=1 frames_completed=1 faulted=false\n");
         REQUIRE(oversized.error.empty());
     }

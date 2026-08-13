@@ -52,6 +52,79 @@ const TypeName& ComponentRegistry::type_name(ComponentTypeId type) const {
     return typeNames[type];
 }
 
+const AdapterRoute& ComponentRegistry::effect_route(ComponentTypeId type) const {
+    if (!component_type_exists(type))
+        throw std::runtime_error("component type not registered");
+    const auto found = effectCodecs.find(type);
+    if (found == effectCodecs.end())
+        throw std::runtime_error("effect codec not registered");
+    return found->second->route();
+}
+
+std::optional<liquid::ResolvedEffect> ComponentRegistry::encode_effect(
+    ComponentTypeId type,
+    const ComponentName& name,
+    const liquid::Value& value
+) const {
+    if (!component_type_exists(type))
+        throw std::runtime_error("component type not registered");
+    const auto found = effectCodecs.find(type);
+    if (found == effectCodecs.end())
+        return std::nullopt;
+    return found->second->encode(name, value);
+}
+
+liquid::Value ComponentRegistry::decode_observed(
+    ComponentTypeId type,
+    const liquid::Value& value
+) const {
+    if (!component_type_exists(type))
+        throw std::runtime_error("component type not registered");
+    const auto found = effectCodecs.find(type);
+    if (found == effectCodecs.end())
+        throw std::runtime_error("effect codec not registered");
+    return found->second->decode_observed(value);
+}
+
+liquid::Value ComponentRegistry::encode_component(
+    ComponentTypeId type,
+    ComponentSlotId slot
+) const {
+    const Slot rawSlot = validate_slot(type, slot);
+    const auto codec = codecs.find(type);
+    const auto storage = storages.find(type);
+    if (codec == codecs.end() || storage == storages.end())
+        throw std::runtime_error("component codec not registered");
+    return codec->second->encode_slot(*storage->second, rawSlot);
+}
+
+liquid::Value ComponentRegistry::replace_component(
+    ComponentTypeId type,
+    ComponentSlotId slot,
+    const liquid::Value& value
+) {
+    const Slot rawSlot = validate_slot(type, slot);
+    const auto codec = codecs.find(type);
+    const auto storage = storages.find(type);
+    if (codec == codecs.end() || storage == storages.end())
+        throw std::runtime_error("component codec not registered");
+    return codec->second->replace_slot(*storage->second, rawSlot, value);
+}
+
+const ComponentName& ComponentRegistry::component_name(
+    ComponentTypeId type,
+    ComponentSlotId slot
+) const {
+    validate_slot(type, slot);
+    const auto types = slotNames.find(type);
+    if (types == slotNames.end())
+        throw std::runtime_error("component type not registered");
+    const auto found = types->second.find(slot);
+    if (found == types->second.end())
+        throw std::runtime_error("component slot has no stable name");
+    return found->second;
+}
+
 ComponentSlotId ComponentRegistry::named_slot(ComponentTypeId type, const ComponentName& name) const {
     auto typeComponents = componentNames.find(type);
 

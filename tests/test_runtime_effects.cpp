@@ -119,6 +119,26 @@ struct MutatingThrowingSystem final : liquid::System {
     }
 };
 
+struct ObservedLevelSystem final : liquid::System {
+    static constexpr std::string_view stableName =
+        "tests.runtime.effects.ObservedLevelSystem";
+    static constexpr std::uint32_t version = 1;
+    liquid::ComponentType<std::uint64_t> type;
+    liquid::BehaviorId behavior;
+    std::vector<std::uint64_t>* levels = nullptr;
+
+    ObservedLevelSystem(
+        liquid::ComponentType<std::uint64_t> componentType,
+        liquid::BehaviorId owner,
+        std::vector<std::uint64_t>* observedLevels)
+        : type(componentType), behavior(owner), levels(observedLevels) {
+    }
+
+    void run(liquid::World& world, liquid::FrameNumber, liquid::IntentTime) override {
+        levels->push_back(*world.read_component(type, behavior, "level"));
+    }
+};
+
 liquid::ComponentCodec<std::uint64_t> unsigned_codec() {
     return {
         [](const std::uint64_t value) { return liquid::Value{value}; },
@@ -160,6 +180,109 @@ liquid::RuntimeOptions options(liquid::FeedbackTiming timing) {
     return result;
 }
 
+liquid::EffectCodec<std::uint64_t> light_effect_codec() {
+    return {
+        liquid::AdapterRoute{"test.light"},
+        [](const liquid::ComponentName& name, std::uint64_t desired)
+            -> std::optional<liquid::ResolvedEffect> {
+            return liquid::ResolvedEffect{
+                liquid::AdapterRoute{"test.light"},
+                liquid::EffectTarget{name},
+                liquid::Value{desired}};
+        },
+        [](const liquid::Value& observed) {
+            return observed.as_unsigned_integer();
+        }
+    };
+}
+
+}
+
+TEST_CASE("selected intents drive deferred effects and confirmed components") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::ReadWrite);
+    const ComponentSlotId slot =
+        world.get_components(levelType, behavior).at("level");
+    runtime.bind_effect_component(
+        levelType, "level", EffectTarget{"level"});
+
+    std::vector<std::uint64_t> observedByInput;
+    world.register_system<ObservedLevelSystem>(
+        Signature{}, SystemPhase::Input,
+        levelType, behavior, &observedByInput);
+    world.create_intent(
+        behavior, levelType, slot, IntentLifetime::persistent(),
+        std::uint64_t{70}, IntentPriority::High);
+
+    const FrameResult issued = runtime.run_frame(FrameInput{100, {}, {}});
+    REQUIRE(issued.commands.size() == 1);
+    REQUIRE(issued.commands.front().effect.desiredValue == Value{std::uint64_t{70}});
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 10);
+    REQUIRE(observedByInput == std::vector<std::uint64_t>{10});
+
+    const FrameResult confirmed = runtime.run_frame(FrameInput{105, {}, {}});
+    REQUIRE(confirmed.reports.size() == 1);
+    REQUIRE(confirmed.commands.empty());
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 70);
+    REQUIRE(observedByInput == std::vector<std::uint64_t>{10, 70});
+}
+
+TEST_CASE("external observations project before input systems by revision") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    runtime.bind_effect_component(
+        levelType, "level", EffectTarget{"level"});
+
+    std::vector<std::uint64_t> observedByInput;
+    world.register_system<ObservedLevelSystem>(
+        Signature{}, SystemPhase::Input,
+        levelType, behavior, &observedByInput);
+    FeedbackSender feedback = runtime.feedback_sender();
+    REQUIRE(feedback.try_send(ExternalObservation{
+        SessionId{42}, AdapterRoute{"test.light"}, EffectTarget{"level"},
+        Value{std::uint64_t{25}}, StateRevision{2}, 100}) ==
+        FeedbackSendResult::Sent);
+
+    const FrameResult accepted = runtime.run_frame(FrameInput{100, {}, {}});
+    REQUIRE(accepted.observations.size() == 1);
+    REQUIRE(observedByInput == std::vector<std::uint64_t>{25});
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 25);
+
+    REQUIRE(feedback.try_send(ExternalObservation{
+        SessionId{42}, AdapterRoute{"test.light"}, EffectTarget{"level"},
+        Value{std::uint64_t{15}}, StateRevision{1}, 101}) ==
+        FeedbackSendResult::Sent);
+    const FrameResult stale = runtime.run_frame(FrameInput{101, {}, {}});
+    REQUIRE(stale.observations.empty());
+    REQUIRE(observedByInput == std::vector<std::uint64_t>{25, 25});
+
+    REQUIRE(feedback.try_send(ExternalObservation{
+        SessionId{42}, AdapterRoute{"test.light"}, EffectTarget{"level"},
+        Value{std::uint64_t{30}}, StateRevision{2}, 102}) ==
+        FeedbackSendResult::Sent);
+    const FrameResult conflict = runtime.run_frame(FrameInput{102, {}, {}});
+    REQUIRE(conflict.observations.empty());
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 25);
 }
 
 TEST_CASE("test_runtime_effects") {
@@ -637,7 +760,7 @@ TEST_CASE("failed frames preserve partial mutation and system evidence") {
                  object.at("after").as_unsigned_integer() == 80);
         } else if (record.type == liquid::EventType::FrameFailed) {
             sawFailure = object.at("frame").as_unsigned_integer() == 0 &&
-                object.at("phase").as_string() == "run_systems" &&
+                object.at("phase").as_string() == "run_decision_systems" &&
                 object.at("system").as_string() ==
                     "tests.runtime.effects.MutatingThrowingSystem@1" &&
                 object.at("message").as_string() == "mutation then failure";
