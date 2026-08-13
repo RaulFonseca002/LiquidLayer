@@ -1,10 +1,10 @@
-# Liquid Concepts and Architecture v0.2
+# Liquid Concepts and Architecture v0.3
 
-**Status:** Living baseline during M6 Simulation CLI
+**Status:** Living baseline during Solid v0.1 finalization
 **Scope:** Conceptual architecture, vocabulary, and accepted design direction  
 **Project:** Liquid Layer  
 **Engine / framework:** Liquid  
-**Current development stage:** Solid, M6 Simulation CLI
+**Current development stage:** Solid v0.1, S0-S7 finalization
 **Date:** August 2026
 
 ---
@@ -339,7 +339,7 @@ Folder responsibility:
 - The domain term is behavior, not entity, where possible.
 - M1 uses simple world-local `BehaviorId` and `IntentId` handles.
 - ID recycling is allowed through registry APIs in M1.
-- Strong or generational IDs are deferred unless needed later.
+- Public behavior, intent, component, system, and related runtime handles are world-bound generational handles in v0.1; stale and cross-world handles are rejected and exhausted generations retire their slots.
 - Composite lookup keys may pack two 16-bit handles into one 32-bit value when that makes ownership or target lookup simpler and deterministic.
 - `IntentId` is now a global recyclable handle to an intent record; owner and target are stored on the record and indexed separately.
 - Component intent targets use `ComponentTypeId + ComponentSlotId` and are indexed as type -> slot -> intent IDs.
@@ -797,25 +797,20 @@ local os = require("os")
 
 ---
 
-## 14. Open Decisions
+## 14. Solid v0.1 Contract
 
-These are intentionally not finalized in this document:
+The owner-approved Solid v0.1 completion contract is normative in the focused documents under `docs/`:
 
-- future C++ APIs after the completed M1 core;
-- higher-level runtime query APIs beyond M1 `name -> ComponentSlotId` access maps;
-- exact intent queue and target-key representation;
-- serialization format;
-- event log format;
-- replay format;
-- Go integration approach;
-- LLM integration approach;
-- behavior trigger representation;
-- adapter API;
-- future input, event, effect, batching, and replay phases around the settled M4 core order;
-- future machine-readable component-schema and capability-manifest representation for model prompts;
-- future diagnostic/log record representation beyond the current bounded execution result.
+- `PUBLIC_API.md` defines the installed framework surface, handles, codecs, and mutation boundary;
+- `EVENT_FORMAT_V1.md` defines canonical records, durability, recovery, checkpoints, and retention;
+- `THREADING.md` defines owner-thread confinement and the bounded concurrent feedback boundary;
+- `ADAPTER_CONTRACT.md` defines effects, commands, reports, timing, retry, idempotency, and reconciliation;
+- `REPLAY.md` distinguishes generic projection from host-assisted execution verification;
+- `COMPATIBILITY.md`, `SECURITY_BOUNDARY.md`, and `SUPPORT.md` state the release claims and limits.
 
-These belong in the implementation guide and ADRs.
+The v0.1 frame order is `begin -> snapshot/apply queued feedback -> expire -> systems -> expire same-frame intents -> resolve desires -> reconcile commands -> record issuance/attempts -> dispatch -> apply permitted synchronous immediate reports -> durably complete or fail -> end`.
+
+Remaining open decisions belong to later Liquid stages: Go integration, LLM integration, adaptive behavior triggers and policy, real hardware protocols, voice, biosignals, and final Liquid Layer application behavior. They must not weaken the deterministic Solid authority boundary.
 
 ---
 
