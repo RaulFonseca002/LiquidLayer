@@ -43,7 +43,9 @@ std::string escape_text(std::string_view value) {
     std::string escaped;
     escaped.reserve(value.size());
 
-    for (unsigned char character : value) {
+    for (const char textCharacter : value) {
+        const unsigned char character =
+            static_cast<unsigned char>(textCharacter);
         switch (character) {
         case '\\': escaped += "\\\\"; break;
         case '\n': escaped += "\\n"; break;
