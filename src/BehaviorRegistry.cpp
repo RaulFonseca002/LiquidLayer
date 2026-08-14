@@ -1,5 +1,6 @@
 #include "liquid/detail/BehaviorRegistry.hpp"
 
+#include <cstdint>
 #include <numeric>
 #include <limits>
 #include <stdexcept>
@@ -10,7 +11,7 @@ BehaviorRegistry::BehaviorRegistry(WorldInstanceId world)
     : worldId(world),
       generations(MaxBehaviours, 1) {
     availableSlots.resize(MaxBehaviours);
-    std::iota(availableSlots.rbegin(), availableSlots.rend(), 0);
+    std::iota(availableSlots.rbegin(), availableSlots.rend(), std::uint16_t{0});
 }
 
 BehaviorId BehaviorRegistry::create() {

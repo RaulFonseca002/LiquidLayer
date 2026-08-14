@@ -989,3 +989,197 @@ TEST_CASE("Runtime rejects malformed persisted command records") {
     invalidStatus.emplace("status", Value("unknown"));
     expect_restore_error(Value(std::move(invalidStatus)));
 }
+
+TEST_CASE("component targets order and compare across type and slot") {
+    using namespace liquid;
+
+    const ComponentTarget base{ComponentTypeId{2}, ComponentSlotId{3}};
+    REQUIRE(base == ComponentTarget{ComponentTypeId{2}, ComponentSlotId{3}});
+    REQUIRE_FALSE(base == ComponentTarget{ComponentTypeId{2}, ComponentSlotId{4}});
+    REQUIRE_FALSE(base == ComponentTarget{ComponentTypeId{9}, ComponentSlotId{3}});
+
+    REQUIRE(ComponentTarget{ComponentTypeId{1}, ComponentSlotId{9}} < base);
+    REQUIRE_FALSE(base < ComponentTarget{ComponentTypeId{1}, ComponentSlotId{9}});
+    REQUIRE(ComponentTarget{ComponentTypeId{2}, ComponentSlotId{1}} < base);
+    REQUIRE_FALSE(base < ComponentTarget{ComponentTypeId{2}, ComponentSlotId{1}});
+    REQUIRE_FALSE(base < base);
+}
+
+TEST_CASE("event records and store metadata compare by every field") {
+    using namespace liquid;
+
+    const EventRecord record{
+        RecordId{1}, EventType::FrameStarted, 1, Value{true}};
+    EventRecord other = record;
+    REQUIRE(record == other);
+    other.sequence = RecordId{2};
+    REQUIRE_FALSE(record == other);
+    other = record;
+    other.type = EventType::FrameCompleted;
+    REQUIRE_FALSE(record == other);
+    other = record;
+    other.version = 2;
+    REQUIRE_FALSE(record == other);
+    other = record;
+    other.payload = Value{false};
+    REQUIRE_FALSE(record == other);
+
+    const EventStoreMetadata storeMetadata = metadata();
+    EventStoreMetadata otherMetadata = storeMetadata;
+    REQUIRE(storeMetadata == otherMetadata);
+    otherMetadata.session = SessionId{9};
+    REQUIRE_FALSE(storeMetadata == otherMetadata);
+    otherMetadata = storeMetadata;
+    otherMetadata.engineVersion = "0.1.0-other";
+    REQUIRE_FALSE(storeMetadata == otherMetadata);
+    otherMetadata = storeMetadata;
+    otherMetadata.feedbackTiming = FeedbackTiming::Immediate;
+    REQUIRE_FALSE(storeMetadata == otherMetadata);
+    otherMetadata = storeMetadata;
+    otherMetadata.fileGeneration = 2;
+    REQUIRE_FALSE(storeMetadata == otherMetadata);
+    otherMetadata = storeMetadata;
+    otherMetadata.fileFormatVersion = 2;
+    REQUIRE_FALSE(storeMetadata == otherMetadata);
+}
+
+TEST_CASE("external observations require a valid session and state revision") {
+    using namespace liquid;
+
+    const ExternalObservation observation{
+        SessionId{1},
+        AdapterRoute{"edge.adapter"},
+        EffectTarget{"office"},
+        Value{std::uint64_t{70}},
+        StateRevision{1},
+        10};
+    validate_external_observation(observation);
+
+    ExternalObservation invalidObservation = observation;
+    invalidObservation.sessionId = SessionId{};
+    REQUIRE_THROWS_AS(
+        validate_external_observation(invalidObservation), std::invalid_argument);
+
+    invalidObservation = observation;
+    invalidObservation.stateRevision = StateRevision{};
+    REQUIRE_THROWS_AS(
+        validate_external_observation(invalidObservation), std::invalid_argument);
+
+    EffectReport reportWithoutRevision = applied_report();
+    reportWithoutRevision.stateRevision = StateRevision{};
+    REQUIRE_THROWS_AS(
+        validate_effect_report(reportWithoutRevision), std::invalid_argument);
+}
+
+TEST_CASE("Value covers null text edges and the canonical null round-trip") {
+    using namespace liquid;
+
+    REQUIRE(Value{static_cast<const char*>(nullptr)} == Value{std::string{}});
+
+    const Value fourByte{std::string{"\xF0\x9F\x98\x80"}};
+    REQUIRE(fourByte.kind() == Value::Kind::String);
+
+    REQUIRE_THROWS_AS(Value{std::string{"\xF8"}}, std::invalid_argument);
+    REQUIRE_THROWS_AS(Value{std::string{"\xF0\x9F"}}, std::invalid_argument);
+
+    Value::Object invalidKey;
+    invalidKey.emplace(std::string{"\x80", 1}, Value{true});
+    REQUIRE_THROWS_AS(Value{std::move(invalidKey)}, std::invalid_argument);
+
+    Value::Array overNodeLimit;
+    for (int outer = 0; outer < 5; ++outer) {
+        Value::Array inner;
+        for (int item = 0; item < 4000; ++item)
+            inner.emplace_back(true);
+        overNodeLimit.emplace_back(std::move(inner));
+    }
+    REQUIRE_THROWS_AS(Value{std::move(overNodeLimit)}, std::invalid_argument);
+
+    const std::vector<std::uint8_t> encodedNull = encode_value(Value{});
+    REQUIRE(decode_value(encodedNull) == Value{});
+}
+
+TEST_CASE("effect record equality distinguishes every field") {
+    using namespace liquid;
+
+    const ResolvedEffect effect{
+        AdapterRoute{"edge.adapter"}, EffectTarget{"office"},
+        Value{std::uint64_t{70}}};
+    REQUIRE_FALSE(effect == ResolvedEffect{
+        AdapterRoute{"other.adapter"}, EffectTarget{"office"},
+        Value{std::uint64_t{70}}});
+    REQUIRE_FALSE(effect == ResolvedEffect{
+        AdapterRoute{"edge.adapter"}, EffectTarget{"hall"},
+        Value{std::uint64_t{70}}});
+    REQUIRE_FALSE(effect == ResolvedEffect{
+        AdapterRoute{"edge.adapter"}, EffectTarget{"office"},
+        Value{std::uint64_t{30}}});
+
+    const EffectCommand baseCommand{SessionId{1}, CommandId{1}, effect, 10};
+    EffectCommand otherCommand = baseCommand;
+    otherCommand.sessionId = SessionId{2};
+    REQUIRE_FALSE(baseCommand == otherCommand);
+    otherCommand = baseCommand;
+    otherCommand.commandId = CommandId{2};
+    REQUIRE_FALSE(baseCommand == otherCommand);
+    otherCommand = baseCommand;
+    otherCommand.effect.target = EffectTarget{"hall"};
+    REQUIRE_FALSE(baseCommand == otherCommand);
+
+    const EffectReport baseReport = applied_report();
+    EffectReport otherReport = baseReport;
+    otherReport.sessionId = SessionId{2};
+    REQUIRE_FALSE(baseReport == otherReport);
+    otherReport = baseReport;
+    otherReport.commandId = CommandId{2};
+    REQUIRE_FALSE(baseReport == otherReport);
+    otherReport = baseReport;
+    otherReport.adapterRoute = AdapterRoute{"other.adapter"};
+    REQUIRE_FALSE(baseReport == otherReport);
+    otherReport = baseReport;
+    otherReport.target = EffectTarget{"hall"};
+    REQUIRE_FALSE(baseReport == otherReport);
+    otherReport = baseReport;
+    otherReport.status = CommandStatus::Failed;
+    REQUIRE_FALSE(baseReport == otherReport);
+    otherReport = baseReport;
+    otherReport.observedValue.reset();
+    REQUIRE_FALSE(baseReport == otherReport);
+    otherReport = baseReport;
+    otherReport.diagnostic = "different";
+    REQUIRE_FALSE(baseReport == otherReport);
+    otherReport = baseReport;
+    otherReport.reportedAtMs = 99;
+    REQUIRE_FALSE(baseReport == otherReport);
+
+    const ExternalObservation baseObservation{
+        SessionId{1}, AdapterRoute{"edge.adapter"}, EffectTarget{"office"},
+        Value{std::uint64_t{70}}, StateRevision{1}, 10};
+    ExternalObservation otherObservation = baseObservation;
+    otherObservation.sessionId = SessionId{2};
+    REQUIRE_FALSE(baseObservation == otherObservation);
+    otherObservation = baseObservation;
+    otherObservation.adapterRoute = AdapterRoute{"other.adapter"};
+    REQUIRE_FALSE(baseObservation == otherObservation);
+    otherObservation = baseObservation;
+    otherObservation.target = EffectTarget{"hall"};
+    REQUIRE_FALSE(baseObservation == otherObservation);
+    otherObservation = baseObservation;
+    otherObservation.observedValue = Value{std::uint64_t{30}};
+    REQUIRE_FALSE(baseObservation == otherObservation);
+    otherObservation = baseObservation;
+    otherObservation.stateRevision = StateRevision{2};
+    REQUIRE_FALSE(baseObservation == otherObservation);
+
+    const DispatchResult baseDispatch = DispatchResult::accepted();
+    DispatchResult otherDispatch = baseDispatch;
+    otherDispatch.disposition = DispatchDisposition::Rejected;
+    REQUIRE_FALSE(baseDispatch == otherDispatch);
+    otherDispatch = baseDispatch;
+    otherDispatch.immediateReport = applied_report();
+    REQUIRE_FALSE(baseDispatch == otherDispatch);
+    otherDispatch = baseDispatch;
+    otherDispatch.diagnostic = "different";
+    REQUIRE_FALSE(baseDispatch == otherDispatch);
+    REQUIRE(baseDispatch == DispatchResult::accepted());
+}

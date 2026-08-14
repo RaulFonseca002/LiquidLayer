@@ -133,7 +133,6 @@ struct EffectReport {
     std::uint64_t reportedAtMs = 0;
     StateRevision stateRevision;
 
-    EffectReport() = default;
     EffectReport(
         SessionId session,
         CommandId command,
