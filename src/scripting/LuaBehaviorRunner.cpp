@@ -1433,8 +1433,8 @@ LuaExecutionResult LuaBehaviorRunner::execute(
     constexpr std::uint64_t offset = 14695981039346656037ULL;
     constexpr std::uint64_t prime = 1099511628211ULL;
     std::uint64_t hash = offset;
-    for (const unsigned char byte : source) {
-        hash ^= byte;
+    for (const char sourceCharacter : source) {
+        hash ^= static_cast<unsigned char>(sourceCharacter);
         hash *= prime;
     }
     static constexpr char digits[] = "0123456789abcdef";
@@ -1478,8 +1478,8 @@ LuaExecutionResult LuaBehaviorRunner::execute_lifecycle(
     constexpr std::uint64_t offset = 14695981039346656037ULL;
     constexpr std::uint64_t prime = 1099511628211ULL;
     std::uint64_t hash = offset;
-    for (const unsigned char byte : source) {
-        hash ^= byte;
+    for (const char sourceCharacter : source) {
+        hash ^= static_cast<unsigned char>(sourceCharacter);
         hash *= prime;
     }
     static constexpr char digits[] = "0123456789abcdef";

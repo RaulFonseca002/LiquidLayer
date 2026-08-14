@@ -34,7 +34,9 @@ AdapterRoute::AdapterRoute(std::string value) : routeValue(std::move(value)) {
         "adapter route"
     );
 
-    for (const unsigned char character : routeValue) {
+    for (const char routeCharacter : routeValue) {
+        const unsigned char character =
+            static_cast<unsigned char>(routeCharacter);
         const bool valid =
             (character >= 'a' && character <= 'z') ||
             (character >= 'A' && character <= 'Z') ||
