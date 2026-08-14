@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="500" viewBox="0 0 760 500" role="img" aria-labelledby="title desc">
+  <title id="title">Liquid deterministic runtime flow</title>
+  <desc id="desc">Intent proposals pass through deterministic resolution, bounded effect dispatch, and validated feedback before observed state changes. Replay evidence records the full loop.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071526"/>
+      <stop offset="1" stop-color="#10283a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#42e8e0"/>
+      <stop offset="1" stop-color="#71a8ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000814" flood-opacity="0.35"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65d9e7"/>
+    </marker>
+  </defs>
+
+  <rect width="760" height="500" rx="28" fill="url(#bg)"/>
+  <text x="40" y="52" fill="#f4fbff" font-family="Inter,Segoe UI,sans-serif" font-size="28" font-weight="700">From intent to verified state</text>
+  <text x="40" y="84" fill="#b6cddd" font-family="Inter,Segoe UI,sans-serif" font-size="20">Deterministic decisions · bounded effects · replayable evidence</text>
+
+  <g filter="url(#shadow)">
+    <rect x="40" y="125" width="300" height="125" rx="18" fill="#122f43" stroke="#2f6178"/>
+    <rect x="420" y="125" width="300" height="125" rx="18" fill="#122f43" stroke="#2f6178"/>
+    <rect x="420" y="325" width="300" height="125" rx="18" fill="#122f43" stroke="#2f6178"/>
+    <rect x="40" y="325" width="300" height="125" rx="18" fill="#153448" stroke="url(#accent)" stroke-width="2"/>
+  </g>
+
+  <text x="64" y="163" fill="#64e6df" font-family="ui-monospace,SFMono-Regular,monospace" font-size="18" font-weight="700">01 · PROPOSE</text>
+  <text x="64" y="201" fill="#f4fbff" font-family="Inter,Segoe UI,sans-serif" font-size="28" font-weight="700">Intent</text>
+  <text x="64" y="229" fill="#b6cddd" font-family="Inter,Segoe UI,sans-serif" font-size="20">C++ or sandboxed Lua</text>
+
+  <text x="444" y="163" fill="#64e6df" font-family="ui-monospace,SFMono-Regular,monospace" font-size="18" font-weight="700">02 · RESOLVE</text>
+  <text x="444" y="201" fill="#f4fbff" font-family="Inter,Segoe UI,sans-serif" font-size="28" font-weight="700">Decision</text>
+  <text x="444" y="229" fill="#b6cddd" font-family="Inter,Segoe UI,sans-serif" font-size="20">Immutable · ordered · typed</text>
+
+  <text x="444" y="363" fill="#64e6df" font-family="ui-monospace,SFMono-Regular,monospace" font-size="18" font-weight="700">03 · DISPATCH</text>
+  <text x="444" y="401" fill="#f4fbff" font-family="Inter,Segoe UI,sans-serif" font-size="28" font-weight="700">Effect</text>
+  <text x="444" y="429" fill="#b6cddd" font-family="Inter,Segoe UI,sans-serif" font-size="20">Bounded command boundary</text>
+
+  <text x="64" y="363" fill="#7fb4ff" font-family="ui-monospace,SFMono-Regular,monospace" font-size="18" font-weight="700">04 · VERIFY</text>
+  <text x="64" y="401" fill="#f4fbff" font-family="Inter,Segoe UI,sans-serif" font-size="28" font-weight="700">Observed state</text>
+  <text x="64" y="429" fill="#b6cddd" font-family="Inter,Segoe UI,sans-serif" font-size="20">Validate, then commit</text>
+
+  <path d="M340 187 H410" stroke="#65d9e7" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M570 250 V315" stroke="#65d9e7" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M420 387 H350" stroke="#65d9e7" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M190 325 V260" stroke="#7aa7c2" stroke-width="2" stroke-dasharray="7 7" marker-end="url(#arrow)"/>
+  <text x="222" y="287" fill="#93afc1" font-family="Inter,Segoe UI,sans-serif" font-size="17">replay + evidence</text>
+</svg>
