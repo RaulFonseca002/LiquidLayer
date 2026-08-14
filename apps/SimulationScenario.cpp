@@ -162,6 +162,17 @@ std::optional<int> brightness_of(const std::optional<Value>& value) {
     return static_cast<int>(brightness);
 }
 
+// Records produced by the opening feedback phase, which the Runtime applies
+// before any system or script logic runs. Observers receive them before the
+// frame's script events so the stream order matches the runtime order.
+bool is_feedback_phase_record(EventType type) {
+    return type == EventType::FrameStarted ||
+        type == EventType::CommandStatusChanged ||
+        type == EventType::ReportReceived ||
+        type == EventType::ObservedStateChanged ||
+        type == EventType::ExternalObservationReceived;
+}
+
 }
 
 void SimulationObserver::run_started(const SimulationOptions&) {}
@@ -273,11 +284,19 @@ SimulationOutcome run_scenario(
             const FrameNumber frameNumber = runtime->frame();
             adapter->deliver_through(now);
             observer.frame_started(frameNumber, now);
-            observer.script_started(frameNumber, now);
             FrameInput input;
             input.now = now;
             FrameResult result = runtime->run_frame(std::move(input));
 
+            // The opening feedback phase ran before any logic; its records
+            // are surfaced before the frame's script events so observers see
+            // authoritative state changes in true runtime order.
+            const std::vector<EventRecord> frameRecords = store.read_all();
+            while (emittedRecords < frameRecords.size() &&
+                is_feedback_phase_record(frameRecords[emittedRecords].type))
+                observer.runtime_record(frameRecords[emittedRecords++]);
+
+            observer.script_started(frameNumber, now);
             const auto& lifecycle = world.get_system<LuaLifecycleSystem>();
             const LuaExecutionResult* script = lifecycle.last_result(behavior);
             if (!script)
@@ -308,9 +327,8 @@ SimulationOutcome run_scenario(
                 }
             }
 
-            const std::vector<EventRecord> records = store.read_all();
-            while (emittedRecords < records.size())
-                observer.runtime_record(records[emittedRecords++]);
+            while (emittedRecords < frameRecords.size())
+                observer.runtime_record(frameRecords[emittedRecords++]);
             observer.frame_completed(result);
 
             const Light* light = world.read_component(

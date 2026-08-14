@@ -250,13 +250,55 @@ void test_silent_adapter_creates_no_false_confirmed_state() {
         std::vector<int>({10, 10, 10, 10}));
 }
 
+void test_projection_precedes_behavior_logic() {
+    // If the device report were applied after script logic, the change
+    // callback could not observe the confirmed 70 in the same frame the
+    // report lands, and 55 would never be proposed or selected.
+    const std::string reactiveSource = R"(
+function on_start(frame)
+    local light = access.Light.officeLight
+    solid.watch(light)
+    light.propose({
+        name = "boost",
+        value = { brightness = 70 },
+        priority = "high",
+        duration_ms = 5
+    })
+end
+
+function on_components_changed(frame, changes)
+    local light = access.Light.officeLight
+    if light.value.brightness == 70 then
+        light.propose({
+            name = "confirm_react",
+            value = { brightness = 55 },
+            priority = "high",
+            duration_ms = 5
+        })
+    end
+end
+)";
+    RecordingObserver observer;
+    const SimulationOutcome outcome = run_scenario(
+        options_with(reactiveSource, {100, 105}), observer);
+
+    assert(outcome.status == SimulationStatus::Success);
+    assert(!outcome.faulted);
+    assert(observer.selectedBrightness == std::vector<int>({70, 55}));
+    assert(observer.actualBrightness == std::vector<int>({10, 10, 70}));
+}
+
 void test_observer_failure_is_a_host_error() {
     FaultingObserver observer;
     const SimulationOutcome outcome = run_scenario(
         options_with(lifecycleSource, {100}), observer);
 
     assert(outcome.status == SimulationStatus::HostError);
-    assert(outcome.framesCompleted == 0);
+    // The observer fails at the script_started boundary, which is emitted
+    // after the frame ran; the completed frame stays counted and the
+    // Runtime itself stays healthy.
+    assert(outcome.framesCompleted == 1);
+    assert(!outcome.faulted);
     assert(outcome.diagnostic.find("observer boundary failure")
         != std::string::npos);
     assert(observer.failure.status == SimulationStatus::HostError);
@@ -281,6 +323,7 @@ int main() {
     test_script_error_is_bounded();
     test_rejected_command_creates_no_false_confirmed_state();
     test_silent_adapter_creates_no_false_confirmed_state();
+    test_projection_precedes_behavior_logic();
     test_observer_failure_is_a_host_error();
     test_invalid_options_are_a_host_error();
 }

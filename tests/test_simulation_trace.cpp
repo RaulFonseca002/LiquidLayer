@@ -105,19 +105,22 @@ int main() {
     assert(traceLines[11].find("\"event\":\"component_snapshot\"") != std::string::npos);
     assert(traceLines[11].find("\"actual_brightness\":10") != std::string::npos);
     assert(traceLines[11].find("\"device_brightness\":70") != std::string::npos);
-    // Frame 105: the applied report is authoritative before behavior logic,
-    // the boost expires, and the fallback is commanded.
-    assert(traceLines[15].find("\"event\":\"desire_disappeared\"") != std::string::npos);
-    assert(traceLines[16].find("\"event\":\"desire_selected\"") != std::string::npos);
-    assert(traceLines[16].find("\"desired_brightness\":30") != std::string::npos);
-    assert(traceLines[17].find("\"event\":\"command_result\"") != std::string::npos);
-    assert(traceLines[19].find("\"event\":\"observed_changed\"") != std::string::npos);
-    assert(traceLines[19].find("\"observed\":70") != std::string::npos);
+    // Frame 105: the applied report is authoritative BEFORE the frame's
+    // script events, then the boost expires and the fallback is commanded.
+    assert(traceLines[13].find("\"event\":\"command_result\"") != std::string::npos);
+    assert(traceLines[15].find("\"event\":\"observed_changed\"") != std::string::npos);
+    assert(traceLines[15].find("\"observed\":70") != std::string::npos);
+    assert(traceLines[16].find("\"event\":\"script_started\"") != std::string::npos);
+    assert(traceLines[18].find("\"event\":\"desire_disappeared\"") != std::string::npos);
+    assert(traceLines[19].find("\"event\":\"desire_selected\"") != std::string::npos);
+    assert(traceLines[19].find("\"desired_brightness\":30") != std::string::npos);
     assert(traceLines[23].find("\"actual_brightness\":70") != std::string::npos);
     assert(traceLines[23].find("\"device_brightness\":30") != std::string::npos);
-    // Frame 110: the fallback report confirms 30 and desire matches state.
-    assert(traceLines[30].find("\"event\":\"observed_changed\"") != std::string::npos);
-    assert(traceLines[30].find("\"observed\":30") != std::string::npos);
+    // Frame 110: the fallback report confirms 30 before logic, and desire
+    // matches confirmed state.
+    assert(traceLines[27].find("\"event\":\"observed_changed\"") != std::string::npos);
+    assert(traceLines[27].find("\"observed\":30") != std::string::npos);
+    assert(traceLines[28].find("\"event\":\"script_started\"") != std::string::npos);
     assert(traceLines[32].find("\"actual_brightness\":30") != std::string::npos);
     assert(traceLines[32].find("\"device_brightness\":30") != std::string::npos);
     assert(traceLines[33].find("\"event\":\"run_completed\"") != std::string::npos);
