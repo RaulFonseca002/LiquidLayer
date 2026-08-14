@@ -1,9 +1,12 @@
-#include "liquid/IntentRegistry.hpp"
+#include "liquid/detail/IntentRegistry.hpp"
 
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <set>
 #include <stdexcept>
+
+using namespace liquid;
+using liquid::detail::IntentRegistry;
 
 struct Light {
     int brightness = 0;
@@ -50,10 +53,10 @@ void expect_throw(Function function)
         thrown = true;
     }
 
-    assert(thrown);
+    REQUIRE(thrown);
 }
 
-int main()
+TEST_CASE("test_intent_registry")
 {
     {
         IntentRegistry intents;
@@ -65,17 +68,37 @@ int main()
 
         IntentId id = intents.create(owner, lightType, slot, IntentLifetime::persistent(), Light{60});
 
-        assert(intents.exists(id));
-        assert(intents.owner_of(id) == owner);
-        assert(intents.target_of(id) == (ComponentTarget{lightType.id, slot}));
-        assert(intents.lifetime_of(id).kind == IntentLifetimeKind::Persistent);
-        assert(intents.intent(id).id == id);
-        assert(intents.intent(id).owner == owner);
-        assert(intents.typed_intent(lightType, id).value.brightness == 60);
-        assert(intents.intents_for(lightType.id, slot).size() == 1);
-        assert(intents.target_index().at(lightType.id).at(slot).contains(id));
-        assert(intents.size(owner) == 1);
-        assert(!intents.exists(id + 100));
+        REQUIRE(intents.exists(id));
+        REQUIRE(intents.owner_of(id) == owner);
+        REQUIRE(intents.target_of(id) == (ComponentTarget{lightType.id, slot}));
+        REQUIRE(intents.lifetime_of(id).kind == IntentLifetimeKind::Persistent);
+        REQUIRE(intents.intent(id).id == id);
+        REQUIRE(intents.intent(id).owner == owner);
+        REQUIRE(intents.typed_intent(lightType, id).value.brightness == 60);
+        REQUIRE(intents.intents_for(lightType.id, slot).size() == 1);
+        REQUIRE(intents.target_index().at(lightType.id).at(slot).contains(id));
+        REQUIRE(intents.size(owner) == 1);
+        REQUIRE(!intents.exists(id + 100));
+    }
+
+    {
+        IntentRegistry intents;
+        BehaviorId owner = 1;
+        ComponentType<Light> lightType{0};
+        ComponentSlotId slot = 2;
+        intents.create_behavior_pool(owner);
+
+        IntentId first = intents.create(owner, lightType, slot, IntentLifetime::persistent(), Light{10});
+        IntentId second = intents.create(owner, lightType, slot, IntentLifetime::persistent(), Light{20});
+        intents.destroy(first);
+        IntentId recycled = intents.create(owner, lightType, slot, IntentLifetime::persistent(), Light{30});
+
+        REQUIRE(recycled.slot == first.slot);
+        REQUIRE(recycled.generation > first.generation);
+        REQUIRE(intents.intent(recycled).sequence > intents.intent(second).sequence);
+
+        auto selected = intents.select(lightType.id, {{"light", slot}});
+        REQUIRE(selected.at("light") == recycled);
     }
 
     {
@@ -115,9 +138,9 @@ int main()
             );
         });
 
-        assert(intents.size() == 0);
-        assert(intents.size(owner) == 0);
-        assert(intents.target_index().empty());
+        REQUIRE(intents.size() == 0);
+        REQUIRE(intents.size(owner) == 0);
+        REQUIRE(intents.target_index().empty());
 
         IntentId first = intents.create(
             owner,
@@ -126,7 +149,7 @@ int main()
             IntentLifetime::persistent(),
             Light{20}
         );
-        assert(first == 1);
+        REQUIRE(first.slot == 1);
     }
 
     {
@@ -149,10 +172,10 @@ int main()
                 );
             });
 
-            assert(intents.size() == 0);
-            assert(intents.size(owner) == 0);
-            assert(intents.intents_for(valueType.id, slot).empty());
-            assert(intents.target_index().empty());
+            REQUIRE(intents.size() == 0);
+            REQUIRE(intents.size(owner) == 0);
+            REQUIRE(intents.intents_for(valueType.id, slot).empty());
+            REQUIRE(intents.target_index().empty());
         }
 
         ThrowingIntentValue::movesUntilThrow = -1;
@@ -164,8 +187,8 @@ int main()
             ThrowingIntentValue{20}
         );
 
-        assert(first == 1);
-        assert(intents.typed_intent(valueType, first).value.value == 20);
+        REQUIRE(first.slot == 1);
+        REQUIRE(intents.typed_intent(valueType, first).value.value == 20);
     }
 
     {
@@ -179,14 +202,15 @@ int main()
         IntentId id = intents.create(owner, lightType, slot, IntentLifetime::persistent(), Light{10});
         intents.destroy(id);
 
-        assert(!intents.exists(id));
-        assert(intents.size(owner) == 0);
-        assert(intents.intents_for(lightType.id, slot).empty());
+        REQUIRE(!intents.exists(id));
+        REQUIRE(intents.size(owner) == 0);
+        REQUIRE(intents.intents_for(lightType.id, slot).empty());
 
         IntentId recycled = intents.create(owner, lightType, slot, IntentLifetime::persistent(), Light{20});
-        assert(recycled == id);
-        assert(intents.exists(recycled));
-        assert(intents.typed_intent(lightType, recycled).value.brightness == 20);
+        REQUIRE(recycled.slot == id.slot);
+        REQUIRE(recycled.generation > id.generation);
+        REQUIRE(intents.exists(recycled));
+        REQUIRE(intents.typed_intent(lightType, recycled).value.brightness == 20);
     }
 
     {
@@ -198,17 +222,18 @@ int main()
         intents.create_behavior_pool(owner);
 
         IntentId beforeReset = intents.create(owner, temperatureType, slot, IntentLifetime::until_time(30), Temperature{22});
-        assert(intents.exists(beforeReset));
+        REQUIRE(intents.exists(beforeReset));
 
         intents.create_behavior_pool(owner);
 
-        assert(!intents.exists(beforeReset));
-        assert(intents.size(owner) == 0);
-        assert(intents.intents_for(temperatureType.id, slot).empty());
+        REQUIRE(!intents.exists(beforeReset));
+        REQUIRE(intents.size(owner) == 0);
+        REQUIRE(intents.intents_for(temperatureType.id, slot).empty());
 
         IntentId afterReset = intents.create(owner, temperatureType, slot, IntentLifetime::until_time(30), Temperature{24});
-        assert(afterReset == beforeReset);
-        assert(intents.exists(afterReset));
+        REQUIRE(afterReset.slot == beforeReset.slot);
+        REQUIRE(afterReset.generation > beforeReset.generation);
+        REQUIRE(intents.exists(afterReset));
     }
 
     {
@@ -227,12 +252,12 @@ int main()
 
         intents.destroy_owned_by(ownerOne);
 
-        assert(!intents.exists(ownedByOne));
-        assert(!intents.exists(alsoOwnedByOne));
-        assert(intents.exists(ownedByTwo));
-        assert(intents.size(ownerOne) == 0);
-        assert(intents.size(ownerTwo) == 1);
-        assert(intents.intents_for(lightType.id, slot).size() == 1);
+        REQUIRE(!intents.exists(ownedByOne));
+        REQUIRE(!intents.exists(alsoOwnedByOne));
+        REQUIRE(intents.exists(ownedByTwo));
+        REQUIRE(intents.size(ownerOne) == 0);
+        REQUIRE(intents.size(ownerTwo) == 1);
+        REQUIRE(intents.intents_for(lightType.id, slot).size() == 1);
 
         expect_throw([&] {
             intents.create(ownerOne, lightType, slot, IntentLifetime::persistent(), Light{4});
@@ -241,19 +266,19 @@ int main()
         intents.create_behavior_pool(ownerOne);
         IntentId recreated = intents.create(ownerOne, lightType, slot, IntentLifetime::persistent(), Light{5});
 
-        assert(intents.owner_of(recreated) == ownerOne);
-        assert(intents.exists(recreated));
+        REQUIRE(intents.owner_of(recreated) == ownerOne);
+        REQUIRE(intents.exists(recreated));
     }
 
     {
         IntentRegistry intents;
 
         IntentId missing = 99;
-        assert(!intents.exists(missing));
+        REQUIRE(!intents.exists(missing));
         expect_throw([&] {
             intents.owner_of(missing);
         });
-        assert(intents.size(99) == 0);
+        REQUIRE(intents.size(99) == 0);
     }
 
     {
@@ -264,16 +289,16 @@ int main()
         intents.create_behavior_pool(owner);
         std::set<IntentId> created;
 
-        for (std::size_t i = 0; i < MAX_INTENTS; ++i) {
+        for (std::size_t i = 0; i < MaxIntents; ++i) {
             IntentId id = intents.create(owner, lightType, slot, IntentLifetime::persistent(), Light{static_cast<int>(i)});
             bool inserted = created.insert(id).second;
-            assert(inserted);
-            assert(intents.exists(id));
-            assert(intents.owner_of(id) == owner);
+            REQUIRE(inserted);
+            REQUIRE(intents.exists(id));
+            REQUIRE(intents.owner_of(id) == owner);
         }
 
-        assert(intents.size(owner) == MAX_INTENTS);
-        assert(intents.size() == MAX_INTENTS);
+        REQUIRE(intents.size(owner) == MaxIntents);
+        REQUIRE(intents.size() == MaxIntents);
 
         expect_throw([&] {
             intents.create(owner, lightType, slot, IntentLifetime::persistent(), Light{0});
@@ -281,12 +306,58 @@ int main()
 
         IntentId recycled = *created.begin();
         intents.destroy(recycled);
-        assert(intents.size(owner) == MAX_INTENTS - 1);
-        assert(!intents.exists(recycled));
+        REQUIRE(intents.size(owner) == MaxIntents - 1);
+        REQUIRE(!intents.exists(recycled));
         IntentId recreated = intents.create(owner, lightType, slot, IntentLifetime::persistent(), Light{42});
-        assert(recreated == recycled);
-        assert(intents.size(owner) == MAX_INTENTS);
+        REQUIRE(recreated.slot == recycled.slot);
+        REQUIRE(recreated.generation > recycled.generation);
+        REQUIRE(intents.size(owner) == MaxIntents);
     }
 
-    return 0;
+    {
+        IntentRegistry intents;
+        BehaviorId owner = 12;
+        ComponentType<Light> lightType{0};
+        ComponentSlotId slot = 1;
+        intents.create_behavior_pool(owner);
+
+        IntentId named = intents.create(
+            owner,
+            lightType,
+            slot,
+            IntentLifetime::persistent(),
+            Light{70},
+            IntentPriority::High,
+            Value{std::int64_t{70}},
+            "evening-light");
+
+        REQUIRE(intents.intent(named).name == "evening-light");
+        REQUIRE(intents.intent_named(owner, "evening-light") == named);
+        REQUIRE(intents.intents_owned_by(owner) == std::vector<IntentId>{named});
+        expect_throw([&] {
+            (void)intents.create(
+                owner,
+                lightType,
+                slot,
+                IntentLifetime::persistent(),
+                Light{30},
+                IntentPriority::Medium,
+                Value{std::int64_t{30}},
+                "evening-light");
+        });
+
+        intents.destroy(named);
+        REQUIRE(!intents.intent_named(owner, "evening-light").has_value());
+        IntentId replacement = intents.create(
+            owner,
+            lightType,
+            slot,
+            IntentLifetime::persistent(),
+            Light{30},
+            IntentPriority::Medium,
+            Value{std::int64_t{30}},
+            "evening-light");
+        REQUIRE(intents.intent_named(owner, "evening-light") == replacement);
+    }
+
 }

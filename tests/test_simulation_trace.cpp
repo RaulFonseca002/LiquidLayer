@@ -68,15 +68,18 @@ int main() {
     const std::filesystem::path script = directory / "scenario.lua";
     {
         std::ofstream output(script, std::ios::binary);
-        output << "local light = access.Light.officeLight\n"
-                  "light.propose({ value = { brightness = 30 }, priority = 'low' })\n"
-                  "light.propose({ value = { brightness = 70 }, priority = 'high', duration_ms = 5 })\n";
+        output << "function on_start(frame)\n"
+                  "    local light = access.Light.officeLight\n"
+                  "    solid.watch(light)\n"
+                  "    light.propose({ name = 'fallback', value = { brightness = 30 }, priority = 'low', lifetime = 'persistent' })\n"
+                  "    light.propose({ name = 'boost', value = { brightness = 70 }, priority = 'high', duration_ms = 5 })\n"
+                  "end\n";
         assert(output);
     }
 
     const std::vector<std::string> arguments{
         "--initial-brightness", "10", "--script", script.string(),
-        "--frame-time", "100", "--frame-time", "105"
+        "--frame-time", "100", "--frame-time", "105", "--frame-time", "110"
     };
     Invocation first = invoke(arguments);
     assert(first.status == static_cast<int>(ExitCode::Success));
@@ -84,22 +87,43 @@ int main() {
     assert(first.output == invoke(arguments).output);
 
     std::vector<std::string> traceLines = lines(first.output);
-    assert(traceLines.size() == 16);
+    assert(traceLines.size() == 34);
     for (std::size_t index = 0; index < traceLines.size(); ++index) {
         assert(traceLines[index].starts_with(
-            "{\"schema\":\"liquid.trace.v1\",\"seq\":" + std::to_string(index) + ","
+            "{\"schema\":\"liquid.trace.v2\",\"seq\":" + std::to_string(index) + ","
         ));
     }
+    // Frame 100: the boost is selected and commanded while the confirmed
+    // component still reads 10.
     assert(traceLines[0].find("\"event\":\"run_started\"") != std::string::npos);
+    assert(traceLines[5].find("\"event\":\"desire_created\"") != std::string::npos);
     assert(traceLines[5].find("\"desired_brightness\":30") != std::string::npos);
     assert(traceLines[6].find("\"desired_brightness\":70") != std::string::npos);
-    assert(traceLines[8].find("\"event\":\"intent_selected\"") != std::string::npos);
-    assert(traceLines[8].find("\"desired_brightness\":70") != std::string::npos);
-    assert(traceLines[9].find("\"actual_brightness\":10") != std::string::npos);
-    assert(traceLines[12].find("\"event\":\"intent_disappeared\"") != std::string::npos);
-    assert(traceLines[13].find("\"desired_brightness\":30") != std::string::npos);
-    assert(traceLines[14].find("\"actual_brightness\":10") != std::string::npos);
-    assert(traceLines[15].find("\"event\":\"run_completed\"") != std::string::npos);
+    assert(traceLines[7].find("\"event\":\"desire_selected\"") != std::string::npos);
+    assert(traceLines[7].find("\"desired_brightness\":70") != std::string::npos);
+    assert(traceLines[8].find("\"event\":\"command_issued\"") != std::string::npos);
+    assert(traceLines[11].find("\"event\":\"component_snapshot\"") != std::string::npos);
+    assert(traceLines[11].find("\"actual_brightness\":10") != std::string::npos);
+    assert(traceLines[11].find("\"device_brightness\":70") != std::string::npos);
+    // Frame 105: the applied report is authoritative before behavior logic,
+    // the boost expires, and the fallback is commanded.
+    assert(traceLines[15].find("\"event\":\"desire_disappeared\"") != std::string::npos);
+    assert(traceLines[16].find("\"event\":\"desire_selected\"") != std::string::npos);
+    assert(traceLines[16].find("\"desired_brightness\":30") != std::string::npos);
+    assert(traceLines[17].find("\"event\":\"command_result\"") != std::string::npos);
+    assert(traceLines[19].find("\"event\":\"observed_changed\"") != std::string::npos);
+    assert(traceLines[19].find("\"observed\":70") != std::string::npos);
+    assert(traceLines[23].find("\"actual_brightness\":70") != std::string::npos);
+    assert(traceLines[23].find("\"device_brightness\":30") != std::string::npos);
+    // Frame 110: the fallback report confirms 30 and desire matches state.
+    assert(traceLines[30].find("\"event\":\"observed_changed\"") != std::string::npos);
+    assert(traceLines[30].find("\"observed\":30") != std::string::npos);
+    assert(traceLines[32].find("\"actual_brightness\":30") != std::string::npos);
+    assert(traceLines[32].find("\"device_brightness\":30") != std::string::npos);
+    assert(traceLines[33].find("\"event\":\"run_completed\"") != std::string::npos);
+    assert(traceLines[33].find("\"final_brightness\":30") != std::string::npos);
+    assert(traceLines[33].find("\"commands_issued\":2") != std::string::npos);
+    assert(traceLines[33].find("\"reports_applied\":2") != std::string::npos);
 
     const std::filesystem::path failureScript = directory / "failure.lua";
     {

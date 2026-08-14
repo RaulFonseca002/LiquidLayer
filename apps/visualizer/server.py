@@ -31,7 +31,7 @@ MAX_STDERR_BYTES = 4_096
 MAX_CONCURRENT_RUNS = 1
 CHILD_TIMEOUT_SECONDS = 15.0
 MAX_INT64 = (1 << 63) - 1
-TRACE_SCHEMA = "liquid.trace.v1"
+TRACE_SCHEMA = "liquid.trace.v2"
 TERMINAL_EVENTS = frozenset(("run_completed", "run_failed"))
 STATIC_FILES = {
     "/index.html": ("index.html", "text/html; charset=utf-8"),
@@ -73,15 +73,19 @@ def _decode_json(data: bytes) -> Any:
         raise RequestProblem(400, f"invalid JSON: {error}") from error
 
 
-def validate_scenario(data: bytes) -> tuple[int, str, list[int]]:
+def validate_scenario(data: bytes) -> tuple[int, str, list[int], dict[str, Any]]:
     payload = _decode_json(data)
     if not isinstance(payload, dict):
         raise RequestProblem(400, "request body must be a JSON object")
 
-    expected = {"initial_brightness", "script", "frame_times"}
+    required = {"initial_brightness", "script", "frame_times"}
+    expected = required | {
+        "feedback_timing", "latency_ms", "adapter_outcome",
+        "duplicate_reports", "silent", "reverse_delivery"
+    }
     fields = set(payload)
     unknown = fields - expected
-    missing = expected - fields
+    missing = required - fields
     if unknown:
         raise RequestProblem(400, f"unknown field: {sorted(unknown)[0]}")
     if missing:
@@ -116,7 +120,31 @@ def validate_scenario(data: bytes) -> tuple[int, str, list[int]]:
             raise RequestProblem(400, "frame times must be nondecreasing")
         previous = value
 
-    return brightness, script, frame_times
+    feedback_timing = payload.get("feedback_timing", "deferred")
+    if feedback_timing not in {"deferred", "immediate"}:
+        raise RequestProblem(400, "feedback_timing must be deferred or immediate")
+    latency_ms = payload.get("latency_ms", 0)
+    if type(latency_ms) is not int or not 0 <= latency_ms <= MAX_INT64:
+        raise RequestProblem(400, "latency_ms must be an integer from 0 to INT64_MAX")
+    adapter_outcome = payload.get("adapter_outcome", "applied")
+    if adapter_outcome not in {"applied", "rejected", "failed"}:
+        raise RequestProblem(400, "adapter_outcome must be applied, rejected, or failed")
+    duplicate_reports = payload.get("duplicate_reports", 0)
+    if type(duplicate_reports) is not int or not 0 <= duplicate_reports <= 64:
+        raise RequestProblem(400, "duplicate_reports must be an integer from 0 to 64")
+    silent = payload.get("silent", False)
+    reverse_delivery = payload.get("reverse_delivery", False)
+    if type(silent) is not bool or type(reverse_delivery) is not bool:
+        raise RequestProblem(400, "silent and reverse_delivery must be booleans")
+
+    return brightness, script, frame_times, {
+        "feedback_timing": feedback_timing,
+        "latency_ms": latency_ms,
+        "adapter_outcome": adapter_outcome,
+        "duplicate_reports": duplicate_reports,
+        "silent": silent,
+        "reverse_delivery": reverse_delivery,
+    }
 
 
 def _parse_authority(authority: str) -> tuple[str, int | None] | None:
@@ -332,7 +360,7 @@ class SolidScopeHandler(BaseHTTPRequestHandler):
                 raise RequestProblem(408, "request body timed out") from error
             if len(body) != content_length:
                 raise RequestProblem(400, "incomplete request body")
-            brightness, script, frame_times = validate_scenario(body)
+            brightness, script, frame_times, adapter = validate_scenario(body)
         except RequestProblem as problem:
             self._send_problem(problem)
             return
@@ -342,7 +370,7 @@ class SolidScopeHandler(BaseHTTPRequestHandler):
             return
         try:
             try:
-                self._run_trace(brightness, script, frame_times)
+                self._run_trace(brightness, script, frame_times, adapter)
             except (BrokenPipeError, ConnectionResetError):
                 # _run_trace owns and cleans its child before this propagates.
                 return
@@ -350,7 +378,11 @@ class SolidScopeHandler(BaseHTTPRequestHandler):
             self.server.run_slots.release()
 
     def _run_trace(
-        self, brightness: int, script: str, frame_times: list[int]
+        self,
+        brightness: int,
+        script: str,
+        frame_times: list[int],
+        adapter: dict[str, Any],
     ) -> None:
         with tempfile.TemporaryDirectory(prefix="solid-scope-") as temporary:
             script_path = Path(temporary) / "scenario.lua"
@@ -369,6 +401,14 @@ class SolidScopeHandler(BaseHTTPRequestHandler):
             ]
             for frame_time in frame_times:
                 arguments.extend(("--frame-time", str(frame_time)))
+            arguments.extend((
+                "--feedback-timing", adapter["feedback_timing"],
+                "--latency", str(adapter["latency_ms"]),
+                "--outcome", adapter["adapter_outcome"],
+                "--duplicates", str(adapter["duplicate_reports"]),
+                "--silent", str(adapter["silent"]).lower(),
+                "--reverse-delivery", str(adapter["reverse_delivery"]).lower(),
+            ))
 
             self.send_response(200)
             self._security_headers()

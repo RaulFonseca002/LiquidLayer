@@ -1,0 +1,175 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CTEST_OUTPUT_ON_FAILURE: "1"
+
+jobs:
+  strict-release:
+    name: ${{ matrix.name }} strict Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux GCC
+            os: ubuntu-latest
+            configure: -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+          - name: Linux Clang
+            os: ubuntu-latest
+            configure: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          - name: macOS AppleClang
+            os: macos-latest
+            configure: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          - name: Windows MSVC
+            os: windows-latest
+            configure: -A x64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=ON
+          -DLIQUID_ENABLE_STRICT_WARNINGS=ON
+          -DLIQUID_WARNINGS_AS_ERRORS=ON
+          ${{ matrix.configure }}
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Install package
+        run: >-
+          cmake --install build
+          --config Release
+          --prefix "${{ github.workspace }}/build/prefix"
+      - name: Configure installed component consumers
+        run: >-
+          cmake -S examples/installed-package -B build/installed-consumers
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="${{ github.workspace }}/build/prefix"
+          -DLIQUID_CONSUMER_STRICT_WARNINGS=ON
+      - name: Build installed component consumers
+        run: cmake --build build/installed-consumers --config Release --parallel 2
+      - name: Test installed component consumers
+        run: >-
+          ctest --test-dir build/installed-consumers
+          -C Release
+          --output-on-failure
+
+  asan-ubsan:
+    name: Linux Clang ASan and UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_CXX_COMPILER=clang++
+          -DBUILD_TESTING=ON
+          -DLIQUID_ENABLE_SANITIZERS=ON
+          -DLIQUID_ENABLE_STRICT_WARNINGS=ON
+          -DLIQUID_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  tsan:
+    name: Linux Clang TSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_CXX_COMPILER=clang++
+          -DBUILD_TESTING=ON
+          -DLIQUID_ENABLE_THREAD_SANITIZER=ON
+          -DLIQUID_ENABLE_STRICT_WARNINGS=ON
+          -DLIQUID_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  coverage:
+    name: Core coverage gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install gcovr
+        run: python3 -m pip install --disable-pip-version-check gcovr==8.3
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=gcc
+          -DCMAKE_CXX_COMPILER=g++
+          -DBUILD_TESTING=ON
+          -DLIQUID_BUILD_LUA=OFF
+          -DLIQUID_BUILD_SIMULATION=OFF
+          -DLIQUID_ENABLE_COVERAGE=ON
+          -DLIQUID_ENABLE_STRICT_WARNINGS=ON
+          -DLIQUID_WARNINGS_AS_ERRORS=ON
+      - name: Build, test, and enforce Core coverage
+        run: cmake --build build --target coverage --parallel 2
+
+  core-only:
+    name: Core-only source and installed consumers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Core-only framework
+        run: >-
+          cmake -S . -B build/framework
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=ON
+          -DLIQUID_BUILD_LUA=OFF
+          -DLIQUID_BUILD_SIMULATION=OFF
+          -DLIQUID_ENABLE_STRICT_WARNINGS=ON
+          -DLIQUID_WARNINGS_AS_ERRORS=ON
+      - name: Build and test Core-only framework
+        run: |
+          cmake --build build/framework --parallel 2
+          ctest --test-dir build/framework --output-on-failure
+      - name: Install Core-only package
+        run: >-
+          cmake --install build/framework
+          --prefix "${{ github.workspace }}/build/core-prefix"
+      - name: Configure source-tree Core-only consumer
+        run: |
+          cmake -S examples/source-tree -B build/source-consumer \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLIQUID_SOURCE_DIR="${{ github.workspace }}" \
+            -DLIQUID_CONSUMER_BUILD_LUA=OFF \
+            -DLIQUID_CONSUMER_BUILD_SIMULATION=OFF \
+            -DLIQUID_CONSUMER_STRICT_WARNINGS=ON
+      - name: Build and test source-tree Core-only consumer
+        run: |
+          cmake --build build/source-consumer --parallel 2
+          ctest --test-dir build/source-consumer --output-on-failure
+      - name: Configure installed Core-only consumer
+        run: >-
+          cmake -S examples/installed-package -B build/installed-consumer
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="${{ github.workspace }}/build/core-prefix"
+          -DLIQUID_CONSUMER_BUILD_LUA=OFF
+          -DLIQUID_CONSUMER_BUILD_SIMULATION=OFF
+          -DLIQUID_CONSUMER_EXPECT_CORE_ONLY=ON
+          -DLIQUID_CONSUMER_STRICT_WARNINGS=ON
+      - name: Build and test installed Core-only consumer
+        run: |
+          cmake --build build/installed-consumer --parallel 2
+          ctest --test-dir build/installed-consumer --output-on-failure

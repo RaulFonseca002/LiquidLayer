@@ -1,7 +1,7 @@
 (function () {
     "use strict";
 
-    const TRACE_SCHEMA = "liquid.trace.v1";
+    const TRACE_SCHEMA = "liquid.trace.v2";
     const MAX_STREAM_BUFFER = 1024 * 1024;
     const MAX_QUEUED_EVENTS = 10000;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -16,6 +16,12 @@
         form: document.getElementById("scenario-form"),
         initialBrightness: document.getElementById("initial-brightness"),
         frameTimes: document.getElementById("frame-times"),
+        feedbackTiming: document.getElementById("feedback-timing"),
+        latencyMs: document.getElementById("latency-ms"),
+        adapterOutcome: document.getElementById("adapter-outcome"),
+        duplicateReports: document.getElementById("duplicate-reports"),
+        silentAdapter: document.getElementById("silent-adapter"),
+        reverseDelivery: document.getElementById("reverse-delivery"),
         scriptSource: document.getElementById("script-source"),
         editorShell: document.getElementById("editor-shell"),
         editorGutter: document.getElementById("editor-gutter"),
@@ -36,9 +42,17 @@
         eventCounter: document.getElementById("event-counter"),
         phaseItems: Array.from(document.querySelectorAll("#phase-rail li")),
         actualValue: document.getElementById("actual-value"),
+        actualLamp: document.getElementById("actual-lamp"),
         actualDetail: document.getElementById("actual-detail"),
         selectedValue: document.getElementById("selected-value"),
         selectedDetail: document.getElementById("selected-detail"),
+        commandValue: document.getElementById("command-value"),
+        commandDetail: document.getElementById("command-detail"),
+        resultValue: document.getElementById("result-value"),
+        resultDetail: document.getElementById("result-detail"),
+        deviceValue: document.getElementById("device-value"),
+        deviceLamp: document.getElementById("device-lamp"),
+        deviceDetail: document.getElementById("device-detail"),
         intentList: document.getElementById("intent-list"),
         intentCount: document.getElementById("intent-count"),
         frameLedger: document.getElementById("frame-ledger"),
@@ -65,6 +79,7 @@
         eventCount: 0,
         intents: new Map(),
         frames: new Map(),
+        frameRows: new Map(),
         currentFrameKey: null,
         selectedIntentId: null,
         generation: 0
@@ -120,7 +135,24 @@
     }
 
     function setText(element, value) {
-        element.textContent = value === undefined || value === null || value === "" ? "—" : String(value);
+        const next = value === undefined || value === null || value === "" ? "—" : String(value);
+        if (element.dataset && element.dataset.tick === "true" && element.textContent !== next) {
+            element.classList.remove("value-tick");
+            void element.offsetWidth;
+            element.classList.add("value-tick");
+        }
+        element.textContent = next;
+    }
+
+    function setLamp(lamp, brightness) {
+        if (!lamp) return;
+        if (typeof brightness === "number" && Number.isFinite(brightness)) {
+            lamp.dataset.known = "true";
+            lamp.style.setProperty("--lamp-level", `${Math.max(0, Math.min(100, brightness))}%`);
+        } else {
+            delete lamp.dataset.known;
+            lamp.style.removeProperty("--lamp-level");
+        }
     }
 
     function setConnection(label, status) {
@@ -158,16 +190,26 @@
     }
 
     function setPhaseState(phases) {
-        const recorded = new Set((phases || []).map(function (phase) {
+        const recorded = new Set();
+        (phases || []).forEach(function (phase) {
             const normalized = String(phase).toLowerCase();
-            return ({
+            if (normalized === "run_systems") {
+                // Legacy single-phase traces recorded all system work at once.
+                recorded.add("input");
+                recorded.add("behavior");
+                recorded.add("decision");
+                return;
+            }
+            recorded.add(({
                 begin_frame: "begin",
                 expire_intents: "expire",
-                run_systems: "systems",
+                run_input_systems: "input",
+                run_behavior_systems: "behavior",
+                run_decision_systems: "decision",
                 resolve_intents: "resolve",
                 end_frame: "end"
-            })[normalized] || normalized;
-        }));
+            })[normalized] || normalized);
+        });
         elements.phaseItems.forEach(function (item) {
             const name = item.dataset.phase;
             const label = item.textContent.trim();
@@ -239,8 +281,9 @@
         return state.frames.get(state.currentFrameKey) || null;
     }
 
-    function renderFrames() {
+    function resetFrames() {
         elements.frameLedger.replaceChildren();
+        state.frameRows.clear();
         if (state.frames.size === 0) {
             const row = document.createElement("tr");
             row.className = "empty-row";
@@ -249,23 +292,34 @@
             cell.textContent = "Completed frames will appear here.";
             row.append(cell);
             elements.frameLedger.append(row);
-            return;
         }
+    }
 
-        state.frames.forEach(function (frame) {
+    function updateFrameRow(frame) {
+        const empty = elements.frameLedger.querySelector(".empty-row");
+        if (empty) empty.remove();
+        let rowState = state.frameRows.get(String(frame.frame));
+        if (!rowState) {
             const row = document.createElement("tr");
-            [
-                frame.frame,
-                frame.time === undefined ? "—" : `${frame.time} ms`,
-                frame.script,
-                frame.expired,
-                frame.selected
-            ].forEach(function (value) {
+            const cells = [];
+            for (let index = 0; index < 5; index += 1) {
                 const cell = document.createElement("td");
-                cell.textContent = String(value);
                 row.append(cell);
-            });
+                cells.push(cell);
+            }
             elements.frameLedger.append(row);
+            rowState = { cells: cells };
+            state.frameRows.set(String(frame.frame), rowState);
+        }
+        const values = [
+            frame.frame,
+            frame.time === undefined ? "—" : `${frame.time} ms`,
+            frame.script,
+            frame.expired,
+            frame.selected
+        ];
+        values.forEach(function (value, index) {
+            rowState.cells[index].textContent = String(value);
         });
     }
 
@@ -297,6 +351,7 @@
         case "world_ready": {
             const brightness = eventBrightness(event);
             if (brightness !== undefined) setText(elements.actualValue, brightness);
+            setLamp(elements.actualLamp, brightness);
             elements.actualDetail.textContent = "Light.officeLight · world initialization";
             break;
         }
@@ -309,7 +364,7 @@
             elements.selectedDetail.textContent = "Awaiting this frame's resolution evidence.";
             setPhaseState([]);
             renderIntents();
-            renderFrames();
+            updateFrameRow(frame);
             break;
         }
 
@@ -318,7 +373,7 @@
             frame.script = "Executing";
             setScriptState("Executing script", "executing");
             elements.playbackStatus.textContent = "Lua execution boundary is active";
-            renderFrames();
+            updateFrameRow(frame);
             announce("Lua script execution started.");
             break;
         }
@@ -330,12 +385,12 @@
             frame.script = failed ? "Failed · rolled back" : "Completed";
             setScriptState(failed ? "Failed · rolled back" : "Execution complete", failed ? "failed" : "complete");
             showDiagnostic(eventDiagnostic(event));
-            renderFrames();
+            updateFrameRow(frame);
             announce(failed ? "Lua script failed. Its proposals were rolled back." : "Lua script execution completed.");
             break;
         }
 
-        case "intent_created": {
+        case "desire_created": {
             const intent = eventIntent(event);
             state.intents.set(intent.id, intent);
             renderIntents();
@@ -349,11 +404,11 @@
             frame.expired = event.expired_intents;
             setPhaseState(eventPhases(event));
             elements.playbackStatus.textContent = `Frame ${frame.frame} recorded · resolution available`;
-            renderFrames();
+            updateFrameRow(frame);
             break;
         }
 
-        case "intent_selected": {
+        case "desire_selected": {
             const intent = eventIntent(event);
             const selectedId = intent.id;
             if (!state.intents.has(selectedId)) state.intents.set(selectedId, intent);
@@ -365,18 +420,78 @@
             const frame = currentFrame() || ensureFrame(event);
             frame.selected = selectedBrightness === undefined ? `Intent ${selectedId}` : `${selectedBrightness}% · ${selectedId}`;
             renderIntents();
-            renderFrames();
+            updateFrameRow(frame);
+            break;
+        }
+
+        case "command_issued": {
+            const data = event.data || {};
+            setText(elements.commandValue, data.desired);
+            elements.commandDetail.textContent = `Command ${firstDefined(data.command_id, "—")} · ${firstDefined(data.route, "route —")} → ${firstDefined(data.target, "target —")}`;
+            break;
+        }
+
+        case "command_attempt":
+        case "command_retry": {
+            const data = event.data || {};
+            const action = type === "command_retry" ? "retry" : "attempt";
+            elements.commandDetail.textContent = `Command ${firstDefined(data.command_id, "—")} · ${action} ${firstDefined(data.attempt, "—")}`;
+            break;
+        }
+
+        case "command_result": {
+            const data = event.data || {};
+            setText(elements.resultValue, firstDefined(data.observed, data.status));
+            elements.resultDetail.textContent = `Command ${firstDefined(data.command_id, "—")} · ${firstDefined(data.disposition, data.status, "reported")}`;
+            break;
+        }
+
+        case "command_timeout": {
+            const data = event.data || {};
+            elements.resultValue.textContent = "timeout";
+            elements.resultDetail.textContent = `Command ${firstDefined(data.command_id, "—")} exhausted its retry window.`;
+            break;
+        }
+
+        case "observed_changed": {
+            const data = event.data || {};
+            const observed = firstDefined(data.observed, data.value);
+            setText(elements.actualValue, observed);
+            if (typeof observed === "number") setLamp(elements.actualLamp, observed);
+            elements.actualDetail.textContent = `Authoritative ${firstDefined(data.route, "route —")} · revision ${firstDefined(data.state_revision, "—")}`;
+            break;
+        }
+
+        case "command_status": {
+            const data = event.data || {};
+            elements.resultDetail.textContent = `Command ${firstDefined(data.command_id, "—")} · status ${firstDefined(data.status, data.value, "—")}`;
+            break;
+        }
+
+        case "external_observation": {
+            const data = event.data || {};
+            const observed = firstDefined(data.observed, data.value);
+            setText(elements.actualValue, observed);
+            if (typeof observed === "number") setLamp(elements.actualLamp, observed);
+            elements.actualDetail.textContent = `Unsolicited ${firstDefined(data.route, "route —")} · revision ${firstDefined(data.state_revision, "—")}`;
+            elements.playbackStatus.textContent = "External observation accepted";
             break;
         }
 
         case "component_snapshot": {
             const brightness = eventBrightness(event);
             if (brightness !== undefined) setText(elements.actualValue, brightness);
-            elements.actualDetail.textContent = `Light.officeLight · observed at ${firstDefined(time, "—")} ms · unchanged by desire`;
+            setLamp(elements.actualLamp, brightness);
+            if (event.device_brightness !== undefined && event.device_brightness !== null) {
+                setText(elements.deviceValue, event.device_brightness);
+                setLamp(elements.deviceLamp, event.device_brightness);
+            }
+            elements.actualDetail.textContent = `Light.officeLight · projected at ${firstDefined(time, "—")} ms`;
+            elements.deviceDetail.textContent = `Adapter state sampled at ${firstDefined(time, "—")} ms`;
             break;
         }
 
-        case "intent_disappeared": {
+        case "desire_disappeared": {
             if (!Number.isSafeInteger(event.intent_id))
                 throw new Error("The trace contained an invalid disappeared intent ID.");
             const intentId = String(event.intent_id);
@@ -450,6 +565,7 @@
         state.eventCount = 0;
         state.intents.clear();
         state.frames.clear();
+        state.frameRows.clear();
         state.currentFrameKey = null;
         state.selectedIntentId = null;
 
@@ -460,8 +576,16 @@
         elements.activeFrame.textContent = "—";
         elements.actualValue.textContent = "—";
         elements.actualDetail.textContent = "No component snapshot received.";
+        setLamp(elements.actualLamp, undefined);
+        setLamp(elements.deviceLamp, undefined);
         elements.selectedValue.textContent = "—";
         elements.selectedDetail.textContent = "No intent has been selected.";
+        elements.commandValue.textContent = "—";
+        elements.commandDetail.textContent = "No command has been issued.";
+        elements.resultValue.textContent = "—";
+        elements.resultDetail.textContent = "No adapter result has arrived.";
+        elements.deviceValue.textContent = "—";
+        elements.deviceDetail.textContent = "No simulated device state is available.";
         elements.lastSequence.textContent = "—";
         elements.runtimeHealth.textContent = "Waiting";
         elements.transportHealth.textContent = "Connecting";
@@ -476,7 +600,7 @@
         setPhaseState([]);
         showDiagnostic();
         renderIntents();
-        renderFrames();
+        resetFrames();
     }
 
     function finishControls() {
@@ -513,7 +637,12 @@
             state.playbackTimer = null;
             if (!state.playing || queuedEventCount() === 0) return;
             try {
-                applyEvent(dequeueEvent());
+                const batchSize = queuedEventCount() > 200 ? 50 : 1;
+                for (let index = 0;
+                    index < batchSize && queuedEventCount() > 0;
+                    index += 1) {
+                    applyEvent(dequeueEvent());
+                }
             } catch (error) {
                 localTransportFailure(error && error.message ? error.message : error);
                 return;
@@ -521,7 +650,7 @@
             updatePlaybackButtons();
             schedulePlayback();
         };
-        const delay = playbackDelay();
+        const delay = queuedEventCount() > 200 ? 0 : playbackDelay();
         if (state.eventCount === 0) next();
         else state.playbackTimer = window.setTimeout(next, delay);
     }
@@ -569,6 +698,8 @@
 
     function parseScenario() {
         const brightness = Number(elements.initialBrightness.value);
+        const latencyMs = Number(elements.latencyMs.value);
+        const duplicateReports = Number(elements.duplicateReports.value);
         const rawTimes = elements.frameTimes.value.split(",");
         const frameTimes = rawTimes.map(function (part) {
             const value = part.trim();
@@ -598,6 +729,11 @@
                 throw new Error("Frame times must be nondecreasing.");
             }
         }
+        if (!Number.isSafeInteger(latencyMs) || latencyMs < 0)
+            throw new Error("Latency must be a non-negative whole number.");
+        if (!Number.isSafeInteger(duplicateReports) ||
+            duplicateReports < 0 || duplicateReports > 64)
+            throw new Error("Duplicate reports must be a whole number from 0 to 64.");
         if (new TextEncoder().encode(elements.scriptSource.value).length > 65536) {
             elements.scriptSource.setAttribute("aria-invalid", "true");
             throw new Error("Behavior script exceeds the 65,536-byte limit.");
@@ -606,7 +742,13 @@
         return {
             initial_brightness: brightness,
             script: elements.scriptSource.value,
-            frame_times: frameTimes
+            frame_times: frameTimes,
+            feedback_timing: elements.feedbackTiming.value,
+            latency_ms: latencyMs,
+            adapter_outcome: elements.adapterOutcome.value,
+            duplicate_reports: duplicateReports,
+            silent: elements.silentAdapter.checked,
+            reverse_delivery: elements.reverseDelivery.checked
         };
     }
 
@@ -751,14 +893,14 @@
         stopActiveRun(false);
         resetView();
         const failureEvents = [
-            { schema: TRACE_SCHEMA, event: "run_started", seq: 0, initial_brightness: 10, frame_times: [100] },
+            { schema: TRACE_SCHEMA, event: "run_started", seq: 0, initial_brightness: 10, frame_times: [100], feedback_timing: "deferred", latency_ms: 0, adapter_outcome: "applied", duplicate_reports: 0, silent: false, reverse_delivery: false },
             { schema: TRACE_SCHEMA, event: "world_ready", seq: 1, behavior_id: 0, light_type_id: 0, light_slot_id: 0, actual_brightness: 10 },
             { schema: TRACE_SCHEMA, event: "frame_started", seq: 2, frame: 0, now_ms: 100 },
             { schema: TRACE_SCHEMA, event: "script_started", seq: 3, frame: 0, now_ms: 100 },
             { schema: TRACE_SCHEMA, event: "script_finished", seq: 4, frame: 0, now_ms: 100, status: "runtime_error", created_intents: 0, intent_ids: [], diagnostic: "bounded failure" },
-            { schema: TRACE_SCHEMA, event: "frame_completed", seq: 5, frame: 0, now_ms: 100, completed: true, phases: ["begin_frame", "expire_intents", "run_systems", "resolve_intents", "end_frame"], expired_intents: 0, resolution_requests: 1, selected_intents: 0, systems_completed: 2 },
-            { schema: TRACE_SCHEMA, event: "component_snapshot", seq: 6, frame: 0, now_ms: 100, component: "officeLight", actual_brightness: 10 },
-            { schema: TRACE_SCHEMA, event: "run_completed", seq: 7, outcome: "script_error", script_status: "runtime_error", final_brightness: 10, tracking_system_runs: 1, frames_completed: 1, faulted: false }
+            { schema: TRACE_SCHEMA, event: "frame_completed", seq: 5, frame: 0, now_ms: 100, completed: true, phases: ["begin_frame", "expire_intents", "run_input_systems", "run_behavior_systems", "run_decision_systems", "resolve_intents", "end_frame"], expired_intents: 0, resolution_requests: 1, selected_intents: 0, systems_completed: 2 },
+            { schema: TRACE_SCHEMA, event: "component_snapshot", seq: 6, frame: 0, now_ms: 100, component: "officeLight", actual_brightness: 10, device_brightness: null },
+            { schema: TRACE_SCHEMA, event: "run_completed", seq: 7, outcome: "script_error", script_status: "runtime_error", final_brightness: 10, device_brightness: null, commands_issued: 0, reports_applied: 0, observations_applied: 0, tracking_system_runs: 1, frames_completed: 1, faulted: false }
         ];
         failureEvents.forEach(applyEvent);
         const failureIsIsolated = elements.healthBadge.textContent === "Script failed"
@@ -767,36 +909,62 @@
         if (!failureIsIsolated) throw new Error("Solid Scope failure-state self-test failed.");
 
         resetView();
+        const fullLoopPhases = ["begin_frame", "expire_intents", "run_input_systems", "run_behavior_systems", "run_decision_systems", "resolve_intents", "end_frame"];
         const events = [
-            { schema: TRACE_SCHEMA, event: "run_started", seq: 0, initial_brightness: 10, frame_times: [100, 105] },
+            { schema: TRACE_SCHEMA, event: "run_started", seq: 0, initial_brightness: 10, frame_times: [100, 105, 110], feedback_timing: "deferred", latency_ms: 0, adapter_outcome: "applied", duplicate_reports: 0, silent: false, reverse_delivery: false },
             { schema: TRACE_SCHEMA, event: "world_ready", seq: 1, behavior_id: 0, light_type_id: 0, light_slot_id: 0, actual_brightness: 10 },
             { schema: TRACE_SCHEMA, event: "frame_started", seq: 2, frame: 0, now_ms: 100 },
             { schema: TRACE_SCHEMA, event: "script_started", seq: 3, frame: 0, now_ms: 100 },
             { schema: TRACE_SCHEMA, event: "script_finished", seq: 4, frame: 0, now_ms: 100, status: "success", created_intents: 2, intent_ids: [1, 2], diagnostic: "" },
-            { schema: TRACE_SCHEMA, event: "intent_created", seq: 5, frame: 0, now_ms: 100, intent_id: 1, owner_id: 0, type: "Light", type_id: 0, component: "officeLight", desired_brightness: 30, priority: "low", lifetime: "persistent" },
-            { schema: TRACE_SCHEMA, event: "intent_created", seq: 6, frame: 0, now_ms: 100, intent_id: 2, owner_id: 0, type: "Light", type_id: 0, component: "officeLight", desired_brightness: 70, priority: "high", lifetime: "until_time", expires_at_ms: 105 },
-            { schema: TRACE_SCHEMA, event: "frame_completed", seq: 7, frame: 0, now_ms: 100, completed: true, phases: ["begin_frame", "expire_intents", "run_systems", "resolve_intents", "end_frame"], expired_intents: 0, resolution_requests: 1, selected_intents: 1, systems_completed: 2 },
-            { schema: TRACE_SCHEMA, event: "intent_selected", seq: 8, frame: 0, now_ms: 100, intent_id: 2, owner_id: 0, type: "Light", type_id: 0, component: "officeLight", desired_brightness: 70, priority: "high", lifetime: "until_time", expires_at_ms: 105 },
-            { schema: TRACE_SCHEMA, event: "component_snapshot", seq: 9, frame: 0, now_ms: 100, component: "officeLight", actual_brightness: 10 },
-            { schema: TRACE_SCHEMA, event: "frame_started", seq: 10, frame: 1, now_ms: 105 },
-            { schema: TRACE_SCHEMA, event: "frame_completed", seq: 11, frame: 1, now_ms: 105, completed: true, phases: ["begin_frame", "expire_intents", "run_systems", "resolve_intents", "end_frame"], expired_intents: 1, resolution_requests: 1, selected_intents: 1, systems_completed: 2 },
-            { schema: TRACE_SCHEMA, event: "intent_disappeared", seq: 12, frame: 1, now_ms: 105, intent_id: 2 },
-            { schema: TRACE_SCHEMA, event: "intent_selected", seq: 13, frame: 1, now_ms: 105, intent_id: 1, owner_id: 0, type: "Light", type_id: 0, component: "officeLight", desired_brightness: 30, priority: "low", lifetime: "persistent" },
-            { schema: TRACE_SCHEMA, event: "component_snapshot", seq: 14, frame: 1, now_ms: 105, component: "officeLight", actual_brightness: 10 },
-            { schema: TRACE_SCHEMA, event: "run_completed", seq: 15, outcome: "success", script_status: "success", final_brightness: 10, tracking_system_runs: 2, frames_completed: 2, faulted: false }
+            { schema: TRACE_SCHEMA, event: "desire_created", seq: 5, frame: 0, now_ms: 100, intent_id: 1, owner_id: 0, type: "Light", type_id: 0, component: "officeLight", name: "fallback", desired_brightness: 30, priority: "low", lifetime: "persistent" },
+            { schema: TRACE_SCHEMA, event: "desire_created", seq: 6, frame: 0, now_ms: 100, intent_id: 2, owner_id: 0, type: "Light", type_id: 0, component: "officeLight", name: "boost", desired_brightness: 70, priority: "high", lifetime: "until_time", expires_at_ms: 105 },
+            { schema: TRACE_SCHEMA, event: "desire_selected", seq: 7, frame: 0, now_ms: 100, intent_id: 2, owner_id: 0, type: "Light", type_id: 0, component: "officeLight", name: "boost", desired_brightness: 70, priority: "high", lifetime: "until_time", expires_at_ms: 105 },
+            { schema: TRACE_SCHEMA, event: "command_issued", seq: 8, record_seq: 4, record_type: 11, data: { command_id: 1, desired: 70, issued_at: 100, route: "scope.light", target: "office-device", value: "pending" } },
+            { schema: TRACE_SCHEMA, event: "command_attempt", seq: 9, record_seq: 5, record_type: 12, data: { attempt: 1, command_id: 1, now: 100 } },
+            { schema: TRACE_SCHEMA, event: "frame_completed", seq: 10, frame: 0, now_ms: 100, completed: true, phases: fullLoopPhases, expired_intents: 0, resolution_requests: 1, selected_intents: 1, systems_completed: 2 },
+            { schema: TRACE_SCHEMA, event: "component_snapshot", seq: 11, frame: 0, now_ms: 100, component: "officeLight", actual_brightness: 10, device_brightness: 70 },
+            { schema: TRACE_SCHEMA, event: "frame_started", seq: 12, frame: 1, now_ms: 105 },
+            { schema: TRACE_SCHEMA, event: "script_started", seq: 13, frame: 1, now_ms: 105 },
+            { schema: TRACE_SCHEMA, event: "script_finished", seq: 14, frame: 1, now_ms: 105, status: "success", created_intents: 0, intent_ids: [], diagnostic: "" },
+            { schema: TRACE_SCHEMA, event: "desire_disappeared", seq: 15, frame: 1, now_ms: 105, intent_id: 2 },
+            { schema: TRACE_SCHEMA, event: "desire_selected", seq: 16, frame: 1, now_ms: 105, intent_id: 1, owner_id: 0, type: "Light", type_id: 0, component: "officeLight", name: "fallback", desired_brightness: 30, priority: "low", lifetime: "persistent" },
+            { schema: TRACE_SCHEMA, event: "command_result", seq: 17, record_seq: 22, record_type: 14, data: { command_id: 1, disposition: "accepted", route: "scope.light", session: 1, status: "applied", target: "office-device" } },
+            { schema: TRACE_SCHEMA, event: "command_status", seq: 18, record_seq: 23, record_type: 13, data: { command_id: 1, status: "applied", value: "applied" } },
+            { schema: TRACE_SCHEMA, event: "observed_changed", seq: 19, record_seq: 24, record_type: 15, data: { command_id: 1, observed: 70, route: "scope.light", state_revision: 1, target: "office-device", value: 70 } },
+            { schema: TRACE_SCHEMA, event: "command_issued", seq: 20, record_seq: 26, record_type: 11, data: { command_id: 2, desired: 30, issued_at: 105, route: "scope.light", target: "office-device", value: "pending" } },
+            { schema: TRACE_SCHEMA, event: "command_attempt", seq: 21, record_seq: 27, record_type: 12, data: { attempt: 1, command_id: 2, now: 105 } },
+            { schema: TRACE_SCHEMA, event: "frame_completed", seq: 22, frame: 1, now_ms: 105, completed: true, phases: fullLoopPhases, expired_intents: 1, resolution_requests: 1, selected_intents: 1, systems_completed: 2 },
+            { schema: TRACE_SCHEMA, event: "component_snapshot", seq: 23, frame: 1, now_ms: 105, component: "officeLight", actual_brightness: 70, device_brightness: 30 },
+            { schema: TRACE_SCHEMA, event: "frame_started", seq: 24, frame: 2, now_ms: 110 },
+            { schema: TRACE_SCHEMA, event: "script_started", seq: 25, frame: 2, now_ms: 110 },
+            { schema: TRACE_SCHEMA, event: "script_finished", seq: 26, frame: 2, now_ms: 110, status: "success", created_intents: 0, intent_ids: [], diagnostic: "" },
+            { schema: TRACE_SCHEMA, event: "desire_selected", seq: 27, frame: 2, now_ms: 110, intent_id: 1, owner_id: 0, type: "Light", type_id: 0, component: "officeLight", name: "fallback", desired_brightness: 30, priority: "low", lifetime: "persistent" },
+            { schema: TRACE_SCHEMA, event: "command_result", seq: 28, record_seq: 33, record_type: 14, data: { command_id: 2, disposition: "accepted", route: "scope.light", session: 1, status: "applied", target: "office-device" } },
+            { schema: TRACE_SCHEMA, event: "command_status", seq: 29, record_seq: 34, record_type: 13, data: { command_id: 2, status: "applied", value: "applied" } },
+            { schema: TRACE_SCHEMA, event: "observed_changed", seq: 30, record_seq: 35, record_type: 15, data: { command_id: 2, observed: 30, route: "scope.light", state_revision: 2, target: "office-device", value: 30 } },
+            { schema: TRACE_SCHEMA, event: "frame_completed", seq: 31, frame: 2, now_ms: 110, completed: true, phases: fullLoopPhases, expired_intents: 0, resolution_requests: 1, selected_intents: 1, systems_completed: 2 },
+            { schema: TRACE_SCHEMA, event: "component_snapshot", seq: 32, frame: 2, now_ms: 110, component: "officeLight", actual_brightness: 30, device_brightness: 30 },
+            { schema: TRACE_SCHEMA, event: "run_completed", seq: 33, outcome: "success", script_status: "success", final_brightness: 30, device_brightness: 30, commands_issued: 2, reports_applied: 2, observations_applied: 0, tracking_system_runs: 3, frames_completed: 3, faulted: false }
         ];
         events.forEach(applyEvent);
 
-        const actualIsIndependent = elements.actualValue.textContent === "10"
-            && !elements.actualDetail.textContent.includes("70")
-            && !elements.actualDetail.textContent.includes("30");
-        const selectedIsDesire = elements.selectedValue.textContent === "30"
-            && elements.selectedDetail.textContent.includes("desire only")
+        const loopIsTruthful = elements.actualValue.textContent === "30"
+            && elements.deviceValue.textContent === "30"
             && elements.frameLedger.textContent.includes("70%")
             && elements.frameLedger.textContent.includes("30%");
+        const selectedIsDesire = elements.selectedValue.textContent === "30"
+            && elements.selectedDetail.textContent.includes("desire only");
+        const commandLaneReported = elements.resultDetail.textContent.includes("status applied");
+        const railIsComplete = elements.phaseItems.length === 7
+            && elements.phaseItems.every(function (item) { return item.dataset.state === "recorded"; });
+        const lampsShowConfirmedState = elements.actualLamp.dataset.known === "true"
+            && elements.actualLamp.style.getPropertyValue("--lamp-level") === "30%"
+            && elements.deviceLamp.dataset.known === "true"
+            && elements.deviceLamp.style.getPropertyValue("--lamp-level") === "30%";
         const terminalIsComplete = elements.body.dataset.runState === "complete"
             && elements.healthBadge.dataset.state === "complete";
-        if (actualIsIndependent && selectedIsDesire && terminalIsComplete) {
+        if (loopIsTruthful && selectedIsDesire && commandLaneReported
+            && railIsComplete && lampsShowConfirmedState && terminalIsComplete) {
             elements.body.dataset.selftest = "passed";
         } else {
             elements.body.dataset.selftest = "failed";

@@ -32,7 +32,10 @@ bool parse_unsigned(std::string_view text, Integer& value) {
 std::string simulation_usage(std::string_view executableName) {
     return "Usage: " + std::string(executableName) +
         " --initial-brightness <0..100> --script <lua-file> "
-        "--frame-time <milliseconds> [--frame-time <milliseconds> ...]\n";
+        "--frame-time <milliseconds> [--frame-time <milliseconds> ...] "
+        "[--feedback-timing deferred|immediate] [--latency <milliseconds>] "
+        "[--outcome applied|rejected|failed] [--duplicates <0..64>] "
+        "[--silent true|false] [--reverse-delivery true|false]\n";
 }
 
 std::string escape_text(std::string_view value) {
@@ -75,7 +78,11 @@ SimulationParseResult parse_simulation_arguments(const std::vector<std::string>&
             result.diagnostic = "--help cannot be combined with scenario options";
             return result;
         }
-        if (option != "--initial-brightness" && option != "--script" && option != "--frame-time") {
+        if (option != "--initial-brightness" && option != "--script" &&
+            option != "--frame-time" && option != "--feedback-timing" &&
+            option != "--latency" && option != "--outcome" &&
+            option != "--duplicates" && option != "--silent" &&
+            option != "--reverse-delivery") {
             result.diagnostic = "unknown option: " + escape_text(option);
             return result;
         }
@@ -111,6 +118,59 @@ SimulationParseResult parse_simulation_arguments(const std::vector<std::string>&
             }
             result.options.scriptPath = value;
             hasScript = true;
+            continue;
+        }
+
+        if (option == "--feedback-timing") {
+            if (value == "deferred")
+                result.options.feedbackTiming = FeedbackTiming::Deferred;
+            else if (value == "immediate")
+                result.options.feedbackTiming = FeedbackTiming::Immediate;
+            else {
+                result.diagnostic = "feedback timing must be deferred or immediate";
+                return result;
+            }
+            continue;
+        }
+        if (option == "--outcome") {
+            if (value == "applied")
+                result.options.adapterOutcome = CommandStatus::Applied;
+            else if (value == "rejected")
+                result.options.adapterOutcome = CommandStatus::Rejected;
+            else if (value == "failed")
+                result.options.adapterOutcome = CommandStatus::Failed;
+            else {
+                result.diagnostic = "outcome must be applied, rejected, or failed";
+                return result;
+            }
+            continue;
+        }
+        if (option == "--silent" || option == "--reverse-delivery") {
+            if (value != "true" && value != "false") {
+                result.diagnostic = option + " must be true or false";
+                return result;
+            }
+            const bool enabled = value == "true";
+            if (option == "--silent")
+                result.options.silent = enabled;
+            else
+                result.options.reverseDelivery = enabled;
+            continue;
+        }
+        if (option == "--latency") {
+            if (!parse_unsigned(value, result.options.latencyMs)) {
+                result.diagnostic = "latency must be an unsigned integer";
+                return result;
+            }
+            continue;
+        }
+        if (option == "--duplicates") {
+            std::uint64_t duplicates = 0;
+            if (!parse_unsigned(value, duplicates) || duplicates > 64) {
+                result.diagnostic = "duplicates must be an integer from 0 to 64";
+                return result;
+            }
+            result.options.duplicateReports = static_cast<std::size_t>(duplicates);
             continue;
         }
 

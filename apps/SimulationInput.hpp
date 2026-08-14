@@ -20,6 +20,12 @@ struct SimulationFileOptions {
     int initialBrightness = 0;
     std::string scriptPath;
     std::vector<IntentTime> frameTimes;
+    FeedbackTiming feedbackTiming = FeedbackTiming::Deferred;
+    std::uint64_t latencyMs = 0;
+    CommandStatus adapterOutcome = CommandStatus::Applied;
+    std::size_t duplicateReports = 0;
+    bool silent = false;
+    bool reverseDelivery = false;
 };
 
 struct SimulationParseResult {

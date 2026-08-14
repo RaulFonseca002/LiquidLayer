@@ -1,5 +1,7 @@
 # Avaliação do Estado Atual e Direção Futura do Projeto Liquid
 
+> Snapshot histórico: esta avaliação antecede a conclusão de M6 e o plano aprovado S0-S7 para Solid v0.1. Consulte `COMPLETE_SOLID.md` e `DEVELOPMENT_TRACKING.md` para o estado atual.
+
 **Data da avaliação:** 11 de julho de 2026; atualização de M5 em 10 de agosto de 2026
 
 **Referência do código:** working tree atual, incluindo a estabilização pré-M5 de 15 de julho de 2026
@@ -234,7 +236,7 @@ O código M1-M5 é coerente com as regras operacionais atuais. A fronteira Lua s
 
 #### H1. Resolvido: cópia e movimento de `World`/`Runtime` ligavam o coordenador ao estado errado
 
-**Referências:** `include/liquid/world/World.hpp:14-20`, `include/liquid/world/Coordinator.hpp:16-25`, `include/liquid/Runtime.hpp:23-30`.
+**Referências:** `include/liquid/world/World.hpp`, `include/liquid/detail/Coordinator.hpp`, `include/liquid/Runtime.hpp`.
 
 `World` possui um `WorldState` por valor e um `Coordinator` que guarda `WorldState&`. A versão avaliada originalmente permitia operações implícitas que copiavam essa referência. Agora `World`, `Runtime`, `Coordinator`, `ComponentRegistry`, `IntentRegistry` e `SystemRegistry` apagam copy e move; testes `static_assert` congelam esse contrato.
 
@@ -254,7 +256,7 @@ O contrato de frame continua fail-stop para exceções que escapem de `System::r
 
 #### H3. Resolvido: mutação reentrante do `SystemRegistry` podia produzir use-after-free
 
-**Referências:** `include/liquid/world/World.hpp:156-157`, `include/liquid/SystemRegistry.hpp:171-194`, `src/SystemRegistry.cpp:21-58`.
+**Referências:** `include/liquid/world/World.hpp`, `include/liquid/detail/SystemRegistry.hpp`, `src/SystemRegistry.cpp`.
 
 Na versão inicialmente avaliada, `run_systems` copiava apenas os `type_index` da ordem e chamava `run()` pelo único `shared_ptr` do mapa. Um teste direcionado com ASan confirmou `heap-use-after-free` após autodestruição.
 
@@ -303,13 +305,13 @@ Lua 5.5 é a versão mais nova da linguagem, mas M5 não depende de seus recurso
 
 #### M1. Resolvido: sistemas de assinatura vazia recebem comportamentos existentes
 
-**Referências:** `src/world/Coordinator.cpp:10-14`, `include/liquid/world/Coordinator.hpp:152-174`, `src/SystemRegistry.cpp:21-35`.
+**Referências:** `src/world/Coordinator.cpp`, `include/liquid/detail/Coordinator.hpp`, `src/SystemRegistry.cpp`.
 
 Criação de comportamento registra a assinatura vazia e atualiza membership. Registro de sistema recebe a assinatura inicial atomicamente, percorre os comportamentos vivos e cobre as ordens behavior-antes-system e system-antes-behavior. `Coordinator` é o único proprietário da derivação de membership; o `World` não expõe overrides manuais.
 
 #### M2. A fronteira C++ pública contém caminhos mutáveis sem permissão de comportamento
 
-**Referências:** `include/liquid/world/World.hpp:93-126`, `include/liquid/world/Coordinator.hpp:255-269`, `include/liquid/world/Coordinator.hpp:357-369`.
+**Referências:** `include/liquid/world/World.hpp`, `include/liquid/detail/Coordinator.hpp`.
 
 `get_component_named` e `resolve_component` podem retornar ponteiro mutável sem `BehaviorId`. Isso é aceitável para código C++ confiável de aplicação/efeito, mas contradiz a ideia de que resolução por slot é apenas interna e seria perigoso em bindings.
 
@@ -317,7 +319,7 @@ Criação de comportamento registra a assinatura vazia e atualiza membership. Re
 
 #### M3. Resolvido por contrato: ponteiros de componente são empréstimos curtos
 
-**Referências:** `include/liquid/ComponentStorage.hpp:47-70`, `include/liquid/ComponentStorage.hpp:168-179`.
+**Referências:** `include/liquid/detail/ComponentStorage.hpp`.
 
 Os ponteiros apontam para elementos de `std::vector`. Adicionar outro componente do mesmo tipo pode realocar o vetor. Remoção e reuso do slot podem fazer um handle antigo designar um componente novo.
 
@@ -349,13 +351,13 @@ O runtime expira antes dos sistemas e uma segunda vez antes da seleção para re
 
 #### M7. Resolvido: liveness de slot em tempo constante
 
-**Referências:** `include/liquid/ComponentStorage.hpp:76-85`, `include/liquid/ComponentStorage.hpp:142-165`.
+**Referências:** `include/liquid/detail/ComponentStorage.hpp`.
 
 Slots usam `std::optional` para representar liveness. `has`, `remove` e acesso verificam presença em tempo constante, e remoção destrói imediatamente o recurso armazenado.
 
 #### M8. Resolvido: warnings estritos disponíveis e limpos
 
-**Referências:** `include/liquid/ComponentStorage.hpp:68`, `tests/test_intent_resolution.cpp:48`.
+**Referências:** `include/liquid/detail/ComponentStorage.hpp`, `tests/test_intent_resolution.cpp`.
 
 O CMake oferece warnings estritos e modo opcional warnings-as-errors. A base compila limpa com `-Wall -Wextra -Wpedantic -Wconversion -Werror` no toolchain atual.
 
@@ -367,7 +369,7 @@ O CMake oferece warnings estritos e modo opcional warnings-as-errors. A base com
 
 #### M10. Resolvido: criação multi-índice possui rollback
 
-**Referências:** `include/liquid/IntentRegistry.hpp:168-187`, `include/liquid/ComponentRegistry.hpp:129-171`.
+**Referências:** `include/liquid/detail/IntentRegistry.hpp`, `include/liquid/detail/ComponentRegistry.hpp`.
 
 Criação de intent, registro de tipo e adição de componente usam etapas com rollback e testes com valores que lançam durante construção/movimento. Isso protege os índices locais; o `World` inteiro continua sem transação geral. O runner Lua não cria intents enquanto o script roda e, em falha durante commit, reverte somente os IDs já criados por aquela execução.
 

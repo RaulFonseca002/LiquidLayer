@@ -1,9 +1,15 @@
 #include "SimulationScenario.hpp"
 
+#include "liquid/ComponentCodec.hpp"
+#include "liquid/events/MemoryEventStore.hpp"
+#include "liquid/scripting/LuaLifecycleSystem.hpp"
+#include "liquid/simulation/InMemoryAdapter.hpp"
+
+#include <algorithm>
 #include <cstdint>
 #include <limits>
-#include <map>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -12,19 +18,62 @@ namespace liquid::simulation {
 namespace {
 
 using scripting::LuaBehaviorRunner;
+using scripting::LuaBehaviorScript;
 using scripting::LuaComponentCodec;
 using scripting::LuaExecutionResult;
 using scripting::LuaExecutionStatus;
+using scripting::LuaLifecycleSystem;
 using scripting::LuaValue;
 
 constexpr char LightTypeName[] = "Light";
 constexpr char LightComponentName[] = "officeLight";
+constexpr char ScriptComponentName[] = "lifecycle";
+constexpr char AdapterRouteName[] = "scope.light";
+constexpr char EffectTargetName[] = "office-device";
 
 struct Light {
     int brightness = 0;
 };
 
-LuaComponentCodec<Light> light_codec() {
+void validate_brightness(std::int64_t brightness) {
+    if (brightness < 0 || brightness > 100)
+        throw std::runtime_error("brightness must be between 0 and 100");
+}
+
+ComponentCodec<Light> component_codec() {
+    return {
+        [](const Light& light) {
+            validate_brightness(light.brightness);
+            return Value{static_cast<std::int64_t>(light.brightness)};
+        },
+        [](const Value& value) {
+            const std::int64_t brightness = value.as_signed_integer();
+            validate_brightness(brightness);
+            return Light{static_cast<int>(brightness)};
+        }
+    };
+}
+
+EffectCodec<Light> effect_codec() {
+    return {
+        AdapterRoute{AdapterRouteName},
+        [](const ComponentName&, const Light& light)
+            -> std::optional<ResolvedEffect> {
+            validate_brightness(light.brightness);
+            return ResolvedEffect{
+                AdapterRoute{AdapterRouteName},
+                EffectTarget{EffectTargetName},
+                Value{static_cast<std::int64_t>(light.brightness)}};
+        },
+        [](const Value& value) {
+            const std::int64_t brightness = value.as_signed_integer();
+            validate_brightness(brightness);
+            return Light{static_cast<int>(brightness)};
+        }
+    };
+}
+
+LuaComponentCodec<Light> lua_codec() {
     return {
         [](const Light& light) {
             return LuaValue::Table{{"brightness", LuaValue{light.brightness}}};
@@ -33,11 +82,9 @@ LuaComponentCodec<Light> light_codec() {
             const auto& table = value.as_table();
             if (table.size() != 1 || !table.contains("brightness"))
                 throw std::runtime_error("Light requires exactly brightness");
-
-            std::int64_t brightness = table.at("brightness").as_integer();
-            if (brightness < 0 || brightness > 100)
-                throw std::runtime_error("brightness must be between 0 and 100");
-
+            const std::int64_t brightness =
+                table.at("brightness").as_integer();
+            validate_brightness(brightness);
             return Light{static_cast<int>(brightness)};
         }
     };
@@ -49,72 +96,30 @@ IntentSnapshot snapshot_intent(
     IntentId id
 ) {
     const ComponentIntent<Light>& intent = world.typed_intent(lightType, id);
-    ComponentTarget target = world.intent_target(id);
+    const ComponentTarget target = world.intent_target(id);
     if (target.type != lightType.id)
         throw std::runtime_error("unexpected intent component type");
-
     return {
         id,
         world.intent_owner(id),
         target.type,
         LightTypeName,
         LightComponentName,
+        world.intent(id).name,
         intent.value.brightness,
         intent.priority,
-        intent.lifetime
-    };
+        intent.lifetime};
 }
 
-class LuaScenarioSystem : public System {
-private:
-    LuaBehaviorRunner* runner;
-    SimulationObserver* observer;
-    ComponentType<Light> lightType;
-    BehaviorId owner;
-    std::string source;
-    bool hasRun = false;
-    LuaExecutionResult executionResult;
-
-public:
-    LuaScenarioSystem(
-        LuaBehaviorRunner& behaviorRunner,
-        SimulationObserver& simulationObserver,
-        ComponentType<Light> componentType,
-        BehaviorId behavior,
-        std::string scriptSource
-    )
-        : runner(&behaviorRunner),
-          observer(&simulationObserver),
-          lightType(componentType),
-          owner(behavior),
-          source(std::move(scriptSource)) {
-    }
-
-    void run(World& world, FrameNumber frame, IntentTime now) override {
-        if (hasRun)
-            return;
-
-        observer->script_started(frame, now);
-        executionResult = runner->execute(world, owner, now, source);
-        hasRun = true;
-        observer->script_finished(frame, now, executionResult);
-
-        for (IntentId id : executionResult.createdIntents) {
-            if (world.intent_exists(id))
-                observer->intent_created(frame, now, snapshot_intent(world, lightType, id));
-        }
-    }
-
-    const LuaExecutionResult& result() const {
-        return executionResult;
-    }
-};
-
-class TrackingSystem : public System {
+class TrackingSystem final : public System {
 private:
     std::size_t completedRuns = 0;
 
 public:
+    static constexpr std::string_view stableName =
+        "liquid.scope.TrackingSystem";
+    static constexpr std::uint32_t version = 1;
+
     void run(World&, FrameNumber, IntentTime) override {
         completedRuns++;
     }
@@ -125,15 +130,22 @@ public:
 };
 
 void validate_options(const SimulationOptions& options) {
-    if (options.initialBrightness < 0 || options.initialBrightness > 100)
-        throw std::invalid_argument("initial brightness must be between 0 and 100");
+    validate_brightness(options.initialBrightness);
     if (options.frameTimes.empty())
         throw std::invalid_argument("at least one frame time is required");
-
+    if (options.duplicateReports > 64)
+        throw std::invalid_argument("duplicate reports must not exceed 64");
+    if (options.adapterOutcome == CommandStatus::Pending ||
+        options.adapterOutcome == CommandStatus::Superseded ||
+        options.adapterOutcome == CommandStatus::Indeterminate ||
+        options.adapterOutcome == CommandStatus::TimedOut) {
+        throw std::invalid_argument("adapter outcome is not directly reportable");
+    }
     IntentTime previous = 0;
     bool first = true;
     for (IntentTime now : options.frameTimes) {
-        if (now > static_cast<IntentTime>(std::numeric_limits<std::int64_t>::max()))
+        if (now > static_cast<IntentTime>(
+                std::numeric_limits<std::int64_t>::max()))
             throw std::invalid_argument("frame time exceeds the Lua integer range");
         if (!first && now < previous)
             throw std::invalid_argument("frame times must be nondecreasing");
@@ -142,113 +154,187 @@ void validate_options(const SimulationOptions& options) {
     }
 }
 
+std::optional<int> brightness_of(const std::optional<Value>& value) {
+    if (!value)
+        return std::nullopt;
+    const std::int64_t brightness = value->as_signed_integer();
+    validate_brightness(brightness);
+    return static_cast<int>(brightness);
+}
+
 }
 
 void SimulationObserver::run_started(const SimulationOptions&) {}
-void SimulationObserver::world_ready(BehaviorId, ComponentTypeId, ComponentSlotId, int) {}
+void SimulationObserver::world_ready(
+    BehaviorId, ComponentTypeId, ComponentSlotId, int) {}
 void SimulationObserver::frame_started(FrameNumber, IntentTime) {}
 void SimulationObserver::script_started(FrameNumber, IntentTime) {}
 void SimulationObserver::script_finished(
-    FrameNumber,
-    IntentTime,
-    const scripting::LuaExecutionResult&
-) {}
-void SimulationObserver::intent_created(FrameNumber, IntentTime, const IntentSnapshot&) {}
-void SimulationObserver::frame_completed(const FrameLog&) {}
-void SimulationObserver::intent_selected(FrameNumber, IntentTime, const IntentSnapshot&) {}
-void SimulationObserver::component_snapshot(FrameNumber, IntentTime, int) {}
-void SimulationObserver::intent_disappeared(FrameNumber, IntentTime, IntentId) {}
+    FrameNumber, IntentTime, const scripting::LuaExecutionResult&) {}
+void SimulationObserver::intent_created(
+    FrameNumber, IntentTime, const IntentSnapshot&) {}
+void SimulationObserver::intent_disappeared(
+    FrameNumber, IntentTime, IntentId) {}
+void SimulationObserver::intent_selected(
+    FrameNumber, IntentTime, const IntentSnapshot&) {}
+void SimulationObserver::runtime_record(const EventRecord&) {}
+void SimulationObserver::frame_completed(const FrameResult&) {}
+void SimulationObserver::component_snapshot(
+    FrameNumber, IntentTime, int, std::optional<int>) {}
 void SimulationObserver::run_completed(const SimulationOutcome&) {}
 void SimulationObserver::run_failed(const SimulationOutcome&) {}
 
-SimulationOutcome run_scenario(const SimulationOptions& options, SimulationObserver& observer) {
+SimulationOutcome run_scenario(
+    const SimulationOptions& options,
+    SimulationObserver& observer
+) {
     SimulationOutcome outcome;
     outcome.finalBrightness = options.initialBrightness;
-    std::unique_ptr<LuaBehaviorRunner> runner;
     std::unique_ptr<Runtime> runtime;
 
     try {
         observer.run_started(options);
         validate_options(options);
-        runner = std::make_unique<LuaBehaviorRunner>();
-        runtime = std::make_unique<Runtime>();
-        World& world = runtime->world();
-        ComponentType<Light> lightType = world.register_component<Light>(LightTypeName);
-        world.add_component(lightType, LightComponentName, Light{options.initialBrightness});
 
-        BehaviorId behavior = world.create_behavior();
+        EventStoreMetadata metadata;
+        metadata.session = SessionId{1};
+        metadata.engineVersion = "0.1.0-scope";
+        metadata.feedbackTiming = options.feedbackTiming;
+        MemoryEventStore store{metadata};
+        RuntimeOptions runtimeOptions;
+        runtimeOptions.sessionId = metadata.session;
+        runtimeOptions.feedbackTiming = options.feedbackTiming;
+        runtimeOptions.eventStore = &store;
+        runtime = std::make_unique<Runtime>(runtimeOptions);
+        World& world = runtime->world();
+
+        const ComponentType<Light> lightType = world.register_component<Light>(
+            "scope.Light", 1, component_codec());
+        world.register_effect_codec(lightType, effect_codec());
+        const auto scriptType = world.register_component<LuaBehaviorScript>(
+            "liquid.LuaBehaviorScript",
+            1,
+            scripting::lua_behavior_script_codec());
+        world.add_component(
+            lightType,
+            LightComponentName,
+            Light{options.initialBrightness});
+        world.add_component(
+            scriptType,
+            ScriptComponentName,
+            LuaBehaviorScript{options.source, 1});
+
+        const BehaviorId behavior = world.create_behavior();
         world.grant_component_access(
             lightType,
             behavior,
             LightComponentName,
-            ComponentAccessMode::ReadWrite
-        );
-        ComponentSlotId slot = world.get_components(lightType, behavior).at(LightComponentName);
-
-        runner->expose_component(lightType, LightTypeName, light_codec());
-        world.register_system<LuaScenarioSystem>(
-            Signature{},
-            *runner,
-            observer,
-            lightType,
+            ComponentAccessMode::ReadWrite);
+        world.grant_component_access(
+            scriptType,
             behavior,
-            options.source
-        );
-        world.register_system<TrackingSystem>(Signature{});
-        observer.world_ready(behavior, lightType.id, slot, options.initialBrightness);
+            ScriptComponentName,
+            ComponentAccessMode::Read);
+        const ComponentSlotId slot =
+            world.get_components(lightType, behavior).at(LightComponentName);
 
-        std::map<ComponentTypeId, std::map<ComponentName, ComponentSlotId>> resolutions{
-            {lightType.id, {{LightComponentName, slot}}}
-        };
-        std::vector<IntentId> observedIntents;
-        bool scriptIntentsCaptured = false;
+        auto runner = std::make_shared<LuaBehaviorRunner>();
+        runner->expose_component(lightType, LightTypeName, lua_codec());
+        Signature scriptSignature;
+        scriptSignature.set(scriptType.id);
+        world.register_system<LuaLifecycleSystem>(
+            scriptSignature,
+            SystemPhase::Behavior,
+            scriptType,
+            runner,
+            ScriptComponentName);
+        world.register_system<TrackingSystem>(
+            Signature{}, SystemPhase::Decision);
 
+        AdapterBehavior adapterBehavior;
+        adapterBehavior.latencyMs = options.latencyMs;
+        adapterBehavior.outcome = options.adapterOutcome;
+        adapterBehavior.duplicateReports = options.duplicateReports;
+        adapterBehavior.silent = options.silent;
+        adapterBehavior.reverseDelivery = options.reverseDelivery;
+        auto adapter = std::make_shared<InMemoryAdapter>(
+            AdapterRoute{AdapterRouteName}, adapterBehavior);
+        runtime->register_adapter(adapter);
+        runtime->bind_effect_component(
+            lightType,
+            LightComponentName,
+            EffectTarget{EffectTargetName});
+        observer.world_ready(
+            behavior, lightType.id, slot, options.initialBrightness);
+
+        std::set<IntentId> knownIntents;
+        std::size_t emittedRecords = 0;
         for (IntentTime now : options.frameTimes) {
-            FrameNumber frameNumber = runtime->frame();
+            const FrameNumber frameNumber = runtime->frame();
+            adapter->deliver_through(now);
             observer.frame_started(frameNumber, now);
-            FrameLog frame = runtime->run_frame(now, resolutions);
-            const LuaExecutionResult& script = world.get_system<LuaScenarioSystem>().result();
+            observer.script_started(frameNumber, now);
+            FrameInput input;
+            input.now = now;
+            FrameResult result = runtime->run_frame(std::move(input));
 
-            if (!scriptIntentsCaptured) {
-                observedIntents = script.createdIntents;
-                scriptIntentsCaptured = true;
+            const auto& lifecycle = world.get_system<LuaLifecycleSystem>();
+            const LuaExecutionResult* script = lifecycle.last_result(behavior);
+            if (!script)
+                throw std::runtime_error("lifecycle script result is unavailable");
+            outcome.script = *script;
+            observer.script_finished(frameNumber, now, *script);
+
+            std::set<IntentId> current;
+            for (IntentId id : world.intents_owned_by(behavior)) {
+                current.insert(id);
+                if (!knownIntents.contains(id))
+                    observer.intent_created(
+                        frameNumber, now, snapshot_intent(world, lightType, id));
             }
-
-            observer.frame_completed(frame);
-            auto intent = observedIntents.begin();
-            while (intent != observedIntents.end()) {
-                if (!world.intent_exists(*intent)) {
-                    IntentId disappeared = *intent;
-                    observer.intent_disappeared(frame.frame, frame.now, disappeared);
-                    intent = observedIntents.erase(intent);
-                } else {
-                    ++intent;
-                }
+            for (IntentId id : knownIntents) {
+                if (!current.contains(id))
+                    observer.intent_disappeared(frameNumber, now, id);
             }
+            knownIntents = std::move(current);
 
-            for (const auto& [type, selections] : frame.intent_selections) {
+            for (const auto& [type, selections] : result.frame.intent_selections) {
                 if (type != lightType.id)
-                    throw std::runtime_error("unexpected selected component type");
+                    continue;
                 for (const auto& [name, id] : selections) {
-                    if (name != LightComponentName)
-                        throw std::runtime_error("unexpected selected component name");
-                    observer.intent_selected(frame.frame, frame.now, snapshot_intent(world, lightType, id));
+                    if (name == LightComponentName)
+                        observer.intent_selected(
+                            frameNumber, now, snapshot_intent(world, lightType, id));
                 }
             }
 
-            const Light* light = world.get_component_named(lightType, LightComponentName);
+            const std::vector<EventRecord> records = store.read_all();
+            while (emittedRecords < records.size())
+                observer.runtime_record(records[emittedRecords++]);
+            observer.frame_completed(result);
+
+            const Light* light = world.read_component(
+                lightType, behavior, LightComponentName);
             if (!light)
                 throw std::runtime_error("light component is unavailable");
-            observer.component_snapshot(frame.frame, frame.now, light->brightness);
+            const std::optional<int> device = brightness_of(
+                adapter->state(EffectTarget{EffectTargetName}));
+            observer.component_snapshot(
+                frameNumber, now, light->brightness, device);
+            outcome.commandsIssued += result.commands.size();
+            outcome.reportsApplied += result.reports.size();
+            outcome.observationsApplied += result.observations.size();
         }
 
-        const Light* finalLight = world.get_component_named(lightType, LightComponentName);
+        const Light* finalLight = world.read_component(
+            lightType, behavior, LightComponentName);
         if (!finalLight)
             throw std::runtime_error("final light state is unavailable");
-
-        outcome.script = world.get_system<LuaScenarioSystem>().result();
         outcome.finalBrightness = finalLight->brightness;
-        outcome.trackingSystemRuns = world.get_system<TrackingSystem>().runs();
+        outcome.deviceBrightness = brightness_of(
+            adapter->state(EffectTarget{EffectTargetName}));
+        outcome.trackingSystemRuns =
+            world.get_system<TrackingSystem>().runs();
         outcome.framesCompleted = runtime->frame();
         outcome.faulted = runtime->faulted();
 
@@ -260,6 +346,8 @@ SimulationOutcome run_scenario(const SimulationOptions& options, SimulationObser
             outcome.status = outcome.script.succeeded()
                 ? SimulationStatus::Success
                 : SimulationStatus::ScriptError;
+            if (!outcome.script.succeeded())
+                outcome.diagnostic = outcome.script.diagnostic;
             observer.run_completed(outcome);
         }
         return outcome;
@@ -281,7 +369,6 @@ SimulationOutcome run_scenario(const SimulationOptions& options, SimulationObser
                 outcome.diagnostic = failedFrame.failure_message;
         }
     }
-
     observer.run_failed(outcome);
     return outcome;
 }

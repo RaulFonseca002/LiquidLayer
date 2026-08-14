@@ -1,11 +1,16 @@
 #include "liquid/Runtime.hpp"
 
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
+#include <limits>
+#include <thread>
+#include <atomic>
 #include <map>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
+
+using namespace liquid;
 
 static_assert(!std::is_copy_constructible_v<Runtime>);
 static_assert(!std::is_copy_assignable_v<Runtime>);
@@ -22,6 +27,8 @@ struct CapturedFrame {
 };
 
 struct FrameCaptureSystem : System {
+    static constexpr std::string_view stableName = "tests.test.runtime.cpp.FrameCaptureSystem";
+    static constexpr std::uint32_t version = 1;
     std::vector<CapturedFrame> frames;
 
     void run(World& world, FrameNumber frame, IntentTime now) override {
@@ -31,6 +38,8 @@ struct FrameCaptureSystem : System {
 };
 
 struct FirstOrderSystem : System {
+    static constexpr std::string_view stableName = "tests.test.runtime.cpp.FirstOrderSystem";
+    static constexpr std::uint32_t version = 1;
     std::vector<std::string>* order = nullptr;
 
     explicit FirstOrderSystem(std::vector<std::string>* executionOrder)
@@ -46,6 +55,8 @@ struct FirstOrderSystem : System {
 };
 
 struct SecondOrderSystem : System {
+    static constexpr std::string_view stableName = "tests.test.runtime.cpp.SecondOrderSystem";
+    static constexpr std::uint32_t version = 1;
     std::vector<std::string>* order = nullptr;
 
     explicit SecondOrderSystem(std::vector<std::string>* executionOrder)
@@ -60,7 +71,27 @@ struct SecondOrderSystem : System {
     }
 };
 
+template <int PhaseIndex>
+struct PhaseOrderSystem : System {
+    static constexpr std::string_view stableName =
+        PhaseIndex == 0 ? "tests.runtime.InputPhase" :
+        PhaseIndex == 1 ? "tests.runtime.BehaviorPhase" :
+            "tests.runtime.DecisionPhase";
+    static constexpr std::uint32_t version = 1;
+    std::vector<int>* order = nullptr;
+
+    explicit PhaseOrderSystem(std::vector<int>* executionOrder)
+        : order(executionOrder) {
+    }
+
+    void run(World&, FrameNumber, IntentTime) override {
+        order->push_back(PhaseIndex);
+    }
+};
+
 struct IntentCreatingSystem : System {
+    static constexpr std::string_view stableName = "tests.test.runtime.cpp.IntentCreatingSystem";
+    static constexpr std::uint32_t version = 1;
     ComponentType<Light> type;
     BehaviorId owner = 0;
     ComponentSlotId slot = InvalidComponentSlotId;
@@ -83,7 +114,7 @@ struct IntentCreatingSystem : System {
     void run(World& world, FrameNumber frame, IntentTime now) override {
         (void)frame;
 
-        if (created != 0)
+        if (created)
             return;
 
         created = world.create_intent(
@@ -97,9 +128,13 @@ struct IntentCreatingSystem : System {
 };
 
 struct LateRegisteredSystem : System {
+    static constexpr std::string_view stableName = "tests.test.runtime.cpp.LateRegisteredSystem";
+    static constexpr std::uint32_t version = 1;
 };
 
 struct RegisteringDuringRunSystem : System {
+    static constexpr std::string_view stableName = "tests.test.runtime.cpp.RegisteringDuringRunSystem";
+    static constexpr std::uint32_t version = 1;
     bool registrationRejected = false;
 
     void run(World& world, FrameNumber frame, IntentTime now) override;
@@ -117,6 +152,8 @@ void RegisteringDuringRunSystem::run(World& world, FrameNumber frame, IntentTime
 }
 
 struct SelfDestroyingSystem : System {
+    static constexpr std::string_view stableName = "tests.test.runtime.cpp.SelfDestroyingSystem";
+    static constexpr std::uint32_t version = 1;
     bool destructionRejected = false;
     bool reachedEndOfRun = false;
 
@@ -137,6 +174,8 @@ void SelfDestroyingSystem::run(World& world, FrameNumber frame, IntentTime now) 
 }
 
 struct ComponentRemovingSystem : System {
+    static constexpr std::string_view stableName = "tests.test.runtime.cpp.ComponentRemovingSystem";
+    static constexpr std::uint32_t version = 1;
     ComponentType<Light> type;
     bool removalRejected = false;
 
@@ -158,6 +197,8 @@ struct ComponentRemovingSystem : System {
 };
 
 struct ThrowingSystem : System {
+    static constexpr std::string_view stableName = "tests.test.runtime.cpp.ThrowingSystem";
+    static constexpr std::uint32_t version = 1;
     std::size_t runs = 0;
 
     void run(World& world, FrameNumber frame, IntentTime now) override {
@@ -170,6 +211,8 @@ struct ThrowingSystem : System {
 };
 
 struct ReentrantRuntimeSystem : System {
+    static constexpr std::string_view stableName = "tests.test.runtime.cpp.ReentrantRuntimeSystem";
+    static constexpr std::uint32_t version = 1;
     Runtime& runtime;
     bool reentryRejected = false;
 
@@ -202,7 +245,7 @@ void expect_throw(Function function)
     } catch (...) {
     }
 
-    assert(thrown);
+    REQUIRE(thrown);
 }
 
 std::map<ComponentTypeId, std::map<ComponentName, ComponentSlotId>> resolutions_for(
@@ -212,8 +255,45 @@ std::map<ComponentTypeId, std::map<ComponentName, ComponentSlotId>> resolutions_
     return {{type.id, {{"officeLight", slot}}}};
 }
 
-int main()
+TEST_CASE("test_runtime")
 {
+    {
+        Runtime exhausted(std::numeric_limits<FrameNumber>::max());
+        expect_throw<std::overflow_error>([&] { exhausted.run_frame(0); });
+        REQUIRE(!exhausted.faulted());
+    }
+
+    {
+        Runtime runtime;
+        std::atomic<bool> rejected{false};
+        std::thread other([&] {
+            try {
+                (void)runtime.world();
+            } catch (const std::logic_error&) {
+                rejected = true;
+            }
+        });
+        other.join();
+        REQUIRE(rejected);
+    }
+
+    {
+        Runtime runtime;
+        World& world = runtime.world();
+        const auto lightType = world.register_component<Light>("Light");
+        world.add_component(lightType, "office", Light{10});
+        std::atomic<bool> rejected{false};
+        std::thread other([&] {
+            try {
+                static_cast<void>(world.get_component_named(lightType, "office"));
+            } catch (const std::logic_error&) {
+                rejected = true;
+            }
+        });
+        other.join();
+        REQUIRE(rejected);
+    }
+
     {
         Runtime runtime;
         World& world = runtime.world();
@@ -224,28 +304,30 @@ int main()
 
         auto& system = world.get_system<FrameCaptureSystem>();
 
-        assert(first.frame == 0);
-        assert(first.now == 10);
-        assert(second.frame == 1);
-        assert(second.now == 20);
-        assert(first.completed);
-        assert(second.completed);
-        assert(runtime.frame() == 2);
-        assert(system.frames.size() == 2);
-        assert(system.frames[0].frame == 0);
-        assert(system.frames[0].now == 10);
-        assert(system.frames[1].frame == 1);
-        assert(system.frames[1].now == 20);
+        REQUIRE(first.frame == 0);
+        REQUIRE(first.now == 10);
+        REQUIRE(second.frame == 1);
+        REQUIRE(second.now == 20);
+        REQUIRE(first.completed);
+        REQUIRE(second.completed);
+        REQUIRE(runtime.frame() == 2);
+        REQUIRE(system.frames.size() == 2);
+        REQUIRE(system.frames[0].frame == 0);
+        REQUIRE(system.frames[0].now == 10);
+        REQUIRE(system.frames[1].frame == 1);
+        REQUIRE(system.frames[1].now == 20);
 
         std::vector<std::string> expectedPhases{
             "begin_frame",
             "expire_intents",
-            "run_systems",
+            "run_input_systems",
+            "run_behavior_systems",
+            "run_decision_systems",
             "resolve_intents",
             "end_frame"
         };
-        assert(first.phases == expectedPhases);
-        assert(runtime.last_frame_log().frame == 1);
+        REQUIRE(first.phases == expectedPhases);
+        REQUIRE(runtime.last_frame_log().frame == 1);
     }
 
     {
@@ -277,14 +359,14 @@ int main()
 
         FrameLog log = runtime.run_frame(5, resolutions_for(lightType, slot));
 
-        assert(world.intent_exists(persistent));
-        assert(!world.intent_exists(expired));
-        assert(log.expired_intents == 1);
-        assert(log.resolution_requests == 1);
-        assert(log.selected_intents == 1);
-        assert(log.intent_selections.size() == 1);
-        assert(log.intent_selections.at(lightType.id).at("officeLight") == persistent);
-        assert(world.get_component_named(lightType, "officeLight")->level == 0);
+        REQUIRE(world.intent_exists(persistent));
+        REQUIRE(!world.intent_exists(expired));
+        REQUIRE(log.expired_intents == 1);
+        REQUIRE(log.resolution_requests == 1);
+        REQUIRE(log.selected_intents == 1);
+        REQUIRE(log.intent_selections.size() == 1);
+        REQUIRE(log.intent_selections.at(lightType.id).at("officeLight") == persistent);
+        REQUIRE(world.get_component_named(lightType, "officeLight")->level == 0);
     }
 
     {
@@ -297,8 +379,24 @@ int main()
 
         FrameLog log = runtime.run_frame(2);
 
-        assert(log.systems_run == 2);
-        assert((order == std::vector<std::string>{"first:0", "second:0"}));
+        REQUIRE(log.systems_run == 2);
+        REQUIRE((order == std::vector<std::string>{"first:0", "second:0"}));
+    }
+
+    {
+        Runtime runtime;
+        World& world = runtime.world();
+        std::vector<int> order;
+        world.register_system<PhaseOrderSystem<2>>(
+            Signature{}, SystemPhase::Decision, &order);
+        world.register_system<PhaseOrderSystem<0>>(
+            Signature{}, SystemPhase::Input, &order);
+        world.register_system<PhaseOrderSystem<1>>(
+            Signature{}, SystemPhase::Behavior, &order);
+
+        const FrameLog log = runtime.run_frame(3);
+        REQUIRE(log.systems_run == 3);
+        REQUIRE(order == std::vector<int>{0, 1, 2});
     }
 
     {
@@ -316,10 +414,10 @@ int main()
         FrameLog first = runtime.run_frame(42, resolutions_for(lightType, slot));
         auto& system = world.get_system<IntentCreatingSystem>();
 
-        assert(system.created != 0);
-        assert(world.intent_exists(system.created));
-        assert(first.selected_intents == 1);
-        assert(first.intent_selections.at(lightType.id).at("officeLight") == system.created);
+        REQUIRE(system.created);
+        REQUIRE(world.intent_exists(system.created));
+        REQUIRE(first.selected_intents == 1);
+        REQUIRE(first.intent_selections.at(lightType.id).at("officeLight") == system.created);
     }
 
     {
@@ -337,11 +435,11 @@ int main()
         FrameLog frame = runtime.run_frame(42, resolutions_for(lightType, slot));
         const auto& system = world.get_system<IntentCreatingSystem>();
 
-        assert(system.created != 0);
-        assert(!world.intent_exists(system.created));
-        assert(frame.expired_intents == 1);
-        assert(frame.selected_intents == 0);
-        assert(frame.intent_selections.at(lightType.id).empty());
+        REQUIRE(system.created);
+        REQUIRE(!world.intent_exists(system.created));
+        REQUIRE(frame.expired_intents == 1);
+        REQUIRE(frame.selected_intents == 0);
+        REQUIRE(frame.intent_selections.at(lightType.id).empty());
     }
 
     {
@@ -357,13 +455,13 @@ int main()
             runtime.run_frame(9);
         });
 
-        assert(!runtime.faulted());
-        assert(runtime.frame() == 2);
-        assert(system.frames.size() == 2);
+        REQUIRE(!runtime.faulted());
+        REQUIRE(runtime.frame() == 2);
+        REQUIRE(system.frames.size() == 2);
 
         runtime.run_frame(11);
-        assert(runtime.frame() == 3);
-        assert(system.frames.size() == 3);
+        REQUIRE(runtime.frame() == 3);
+        REQUIRE(system.frames.size() == 3);
     }
 
     {
@@ -377,20 +475,22 @@ int main()
             runtime.run_frame(10);
         });
 
-        assert(runtime.faulted());
-        assert(runtime.frame() == 0);
-        assert(system.runs == 1);
-        assert(!runtime.last_frame_log().completed);
-        assert(runtime.last_frame_log().failure_phase == "run_systems");
-        assert(runtime.last_frame_log().failure_message == "system failed");
-        assert(runtime.last_frame_log().systems_run == 1);
+        REQUIRE(runtime.faulted());
+        REQUIRE(runtime.frame() == 0);
+        REQUIRE(system.runs == 1);
+        REQUIRE(!runtime.last_frame_log().completed);
+        REQUIRE(runtime.last_frame_log().failure_phase == "run_decision_systems");
+        REQUIRE(runtime.last_frame_log().failure_message == "system failed");
+        REQUIRE(runtime.last_frame_log().failure_system ==
+               "tests.test.runtime.cpp.ThrowingSystem@1");
+        REQUIRE(runtime.last_frame_log().systems_run == 1);
 
         expect_throw<std::logic_error>([&] {
             runtime.run_frame(11);
         });
 
-        assert(runtime.frame() == 0);
-        assert(system.runs == 1);
+        REQUIRE(runtime.frame() == 0);
+        REQUIRE(system.runs == 1);
     }
 
     {
@@ -401,12 +501,12 @@ int main()
         runtime.run_frame(10);
 
         auto& system = world.get_system<RegisteringDuringRunSystem>();
-        assert(system.registrationRejected);
-        assert(!world.system_exists<LateRegisteredSystem>());
-        assert(!runtime.faulted());
+        REQUIRE(system.registrationRejected);
+        REQUIRE(!world.system_exists<LateRegisteredSystem>());
+        REQUIRE(!runtime.faulted());
 
         world.register_system<LateRegisteredSystem>(Signature{});
-        assert(world.system_exists<LateRegisteredSystem>());
+        REQUIRE(world.system_exists<LateRegisteredSystem>());
     }
 
     {
@@ -417,10 +517,10 @@ int main()
 
         runtime.run_frame(10);
 
-        assert(system.destructionRejected);
-        assert(system.reachedEndOfRun);
-        assert(world.system_exists<SelfDestroyingSystem>());
-        assert(!runtime.faulted());
+        REQUIRE(system.destructionRejected);
+        REQUIRE(system.reachedEndOfRun);
+        REQUIRE(world.system_exists<SelfDestroyingSystem>());
+        REQUIRE(!runtime.faulted());
     }
 
     {
@@ -431,9 +531,9 @@ int main()
         runtime.run_frame(10);
 
         auto& system = world.get_system<ReentrantRuntimeSystem>();
-        assert(system.reentryRejected);
-        assert(runtime.frame() == 1);
-        assert(!runtime.faulted());
+        REQUIRE(system.reentryRejected);
+        REQUIRE(runtime.frame() == 1);
+        REQUIRE(!runtime.faulted());
     }
 
     {
@@ -457,10 +557,10 @@ int main()
         FrameLog log = runtime.run_frame(10, resolutions_for(lightType, slot));
         auto& system = world.get_system<ComponentRemovingSystem>();
 
-        assert(system.removalRejected);
-        assert(world.has_component_named(lightType, "officeLight"));
-        assert(log.intent_selections.at(lightType.id).at("officeLight") == intent);
-        assert(!runtime.faulted());
+        REQUIRE(system.removalRejected);
+        REQUIRE(world.has_component_named(lightType, "officeLight"));
+        REQUIRE(log.intent_selections.at(lightType.id).at("officeLight") == intent);
+        REQUIRE(!runtime.faulted());
     }
 
     {
@@ -477,16 +577,18 @@ int main()
         world.remove_component(lightType, "officeLight");
         world.add_component(lightType, "kitchenLight", Light{0});
         world.grant_component_access(lightType, behavior, "kitchenLight", ComponentAccessMode::ReadWrite);
-        assert(world.get_components(lightType, behavior).at("kitchenLight") == recycledSlot);
+        const ComponentSlotId replacementSlot =
+            world.get_components(lightType, behavior).at("kitchenLight");
+        REQUIRE(replacementSlot.slot == recycledSlot.slot);
+        REQUIRE(replacementSlot.generation > recycledSlot.generation);
 
         expect_throw<std::invalid_argument>([&] {
             runtime.run_frame(10, staleResolutions);
         });
 
-        assert(runtime.frame() == 0);
-        assert(!runtime.faulted());
-        assert(world.has_component_named(lightType, "kitchenLight"));
+        REQUIRE(runtime.frame() == 0);
+        REQUIRE(!runtime.faulted());
+        REQUIRE(world.has_component_named(lightType, "kitchenLight"));
     }
 
-    return 0;
 }

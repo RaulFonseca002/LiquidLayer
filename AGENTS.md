@@ -26,27 +26,80 @@ Superposition ECS reference lives at `/home/raul/Desktop/superposition`. Use it 
 
 ## Current Coding Milestone
 
-### Stage 2 Milestone Definition
+### Solid v0.1 Finalization
 
-M6 is complete. No Stage 2 implementation milestone has been selected yet.
+M1 through M6 complete the original deterministic decision core. The approved current work is the S0-S7 Solid finalization program in `COMPLETE_SOLID.md` and `DEVELOPMENT_TRACKING.md`, ending in a private reusable C++20 framework release at version 0.1.0.
 
-On the `experiment/stage2` branch only, the project owner has approved **Solid Scope**, a local browser visualization experiment around the completed M6 scenario. This experiment is a development tool, not the first Stage 2 milestone.
+Current milestone: **complete S6 with Solid Lifecycle Scripting and the Full-Loop Scope Simulation on `experiment/stage2`**. The headless lifecycle core is forward-merged; Scope must now exercise that one Runtime through script proposal, resolution, command dispatch, simulated feedback, and authoritative component projection. Remote platform CI remains part of S7.
 
-Codex should focus only on:
+Codex may add only the files required by the approved ordered milestone and its regression evidence. Core work belongs on a short-lived branch from `origin/main`. After each headless milestone lands on `main`, forward-merge it into `experiment/stage2` and verify the experiment track. Solid Scope remains an optional Unix-only development application and must not introduce a second Runtime.
 
-- reading the completed Solid architecture and M6 simulation evidence;
-- defining the smallest useful Stage 2 milestone with the project owner;
-- updating `DEVELOPMENT_TRACKING.md` and this file after that scope is explicitly approved.
-- keeping the Solid Scope experiment inside `apps/`, focused tests, CMake wiring, and design/documentation files.
+The approved finalization includes public API hardening, world-bound generational handles, bounded encoded values and codecs, transactional component replacement, durable records and replay, effects/commands/feedback, deterministic retry and reconciliation, simulation, packaging, and the accepted Solid Scope fixes. It does not include LLM integration, MQTT, voice, biosignals, real hardware, or final Liquid Layer behavior.
 
-Do not add LLM integration, events, adapters, MQTT, voice, or final Liquid Layer application systems during this transition. Preserve the completed M1–M6 implementation. Solid Scope may extract the existing app-level scenario path and add a trace executable plus loopback-only browser bridge, but it must not introduce a second Runtime or change Solid semantics.
+---
+
+## Headless and Visualization Branch Workflow
+
+This project currently uses one GitHub repository, `RaulFonseca002/tcc`, with two long-lived branches. Do not treat them as separate repositories unless the remotes are explicitly changed later.
+
+- `main` is the canonical headless engine. It must not acquire the Solid Scope browser UI, bridge, or visualization-only dependencies.
+- `experiment/stage2` is the visualization and verification track. It contains Solid Scope, trace tooling, and test applications while consuming the same Solid core.
+- Never merge `experiment/stage2` wholesale into `main`.
+- Never force-push or rebase either shared long-lived branch after it has been published.
+
+Before changing code, run `git branch --show-current` and route the work by ownership:
+
+### Core or Runtime Work
+
+1. Start a short-lived branch from current `origin/main`.
+2. Implement and verify the headless change without depending on visualization code.
+3. Merge the change into `main` through its normal review path.
+4. Merge the updated `origin/main` into `experiment/stage2` and resolve conflicts without changing Solid semantics.
+5. Run the experiment branch's complete build and test suite before publishing the synchronization.
+
+Core fixes discovered while working in Solid Scope still follow this path. Do not fix the core only on `experiment/stage2`, because that leaves the canonical headless engine behind.
+
+### Visualization or Test-Application Work
+
+1. Start a short-lived branch from current `origin/experiment/stage2`.
+2. Keep changes within the approved experiment surface: `apps/`, focused tests, CMake wiring, and design/documentation files.
+3. Target the pull request at `experiment/stage2`, never `main`.
+4. Verify that no Solid core semantics changed. If a core change is required, split it into the core workflow above.
+
+### Synchronizing the Tracks
+
+Use forward merges from the headless track into the visualization track:
+
+```bash
+git fetch origin
+git switch experiment/stage2
+git merge origin/main
+cmake -S . -B build -DLIQUID_ENABLE_STRICT_WARNINGS=ON -DLIQUID_WARNINGS_AS_ERRORS=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+git push
+```
+
+Do not merge in the opposite direction. A synchronization conflict must preserve `main` as the source of truth for `include/`, `src/`, and Solid runtime behavior, while preserving visualization-only integration on `experiment/stage2`.
+
+### Parallel Local Work
+
+Prefer Git worktrees so both tracks can remain checked out and built independently. From the existing `experiment/stage2` checkout:
+
+```bash
+git worktree add ../tcc-headless main
+```
+
+Keep a separate `build/` directory inside each worktree. Never share generated build output between the two tracks.
+
+If the project later moves the visualization track into an actual second GitHub repository, update this section and configure explicit `upstream` and visualization remotes before moving code. Do not infer or invent remote names.
 
 ---
 
 ## Current Minimal Repository Shape
 
-Start small. Do not create folders before they are needed.
-The completed M5 scripting boundary and M6 simulation CLI remain part of the baseline. The approved experiment may add only `apps/visualizer/` plus the smallest shared app-level scenario/trace files and focused tests it needs.
+Start small. Do not create folders before their approved S0-S7 milestone needs them.
+During S0, only contract and tracking documentation is added to the completed M1-M6 headless baseline.
 
 ```text
 liquid/
@@ -55,6 +108,18 @@ liquid/
   DEVELOPMENT_TRACKING.md
   Liquid_Concepts_and_Architecture.md
   ARTICLE_NOTES.md
+  COMPLETE_SOLID.md
+
+  docs/
+    PUBLIC_API.md
+    EVENT_FORMAT_V1.md
+    THREADING.md
+    ADAPTER_CONTRACT.md
+    REPLAY.md
+    COMPATIBILITY.md
+    SECURITY_BOUNDARY.md
+    SUPPORT.md
+    TRACEABILITY.md
 
   apps/
 
@@ -231,25 +296,31 @@ Avoid:
 
 ## Current Success Criteria
 
-The milestone transition is complete when:
+S1-S5 are complete. S6 is complete when:
 
-1. M6 is recorded as complete.
-2. The first minimal Stage 2 milestone is explicitly agreed with the project owner.
-3. Only the files and folders required by that approved milestone are added.
+1. The reviewed headless work lands on `main` and is forward-merged into the visualization track.
+2. Trace schema v2 separates desire, command, attempt, result, retry, timeout, and observed-state evidence.
+3. The bridge enforces bounded parsing/validation and supervises the complete trace process group on Unix.
+4. Incremental rendering and batched catch-up remain responsive for 1,000-frame traces.
+5. The dependency-free browser self-test covers presentation paths, and the
+   owner manually verifies streaming, controls, malformed data,
+   reconnect/error states, and responsiveness. No Playwright or Node package
+   dependency is required for this internal development instrument.
+6. The experiment suite passes without a second Runtime or semantic divergence from `main`.
 
 ---
 
 ## What Not to Build Yet
 
-Do not add these until an approved Stage 2 milestone requires them:
+Do not add these during Solid v0.1 finalization:
 
-- `events/`
-- `systems/`
-- `adapters/`
-- LLM integration
-- MQTT
-- voice pipeline
-- final Liquid Layer application concepts
+- LLM integration;
+- MQTT or real hardware adapters;
+- voice or biosignal pipelines;
+- final Liquid Layer application concepts;
+- shared-library ABI promises;
+- multi-writer or network-filesystem event stores;
+- encryption or tamper-evidence claims.
 
 ## Future Notes
 

@@ -49,8 +49,35 @@
 
                 <div class="field-row field-row-stack">
                     <label for="frame-times">Frame times <span class="field-hint">milliseconds, comma separated</span></label>
-                    <input id="frame-times" name="frame_times" type="text" inputmode="numeric" value="100, 105" spellcheck="false" required>
+                    <input id="frame-times" name="frame_times" type="text" inputmode="numeric" value="100, 105, 110" spellcheck="false" required>
                 </div>
+
+                <details class="advanced-controls">
+                    <summary>Adapter simulation</summary>
+                    <div class="advanced-grid">
+                        <label>Feedback timing
+                            <select id="feedback-timing" name="feedback_timing">
+                                <option value="deferred" selected>Deferred</option>
+                                <option value="immediate">Immediate</option>
+                            </select>
+                        </label>
+                        <label>Latency (ms)
+                            <input id="latency-ms" name="latency_ms" type="number" min="0" step="1" value="0">
+                        </label>
+                        <label>Adapter outcome
+                            <select id="adapter-outcome" name="adapter_outcome">
+                                <option value="applied" selected>Applied</option>
+                                <option value="rejected">Rejected</option>
+                                <option value="failed">Failed</option>
+                            </select>
+                        </label>
+                        <label>Duplicate reports
+                            <input id="duplicate-reports" name="duplicate_reports" type="number" min="0" max="64" step="1" value="0">
+                        </label>
+                        <label class="check-control"><input id="silent-adapter" type="checkbox"> Silent adapter</label>
+                        <label class="check-control"><input id="reverse-delivery" type="checkbox"> Reverse delivery</label>
+                    </div>
+                </details>
 
                 <div class="editor-heading">
                     <label for="script-source">Behavior script</label>
@@ -61,19 +88,28 @@
                 </div>
                 <div class="editor-shell" id="editor-shell">
                     <div class="editor-gutter" id="editor-gutter" aria-hidden="true"></div>
-                    <textarea id="script-source" name="script" rows="14" spellcheck="false" aria-describedby="script-help">local light = access.Light.officeLight
+                    <textarea id="script-source" name="script" rows="18" spellcheck="false" aria-describedby="script-help">function on_start(frame)
+    local light = access.Light.officeLight
+    solid.watch(light)
 
-light.propose({
-    value = { brightness = 30 },
-    priority = "low",
-    lifetime = "persistent"
-})
+    light.propose({
+        name = "fallback_light",
+        value = { brightness = 30 },
+        priority = "low",
+        lifetime = "persistent"
+    })
 
-light.propose({
-    value = { brightness = 70 },
-    priority = "high",
-    duration_ms = 5
-})</textarea>
+    light.propose({
+        name = "focus_light",
+        value = { brightness = 70 },
+        priority = "high",
+        duration_ms = 5
+    })
+end
+
+function on_components_changed(frame, changes)
+    assert(#changes &gt; 0)
+end</textarea>
                 </div>
                 <p class="field-help" id="script-help">The editor indicates the observed script boundary only. Solid does not report source-line execution.</p>
 
@@ -87,7 +123,7 @@ light.propose({
 
             <div class="scenario-note">
                 <strong>Expected evidence</strong>
-                <p>The actual component stays at 10. The selected desire is 70 at 100 ms, then 30 at 105 ms after the temporary intent expires.</p>
+                <p>Deferred loop: command 70 at 100 ms, authoritative 70 and fallback command 30 at 105 ms, then authoritative 30 at 110 ms.</p>
             </div>
         </aside>
 
@@ -122,6 +158,24 @@ light.propose({
                 </div>
             </section>
 
+            <section class="evidence-lanes effect-lanes" aria-label="Command and device feedback evidence">
+                <article class="evidence-lane command-lane">
+                    <div class="lane-heading"><div><span class="lane-symbol" aria-hidden="true">C</span><h3>Command</h3></div><span class="lane-state">Outbox</span></div>
+                    <div class="lane-value"><output id="command-value" data-tick="true">n/a</output><span>requested</span></div>
+                    <p id="command-detail">No command has been issued.</p>
+                </article>
+                <article class="evidence-lane result-lane">
+                    <div class="lane-heading"><div><span class="lane-symbol" aria-hidden="true">R</span><h3>Adapter result</h3></div><span class="lane-state">Feedback</span></div>
+                    <div class="lane-value"><output id="result-value" data-tick="true">n/a</output><span>reported</span></div>
+                    <p id="result-detail">No adapter result has arrived.</p>
+                </article>
+                <article class="evidence-lane device-lane">
+                    <div class="lane-heading"><div><span class="lane-symbol" aria-hidden="true">D</span><h3>Simulated device</h3></div><span class="lane-state">Physical truth</span></div>
+                    <div class="lane-value"><span class="lamp" id="device-lamp" aria-hidden="true"></span><output id="device-value" data-tick="true">n/a</output><span>brightness</span></div>
+                    <p id="device-detail">No simulated device state is available.</p>
+                </article>
+            </section>
+
             <section class="phase-instrument" aria-labelledby="phase-title">
                 <div class="phase-caption">
                     <h3 id="phase-title">Runtime phase rail</h3>
@@ -130,7 +184,9 @@ light.propose({
                 <ol class="phase-rail" id="phase-rail">
                     <li data-phase="begin"><span class="phase-node" aria-hidden="true"></span><span>Begin</span></li>
                     <li data-phase="expire"><span class="phase-node" aria-hidden="true"></span><span>Expire</span></li>
-                    <li data-phase="systems"><span class="phase-node" aria-hidden="true"></span><span>Systems</span></li>
+                    <li data-phase="input"><span class="phase-node" aria-hidden="true"></span><span>Input</span></li>
+                    <li data-phase="behavior"><span class="phase-node" aria-hidden="true"></span><span>Behavior</span></li>
+                    <li data-phase="decision"><span class="phase-node" aria-hidden="true"></span><span>Decision</span></li>
                     <li data-phase="resolve"><span class="phase-node" aria-hidden="true"></span><span>Resolve</span></li>
                     <li data-phase="end"><span class="phase-node" aria-hidden="true"></span><span>End</span></li>
                 </ol>
@@ -147,7 +203,8 @@ light.propose({
                         <span class="lane-state">Observed state</span>
                     </div>
                     <div class="lane-value">
-                        <output id="actual-value">n/a</output>
+                        <span class="lamp" id="actual-lamp" aria-hidden="true"></span>
+                        <output id="actual-value" data-tick="true">n/a</output>
                         <span>brightness</span>
                     </div>
                     <p id="actual-detail">No component snapshot received.</p>
@@ -175,7 +232,7 @@ light.propose({
                         <span class="lane-state">Resolution result</span>
                     </div>
                     <div class="lane-value selected-value">
-                        <output id="selected-value">n/a</output>
+                        <output id="selected-value" data-tick="true">n/a</output>
                         <span>desired brightness</span>
                     </div>
                     <p id="selected-detail">No intent has been selected.</p>

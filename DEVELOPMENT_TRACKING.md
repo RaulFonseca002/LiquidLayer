@@ -44,8 +44,9 @@ Current stage.
 Purpose:
 
 - build the deterministic ECS-inspired foundation;
-- model behaviors, components, intents, queries, and registries;
-- avoid LLM, Lua, hardware, and application-specific logic at first.
+- complete it as a private reusable C++20 framework;
+- provide deterministic behaviors, components, intents, effects, feedback, durable evidence, replay, simulation, and packaging;
+- keep LLM, real hardware, and application-specific logic out of Solid.
 
 Solid should be small, deterministic, testable, and independent.
 
@@ -83,9 +84,9 @@ Not active yet.
 
 ## Current Development Policy
 
-Start flat and small.
+Start flat and small. Add folders only when the current approved S0-S7 milestone needs them.
 
-Do not create the full future architecture upfront. Add folders only when the current milestone needs them.
+Current milestone: **land completed S1-S5, then execute S6 on the visualization track**. Local headless traceability and coverage gates pass; remote platform CI remains an S7 gate.
 
 Current minimal structure:
 
@@ -97,6 +98,18 @@ liquid/
   DEVELOPMENT_TRACKING.md
   Liquid_Concepts_and_Architecture.md
   ARTICLE_NOTES.md
+  COMPLETE_SOLID.md
+
+  docs/
+    PUBLIC_API.md
+    EVENT_FORMAT_V1.md
+    THREADING.md
+    ADAPTER_CONTRACT.md
+    REPLAY.md
+    COMPATIBILITY.md
+    SECURITY_BOUNDARY.md
+    SUPPORT.md
+    TRACEABILITY.md
 
   include/
     liquid/
@@ -202,14 +215,14 @@ Files expected:
 
 ```text
 include/liquid/Ids.hpp
-include/liquid/ComponentStorage.hpp
-include/liquid/ComponentRegistry.hpp
-include/liquid/world/WorldState.hpp
-include/liquid/world/Coordinator.hpp
+include/liquid/detail/ComponentStorage.hpp
+include/liquid/detail/ComponentRegistry.hpp
+include/liquid/detail/WorldState.hpp
+include/liquid/detail/Coordinator.hpp
 include/liquid/world/World.hpp
-include/liquid/BehaviorRegistry.hpp
-include/liquid/IntentRegistry.hpp
-include/liquid/SystemRegistry.hpp
+include/liquid/detail/BehaviorRegistry.hpp
+include/liquid/detail/IntentRegistry.hpp
+include/liquid/detail/SystemRegistry.hpp
 
 src/ComponentRegistry.cpp
 src/world/Coordinator.cpp
@@ -403,7 +416,7 @@ Likely new files:
 
 ```text
 include/liquid/Runtime.hpp
-include/liquid/world/WorldState.hpp
+include/liquid/detail/WorldState.hpp
 include/liquid/world/World.hpp
 src/Runtime.cpp
 src/world/World.cpp
@@ -483,11 +496,88 @@ Done when:
 
 ---
 
+## Stage 1 Finalization — Solid v0.1
+
+**Status:** In progress through S6/S7; S0-S5 complete
+
+The owner approved the completion definition and S0-S7 order on 12 August 2026. `COMPLETE_SOLID.md` is the audit authority and `docs/` contains the frozen implementation contracts.
+
+### S0 — Contract and branch alignment
+
+**Status:** Complete
+
+- carry the accepted audit into the canonical headless track;
+- freeze public API, event format, threading, adapter/retry, replay, compatibility, security, and support contracts;
+- establish milestone-to-test traceability before implementation.
+
+### S1 — Public core hardening
+
+**Status:** Complete
+
+- installed/public header boundary and namespace normalization;
+- world-bound generational handles and monotonic intent ordering;
+- bounded `Value`, required codecs, immutable intent snapshots, and transactional component replacement;
+- system identity, evidence, overflow, owner-thread, callback, and exception-path regressions;
+- Catch2 v3 test migration.
+
+### S2 — Durable records and replay
+
+**Status:** Complete
+
+- canonical binary values and record definitions;
+- memory/file stores, locking, durability, recovery, checkpoints, and retention;
+- projection and execution verification;
+- fault injection, golden format fixtures, decoder fuzzing, and corruption tests.
+
+### S3 — Effects and feedback
+
+**Status:** Complete
+
+- resolved effects, commands, reports, adapter routing, and bounded feedback;
+- immediate/deferred timing, supersession, retries, timeout, late-report rules, and indeterminate reconciliation;
+- durable outbox before dispatch and reusable idempotent dispatcher.
+
+### S4 — Simulator and complete Solid scenarios
+
+**Status:** Complete
+
+- real adapter-interface simulation with all accepted timing and failure variants;
+- canonical immediate and deferred scenarios;
+- durable projection and host-assisted verification demonstrations.
+
+### S5 — Framework packaging
+
+**Status:** Complete; remote matrix execution remains an S7 gate
+
+- static `Liquid::Core`, `Liquid::Lua`, and `Liquid::Simulation` targets;
+- source-tree and installed-package consumers;
+- pinned vendored Lua 5.4.8 and notices;
+- README, integration/adapter/replay/file-format documentation, CI, sanitizer, coverage, and fuzz gates.
+
+### S6 — Solid Scope completion
+
+**Status:** Pending; owned by `experiment/stage2`
+
+- forward-merge the completed headless core;
+- trace schema v2, bounded bridge errors, process-group cleanup, complete validation, Unix gating;
+- incremental playback and real-browser coverage without a second Runtime.
+
+### S7 — Final audit and release candidate
+
+**Status:** Pending
+
+- repeat regression-first fixes for every final finding;
+- close all critical, high, and medium findings;
+- document accepted low support boundaries;
+- mark `COMPLETE_SOLID.md` complete only when every traceability and release gate passes.
+
+---
+
 ## Stage 2 — Liquid Milestones
 
-**Status:** Planning
+**Status:** Blocked on Solid v0.1 finalization
 
-No Stage 2 implementation milestone is current yet. The next task is to define and approve the first minimal Liquid milestone before adding source folders or implementation code.
+No Stage 2 implementation milestone is current. Liquid planning resumes only after S7 completes.
 
 Experimental branch note:
 
@@ -535,8 +625,8 @@ When a milestone is completed:
 
 ## Current Notes
 
-- Stage 1 Solid is complete through M6.
-- The current focus is defining and approving the first minimal Stage 2 Liquid milestone; implementation scope is not yet authorized.
+- Stage 1 Solid is complete through M6, but framework finalization S0-S7 is current before Stage 2 begins.
+- S0 contract and branch alignment is complete; S1 public core hardening is current.
 - M1 modified ECS core is complete and should be treated as foundation, not active scope.
 - M2 now uses typed intent-record storage with owner and component-target indexes; `IntentId` no longer encodes the owner behavior.
 - M3 registry-owned intent resolution is complete and should be treated as foundation, not active scope.

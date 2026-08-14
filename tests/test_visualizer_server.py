@@ -31,28 +31,28 @@ args = sys.argv[1:]
 script_path = pathlib.Path(args[args.index("--script") + 1])
 source = script_path.read_text(encoding="utf-8")
 if source == "bad sequence":
-    print(json.dumps({"schema":"liquid.trace.v1","seq":2,"event":"run_started"}), flush=True)
+    print(json.dumps({"schema":"liquid.trace.v2","seq":2,"event":"run_started"}), flush=True)
     raise SystemExit(0)
-print(json.dumps({"schema":"liquid.trace.v1","seq":0,"event":"run_started",
+print(json.dumps({"schema":"liquid.trace.v2","seq":0,"event":"run_started",
                   "script_path":str(script_path),
                   "script_mode":oct(script_path.stat().st_mode & 0o777)}), flush=True)
 if source == "child failure":
     print("deliberate child failure", file=sys.stderr, flush=True)
     raise SystemExit(7)
 if source == "post terminal":
-    print(json.dumps({"schema":"liquid.trace.v1","seq":1,"event":"run_completed","outcome":"success"}), flush=True)
-    print(json.dumps({"schema":"liquid.trace.v1","seq":2,"event":"frame_started"}), flush=True)
+    print(json.dumps({"schema":"liquid.trace.v2","seq":1,"event":"run_completed","outcome":"success"}), flush=True)
+    print(json.dumps({"schema":"liquid.trace.v2","seq":2,"event":"frame_started"}), flush=True)
     raise SystemExit(0)
 if source == "wrong terminal status":
-    print(json.dumps({"schema":"liquid.trace.v1","seq":1,"event":"run_completed","outcome":"success"}), flush=True)
+    print(json.dumps({"schema":"liquid.trace.v2","seq":1,"event":"run_completed","outcome":"success"}), flush=True)
     raise SystemExit(7)
 if source == "terminal then sleep":
-    print(json.dumps({"schema":"liquid.trace.v1","seq":1,"event":"run_completed","outcome":"success"}), flush=True)
+    print(json.dumps({"schema":"liquid.trace.v2","seq":1,"event":"run_completed","outcome":"success"}), flush=True)
     time.sleep(5)
     raise SystemExit(0)
 if source == "sleep":
     time.sleep(5)
-print(json.dumps({"schema":"liquid.trace.v1","seq":1,"event":"run_completed","outcome":"success"}), flush=True)
+print(json.dumps({"schema":"liquid.trace.v2","seq":1,"event":"run_completed","outcome":"success"}), flush=True)
 """
 
 

@@ -35,7 +35,3 @@ struct IntentLifetime {
 };
 
 }
-
-using liquid::IntentLifetime;
-using liquid::IntentLifetimeKind;
-using liquid::IntentTime;

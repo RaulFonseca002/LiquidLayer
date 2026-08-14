@@ -1,6 +1,8 @@
 # M6 Simulation CLI Test Base
 
-**Status:** Implemented and under final M6 owner acceptance  
+> Historical milestone evidence: M6 is complete. See `COMPLETE_SOLID.md` and `DEVELOPMENT_TRACKING.md` for current Solid v0.1 finalization status.
+
+**Status:** Complete; retained as M6 evidence
 **Date:** August 11, 2026  
 **Scope:** Stage 1, Solid — M6 only
 

@@ -5,24 +5,51 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <compare>
+#include <functional>
 
 namespace liquid {
 
-using BehaviorId = std::uint16_t;
 using BehaviorAccessRevision = std::uint64_t;
 using WorldInstanceId = std::uint64_t;
-using IntentId = std::uint32_t;
+using IntentSequence = std::uint64_t;
 using FrameNumber = std::uint64_t;
 using ComponentName = std::string;
 using Slot = std::uint16_t;
 using ComponentTypeId = std::uint16_t;
-using ComponentSlotId = Slot;
 using TypeName = std::string;
+
+template <typename Tag, typename SlotType>
+struct GenerationalHandle {
+    WorldInstanceId world = 0;
+    SlotType slot = 0;
+    std::uint32_t generation = 0;
+
+    constexpr GenerationalHandle() = default;
+    constexpr GenerationalHandle(SlotType legacySlot)
+        : slot(legacySlot) {
+    }
+    constexpr GenerationalHandle(WorldInstanceId owningWorld, SlotType owningSlot, std::uint32_t owningGeneration)
+        : world(owningWorld), slot(owningSlot), generation(owningGeneration) {
+    }
+
+    constexpr explicit operator bool() const { return generation != 0; }
+    constexpr operator SlotType() const { return slot; }
+    bool operator==(const GenerationalHandle&) const = default;
+    auto operator<=>(const GenerationalHandle&) const = default;
+
+};
+
+struct BehaviorHandleTag;
+struct IntentHandleTag;
+struct ComponentSlotHandleTag;
+using BehaviorId = GenerationalHandle<BehaviorHandleTag, std::uint16_t>;
+using IntentId = GenerationalHandle<IntentHandleTag, std::uint32_t>;
+using ComponentSlotId = GenerationalHandle<ComponentSlotHandleTag, Slot>;
 
 inline constexpr ComponentTypeId InvalidComponentTypeId =
     std::numeric_limits<ComponentTypeId>::max();
-inline constexpr ComponentSlotId InvalidComponentSlotId =
-    std::numeric_limits<ComponentSlotId>::max();
+inline constexpr ComponentSlotId InvalidComponentSlotId{};
 
 struct ComponentTarget {
     ComponentTypeId type = InvalidComponentTypeId;
@@ -47,10 +74,14 @@ struct ComponentTarget {
 template <typename Component>
 struct ComponentType {
     ComponentTypeId id = InvalidComponentTypeId;
+    WorldInstanceId world = 0;
+    std::uint32_t generation = 0;
 
     operator ComponentTypeId() const {
         return id;
     }
+
+    bool operator==(const ComponentType&) const = default;
 };
 
 enum class ComponentAccessMode {
@@ -74,31 +105,16 @@ inline constexpr std::size_t MaxComponentSlots =
 using Signature = std::bitset<MaxComponentTypes>;
 
 }
+namespace std {
 
-using liquid::BehaviorId;
-using liquid::BehaviorAccessRevision;
-using liquid::ComponentAccessMode;
-using liquid::ComponentName;
-using liquid::ComponentSlotId;
-using liquid::ComponentTarget;
-using liquid::ComponentType;
-using liquid::ComponentTypeId;
-using liquid::FrameNumber;
-using liquid::InvalidComponentSlotId;
-using liquid::InvalidComponentTypeId;
-using liquid::IntentId;
-using liquid::IntentPriority;
-using liquid::Slot;
-using liquid::Signature;
-using liquid::TypeName;
-using liquid::WorldInstanceId;
+template <typename Tag, typename SlotType>
+struct hash<liquid::GenerationalHandle<Tag, SlotType>> {
+    std::size_t operator()(const liquid::GenerationalHandle<Tag, SlotType>& value) const {
+        std::size_t result = std::hash<liquid::WorldInstanceId>{}(value.world);
+        result ^= std::hash<SlotType>{}(value.slot) + 0x9e3779b9U + (result << 6U) + (result >> 2U);
+        result ^= std::hash<std::uint32_t>{}(value.generation) + 0x9e3779b9U + (result << 6U) + (result >> 2U);
+        return result;
+    }
+};
 
-using liquid::MaxBehaviours;
-using liquid::MaxComponentSlots;
-using liquid::MaxComponentTypes;
-using liquid::MaxIntents;
-
-inline constexpr std::size_t MAX_BEHAVIOURS = liquid::MaxBehaviours;
-inline constexpr std::size_t MAX_INTENTS = liquid::MaxIntents;
-inline constexpr std::size_t MAX_COMPONENT_TYPES = liquid::MaxComponentTypes;
-inline constexpr std::size_t MAX_COMPONENT_SLOTS = liquid::MaxComponentSlots;
+}

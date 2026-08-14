@@ -1,12 +1,15 @@
 #include "liquid/Runtime.hpp"
+#include "liquid/events/MemoryEventStore.hpp"
 #include "liquid/scripting/LuaBehaviorRunner.hpp"
 
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+using namespace liquid;
 
 using liquid::scripting::LuaBehaviorRunner;
 using liquid::scripting::LuaComponentCodec;
@@ -44,6 +47,60 @@ LuaComponentCodec<Light> light_codec() {
     };
 }
 
+TEST_CASE("Lua execution evidence records source by default and supports hash-only mode") {
+    const auto execute = [](bool fullSource) {
+        EventStoreMetadata metadata;
+        metadata.session = SessionId{91};
+        metadata.engineVersion = "0.1.0";
+        metadata.feedbackTiming = FeedbackTiming::Deferred;
+        MemoryEventStore store{metadata};
+        RuntimeOptions runtimeOptions;
+        runtimeOptions.sessionId = metadata.session;
+        runtimeOptions.feedbackTiming = metadata.feedbackTiming;
+        runtimeOptions.eventStore = &store;
+        Runtime runtime{runtimeOptions};
+        World& world = runtime.world();
+        const BehaviorId behavior = world.create_behavior();
+        LuaExecutionLimits limits;
+        limits.recordFullSource = fullSource;
+        LuaBehaviorRunner runner{limits};
+        const std::string source = "local answer = 42";
+        REQUIRE(runner.execute(world, behavior, 0, source).succeeded());
+
+        runtime.run_frame(FrameInput{0, {}, {}});
+        for (const auto& record : store.read_all()) {
+            if (record.type == EventType::ScriptExecuted)
+                return record.payload.as_object();
+        }
+        throw std::runtime_error("missing ScriptExecuted evidence");
+    };
+
+    const auto full = execute(true);
+    REQUIRE(full.at("source_included").as_boolean());
+    REQUIRE(full.at("source").as_string() == "local answer = 42");
+    REQUIRE(full.at("source_hash").as_string().starts_with("fnv1a64:"));
+
+    const auto hashOnly = execute(false);
+    REQUIRE(!hashOnly.at("source_included").as_boolean());
+    REQUIRE(!hashOnly.contains("source"));
+    REQUIRE(hashOnly.at("source_hash") == full.at("source_hash"));
+}
+
+liquid::ComponentCodec<Light> component_codec() {
+    return {
+        [](const Light& light) {
+            return liquid::Value(liquid::Value::Object{
+                {"brightness", liquid::Value(std::int64_t{light.brightness})}
+            });
+        },
+        [](const liquid::Value& value) {
+            return Light{static_cast<int>(
+                value.as_object().at("brightness").as_signed_integer()
+            )};
+        }
+    };
+}
+
 LuaComponentCodec<Sequence> sequence_codec() {
     return {
         [](const Sequence& sequence) {
@@ -62,8 +119,8 @@ LuaComponentCodec<Sequence> sequence_codec() {
 }
 
 void assert_status(const LuaExecutionResult& result, LuaExecutionStatus expected) {
-    assert(result.status == expected);
-    assert(result.succeeded() == (expected == LuaExecutionStatus::Success));
+    REQUIRE(result.status == expected);
+    REQUIRE(result.succeeded() == (expected == LuaExecutionStatus::Success));
 }
 
 template <typename Function>
@@ -76,10 +133,12 @@ void expect_throw(Function function) {
         thrown = true;
     }
 
-    assert(thrown);
+    REQUIRE(thrown);
 }
 
 struct LuaOnceSystem : System {
+    static constexpr std::string_view stableName = "tests.test.lua.behavior.cpp.LuaOnceSystem";
+    static constexpr std::uint32_t version = 1;
     LuaBehaviorRunner* runner;
     BehaviorId owner;
     std::string source;
@@ -103,6 +162,8 @@ struct LuaOnceSystem : System {
 };
 
 struct TrackingSystem : System {
+    static constexpr std::string_view stableName = "tests.test.lua.behavior.cpp.TrackingSystem";
+    static constexpr std::uint32_t version = 1;
     std::size_t runs = 0;
 
     void run(World& world, FrameNumber frame, IntentTime now) override {
@@ -113,10 +174,10 @@ struct TrackingSystem : System {
     }
 };
 
-int main() {
+TEST_CASE("test_lua_behavior") {
     {
         World world;
-        auto lightType = world.register_component<Light>("Light");
+        auto lightType = world.register_component<Light>("Light", 1, component_codec());
         world.add_component(lightType, "officeLight", Light{10});
         BehaviorId behavior = world.create_behavior();
         world.grant_component_access(lightType, behavior, "officeLight", ComponentAccessMode::ReadWrite);
@@ -141,23 +202,23 @@ int main() {
         )");
 
         assert_status(result, LuaExecutionStatus::Success);
-        assert(result.createdIntents.size() == 2);
-        assert(world.get_component_named(lightType, "officeLight")->brightness == 10);
+        REQUIRE(result.createdIntents.size() == 2);
+        REQUIRE(world.get_component_named(lightType, "officeLight")->brightness == 10);
 
         const auto& temporary = world.typed_intent(lightType, result.createdIntents[0]);
         const auto& fallback = world.typed_intent(lightType, result.createdIntents[1]);
-        assert(temporary.value.brightness == 100);
-        assert(temporary.priority == IntentPriority::High);
-        assert(temporary.lifetime.kind == IntentLifetimeKind::UntilTime);
-        assert(temporary.lifetime.expiresAt == 105);
-        assert(fallback.value.brightness == 30);
-        assert(fallback.priority == IntentPriority::Low);
-        assert(fallback.lifetime.kind == IntentLifetimeKind::Persistent);
+        REQUIRE(temporary.value.brightness == 100);
+        REQUIRE(temporary.priority == IntentPriority::High);
+        REQUIRE(temporary.lifetime.kind == IntentLifetimeKind::UntilTime);
+        REQUIRE(temporary.lifetime.expiresAt == 105);
+        REQUIRE(fallback.value.brightness == 30);
+        REQUIRE(fallback.priority == IntentPriority::Low);
+        REQUIRE(fallback.lifetime.kind == IntentLifetimeKind::Persistent);
     }
 
     {
         World world;
-        auto lightType = world.register_component<Light>("Light");
+        auto lightType = world.register_component<Light>("Light", 1, component_codec());
         world.add_component(lightType, "officeLight", Light{10});
         BehaviorId behavior = world.create_behavior();
         world.grant_component_access(lightType, behavior, "officeLight", ComponentAccessMode::Write);
@@ -172,7 +233,7 @@ int main() {
             propose({ value = { brightness = 20 } })
         )");
         assert_status(result, LuaExecutionStatus::InvalidProposal);
-        assert(world.intent_count(behavior) == 0);
+        REQUIRE(world.intent_count(behavior) == 0);
     }
 
     {
@@ -194,7 +255,7 @@ int main() {
         )");
 
         assert_status(result, LuaExecutionStatus::Success);
-        assert(result.createdIntents.empty());
+        REQUIRE(result.createdIntents.empty());
     }
 
     {
@@ -218,11 +279,11 @@ int main() {
         )");
 
         assert_status(result, LuaExecutionStatus::Success);
-        assert(result.createdIntents.size() == 1);
+        REQUIRE(result.createdIntents.size() == 1);
         ComponentTarget target = world.intent_target(result.createdIntents.front());
-        assert(target.type == lightType.id);
-        assert(world.intents_for(lightType.id, target.slot).size() == 1);
-        assert(world.typed_intent(lightType, result.createdIntents.front()).value.brightness == 55);
+        REQUIRE(target.type == lightType.id);
+        REQUIRE(world.intents_for(lightType.id, target.slot).size() == 1);
+        REQUIRE(world.typed_intent(lightType, result.createdIntents.front()).value.brightness == 55);
     }
 
     {
@@ -240,8 +301,8 @@ int main() {
         )");
 
         assert_status(result, LuaExecutionStatus::RuntimeError);
-        assert(result.createdIntents.empty());
-        assert(world.intent_count(behavior) == 0);
+        REQUIRE(result.createdIntents.empty());
+        REQUIRE(world.intent_count(behavior) == 0);
     }
 
     {
@@ -265,7 +326,8 @@ int main() {
 
         world.destroy_behavior(behavior);
         BehaviorId recycled = world.create_behavior();
-        assert(recycled == behavior);
+        REQUIRE(recycled.slot == behavior.slot);
+        REQUIRE(recycled.generation > behavior.generation);
         assert_status(runner.execute(world, recycled, 0, "assert(access.Light == nil)"), LuaExecutionStatus::Success);
     }
 
@@ -292,10 +354,11 @@ int main() {
             ComponentAccessMode::Read
         );
 
-        assert(firstBehavior == secondBehavior);
-        assert(firstWorld.behavior_access_revision(firstBehavior)
+        REQUIRE(firstBehavior.slot == secondBehavior.slot);
+        REQUIRE(firstBehavior.world != secondBehavior.world);
+        REQUIRE(firstWorld.behavior_access_revision(firstBehavior)
             == secondWorld.behavior_access_revision(secondBehavior));
-        assert(firstWorld.instance_id() != secondWorld.instance_id());
+        REQUIRE(firstWorld.instance_id() != secondWorld.instance_id());
 
         LuaBehaviorRunner runner;
         runner.expose_component(firstLightType, "Light", light_codec());
@@ -303,10 +366,12 @@ int main() {
             runner.execute(firstWorld, firstBehavior, 0, "assert(access.Light.firstLight ~= nil)"),
             LuaExecutionStatus::Success
         );
+        LuaBehaviorRunner secondRunner;
+        secondRunner.expose_component(secondLightType, "Light", light_codec());
         assert_status(
-            runner.execute(secondWorld, secondBehavior, 0, R"(
-                assert(access.Light.firstLight == nil)
-                assert(access.Light.secondLight.value.brightness == 20)
+            secondRunner.execute(secondWorld, secondBehavior, 0, R"(
+            assert(access.Light.firstLight == nil)
+            assert(access.Light.secondLight.value.brightness == 20)
             )"),
             LuaExecutionStatus::Success
         );
@@ -333,18 +398,18 @@ int main() {
 
     {
         World world;
-        auto lightType = world.register_component<Light>("Light");
+        auto lightType = world.register_component<Light>("Light", 1, component_codec());
         world.add_component(lightType, "officeLight", Light{10});
         BehaviorId behavior = world.create_behavior();
-        world.grant_component_access(lightType, behavior, "officeLight", ComponentAccessMode::Read);
+        world.grant_component_access(lightType, behavior, "officeLight", ComponentAccessMode::ReadWrite);
         BehaviorAccessRevision revision = world.behavior_access_revision(behavior);
 
         LuaBehaviorRunner runner;
         runner.expose_component(lightType, "Light", light_codec());
         assert_status(runner.execute(world, behavior, 0, "assert(access.Light.officeLight.value.brightness == 10)"), LuaExecutionStatus::Success);
 
-        world.get_component_named(lightType, "officeLight")->brightness = 65;
-        assert(world.behavior_access_revision(behavior) == revision);
+        world.replace_component(lightType, behavior, "officeLight", Light{65});
+        REQUIRE(world.behavior_access_revision(behavior) == revision);
         assert_status(runner.execute(world, behavior, 0, "assert(access.Light.officeLight.value.brightness == 65)"), LuaExecutionStatus::Success);
 
         expect_throw([&] {
@@ -371,7 +436,7 @@ int main() {
         }) {
             LuaExecutionResult result = runner.execute(world, behavior, 0, source);
             assert_status(result, LuaExecutionStatus::InvalidProposal);
-            assert(world.intent_count(behavior) == 0);
+            REQUIRE(world.intent_count(behavior) == 0);
         }
 
         LuaExecutionResult overflow = runner.execute(
@@ -381,7 +446,7 @@ int main() {
             "access.Light.officeLight.propose({ value = { brightness = 10 }, duration_ms = 2 })"
         );
         assert_status(overflow, LuaExecutionStatus::InvalidProposal);
-        assert(world.intent_count(behavior) == 0);
+        REQUIRE(world.intent_count(behavior) == 0);
 
         LuaExecutionResult unrepresentableTime = runner.execute(
             world,
@@ -407,8 +472,8 @@ int main() {
         )");
 
         assert_status(result, LuaExecutionStatus::Success);
-        assert(result.createdIntents.size() == 1);
-        assert(world.typed_intent(sequenceType, result.createdIntents.front()).value.values.empty());
+        REQUIRE(result.createdIntents.size() == 1);
+        REQUIRE(world.typed_intent(sequenceType, result.createdIntents.front()).value.values.empty());
     }
 
     {
@@ -442,11 +507,11 @@ int main() {
         LuaBehaviorRunner diagnosticRunner(limits);
         LuaExecutionResult diagnostic = diagnosticRunner.execute(world, behavior, 0, "error('this diagnostic is intentionally much longer than thirty two bytes')");
         assert_status(diagnostic, LuaExecutionStatus::RuntimeError);
-        assert(diagnostic.diagnostic.size() <= limits.maxDiagnosticBytes);
+        REQUIRE(diagnostic.diagnostic.size() <= limits.maxDiagnosticBytes);
 
         LuaExecutionResult nonString = diagnosticRunner.execute(world, behavior, 0, "error({})");
         assert_status(nonString, LuaExecutionStatus::RuntimeError);
-        assert(nonString.diagnostic == "Lua returned a non-string error");
+        REQUIRE(nonString.diagnostic == "Lua returned a non-string error");
     }
 
     {
@@ -481,7 +546,7 @@ int main() {
         LuaBehaviorRunner runner(limits);
         LuaExecutionResult result = runner.execute(world, behavior, 0, "while true do end");
         assert_status(result, LuaExecutionStatus::InstructionLimitExceeded);
-        assert(result.diagnostic.size() <= limits.maxDiagnosticBytes);
+        REQUIRE(result.diagnostic.size() <= limits.maxDiagnosticBytes);
     }
 
     {
@@ -507,7 +572,7 @@ int main() {
             "access.Light.officeLight.propose({ value = string.rep('x', 9) })"
         }) {
             assert_status(runner.execute(world, behavior, 0, source), LuaExecutionStatus::InvalidProposal);
-            assert(world.intent_count(behavior) == 0);
+            REQUIRE(world.intent_count(behavior) == 0);
         }
     }
 
@@ -528,7 +593,7 @@ int main() {
             propose({ value = { brightness = 20 } })
         )");
         assert_status(result, LuaExecutionStatus::IntentLimitExceeded);
-        assert(world.intent_count(behavior) == 0);
+        REQUIRE(world.intent_count(behavior) == 0);
     }
 
     {
@@ -539,7 +604,7 @@ int main() {
         world.grant_component_access(lightType, behavior, "officeLight", ComponentAccessMode::Write);
         ComponentSlotId slot = world.get_components(lightType, behavior).at("officeLight");
 
-        for (std::size_t i = 0; i + 1 < MAX_INTENTS; ++i) {
+        for (std::size_t i = 0; i + 1 < MaxIntents; ++i) {
             world.create_intent(
                 behavior,
                 lightType,
@@ -550,7 +615,7 @@ int main() {
             );
         }
 
-        assert(world.intent_count(behavior) == MAX_INTENTS - 1);
+        REQUIRE(world.intent_count(behavior) == MaxIntents - 1);
         LuaBehaviorRunner runner;
         runner.expose_component(lightType, "Light", light_codec());
         LuaExecutionResult result = runner.execute(world, behavior, 0, R"(
@@ -560,8 +625,8 @@ int main() {
         )");
 
         assert_status(result, LuaExecutionStatus::CommitFailed);
-        assert(result.createdIntents.empty());
-        assert(world.intent_count(behavior) == MAX_INTENTS - 1);
+        REQUIRE(result.createdIntents.empty());
+        REQUIRE(world.intent_count(behavior) == MaxIntents - 1);
     }
 
     {
@@ -584,16 +649,16 @@ int main() {
 
         FrameLog first = runtime.run_frame(100, {{lightType.id, {{"officeLight", slot}}}});
         auto& luaSystem = world.get_system<LuaOnceSystem>();
-        assert(first.completed);
-        assert(!runtime.faulted());
+        REQUIRE(first.completed);
+        REQUIRE(!runtime.faulted());
         assert_status(luaSystem.result, LuaExecutionStatus::Success);
-        assert(first.intent_selections.at(lightType.id).at("officeLight") == luaSystem.result.createdIntents[0]);
-        assert(world.get_system<TrackingSystem>().runs == 1);
+        REQUIRE(first.intent_selections.at(lightType.id).at("officeLight") == luaSystem.result.createdIntents[0]);
+        REQUIRE(world.get_system<TrackingSystem>().runs == 1);
 
         FrameLog second = runtime.run_frame(105, {{lightType.id, {{"officeLight", slot}}}});
-        assert(second.completed);
-        assert(second.intent_selections.at(lightType.id).at("officeLight") == luaSystem.result.createdIntents[1]);
-        assert(world.get_system<TrackingSystem>().runs == 2);
+        REQUIRE(second.completed);
+        REQUIRE(second.intent_selections.at(lightType.id).at("officeLight") == luaSystem.result.createdIntents[1]);
+        REQUIRE(world.get_system<TrackingSystem>().runs == 2);
     }
 
     {
@@ -605,11 +670,10 @@ int main() {
         world.register_system<TrackingSystem>(Signature{});
 
         FrameLog log = runtime.run_frame(0);
-        assert(log.completed);
-        assert(!runtime.faulted());
+        REQUIRE(log.completed);
+        REQUIRE(!runtime.faulted());
         assert_status(world.get_system<LuaOnceSystem>().result, LuaExecutionStatus::RuntimeError);
-        assert(world.get_system<TrackingSystem>().runs == 1);
+        REQUIRE(world.get_system<TrackingSystem>().runs == 1);
     }
 
-    return 0;
 }

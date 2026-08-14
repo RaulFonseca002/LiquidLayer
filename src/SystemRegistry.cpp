@@ -1,6 +1,8 @@
-#include "liquid/SystemRegistry.hpp"
+#include "liquid/detail/SystemRegistry.hpp"
 
 #include <exception>
+
+namespace liquid {
 
 namespace {
 
@@ -28,6 +30,8 @@ void System::run(World& world, FrameNumber frame, IntentTime now) {
     (void)frame;
     (void)now;
 }
+
+namespace detail {
 
 SystemRegistry::DispatchGuard::DispatchGuard(SystemRegistry& owner)
     : registry(owner)
@@ -111,7 +115,9 @@ std::size_t SystemRegistry::run_systems(
     World& world,
     FrameNumber frame,
     IntentTime now,
-    std::size_t* completedSystems
+    SystemPhase phase,
+    std::size_t* completedSystems,
+    std::string* failingSystem
 ) {
     ensure_structural_mutation_allowed();
     DispatchGuard guard(*this);
@@ -121,12 +127,24 @@ std::size_t SystemRegistry::run_systems(
         *completedSystems = 0;
 
     for (const std::type_index& type : registrationOrder) {
-        systems.at(type).system->run(world, frame, now);
+        const auto& record = systems.at(type);
+        if (record.phase != phase)
+            continue;
+        if (failingSystem)
+            *failingSystem = record.stableName + "@" + std::to_string(record.version);
+        record.system->run(world, frame, now);
         ++systemsRun;
 
         if (completedSystems)
             *completedSystems = systemsRun;
     }
 
+    if (failingSystem)
+        failingSystem->clear();
+
     return systemsRun;
+}
+
+}
+
 }

@@ -1,13 +1,13 @@
-#include "liquid/BehaviorRegistry.hpp"
-#include "liquid/ComponentRegistry.hpp"
-#include "liquid/IntentRegistry.hpp"
+#include "liquid/detail/BehaviorRegistry.hpp"
+#include "liquid/detail/ComponentRegistry.hpp"
+#include "liquid/detail/IntentRegistry.hpp"
 #include "liquid/Runtime.hpp"
 #include "liquid/scripting/LuaBehaviorRunner.hpp"
 #include "liquid/world/World.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -16,6 +16,11 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+using namespace liquid;
+using liquid::detail::BehaviorRegistry;
+using liquid::detail::ComponentRegistry;
+using liquid::detail::IntentRegistry;
 
 struct StressLight {
     int value = 0;
@@ -26,12 +31,18 @@ struct StressTemperature {
 };
 
 struct StressLightSystem : System {
+    static constexpr std::string_view stableName = "tests.test.stress.cpp.StressLightSystem";
+    static constexpr std::uint32_t version = 1;
 };
 
 struct StressTemperatureSystem : System {
+    static constexpr std::string_view stableName = "tests.test.stress.cpp.StressTemperatureSystem";
+    static constexpr std::uint32_t version = 1;
 };
 
 struct StressCombinedSystem : System {
+    static constexpr std::string_view stableName = "tests.test.stress.cpp.StressCombinedSystem";
+    static constexpr std::uint32_t version = 1;
 };
 
 liquid::scripting::LuaComponentCodec<StressLight> stress_light_codec()
@@ -58,6 +69,8 @@ liquid::scripting::LuaComponentCodec<StressLight> stress_light_codec()
 }
 
 struct StressLuaSystem : System {
+    static constexpr std::string_view stableName = "tests.test.stress.cpp.StressLuaSystem";
+    static constexpr std::uint32_t version = 1;
     liquid::scripting::LuaBehaviorRunner* runner;
     BehaviorId owner;
     const std::vector<int>* brightnesses;
@@ -99,12 +112,12 @@ struct StressLuaSystem : System {
         liquid::scripting::LuaExecutionResult result = runner->execute(world, owner, now, source);
 
         if (shouldFail) {
-            assert(result.status == liquid::scripting::LuaExecutionStatus::RuntimeError);
-            assert(result.createdIntents.empty());
+            REQUIRE(result.status == liquid::scripting::LuaExecutionStatus::RuntimeError);
+            REQUIRE(result.createdIntents.empty());
             failures++;
         } else {
-            assert(result.succeeded());
-            assert(result.createdIntents.size() == (frame == 0 ? 2 : 1));
+            REQUIRE(result.succeeded());
+            REQUIRE(result.createdIntents.size() == (frame == 0 ? 2 : 1));
             successes++;
         }
     }
@@ -127,10 +140,10 @@ void stress_behavior_registry()
     for (int step = 0; step < 4000; ++step) {
         bool shouldCreate = active.empty() || (rng() % 3 != 0);
 
-        if (shouldCreate && active.size() < MAX_BEHAVIOURS) {
+        if (shouldCreate && active.size() < MaxBehaviours) {
             BehaviorId id = registry.create();
             bool inserted = active.insert(id).second;
-            assert(inserted);
+            REQUIRE(inserted);
             activeList.push_back(id);
         } else if (!activeList.empty()) {
             std::uniform_int_distribution<std::size_t> distribution(0, activeList.size() - 1);
@@ -143,14 +156,25 @@ void stress_behavior_registry()
             activeList.pop_back();
         }
 
-        assert(registry.size() == active.size());
+        REQUIRE(registry.size() == active.size());
 
         for (BehaviorId id : active)
-            assert(registry.exists(id));
+            REQUIRE(registry.exists(id));
 
         for (int probe = 0; probe < 8; ++probe) {
-            BehaviorId id = static_cast<BehaviorId>(rng() % MAX_BEHAVIOURS);
-            assert(registry.exists(id) == active.contains(id));
+            std::uint16_t slot = static_cast<std::uint16_t>(rng() % MaxBehaviours);
+            bool found = false;
+
+            for (BehaviorId id : active) {
+                if (id.slot == slot) {
+                    found = registry.exists(id);
+                    break;
+                }
+            }
+
+            REQUIRE(found == std::any_of(active.begin(), active.end(), [slot](BehaviorId id) {
+                return id.slot == slot;
+            }));
         }
     }
 }
@@ -174,13 +198,17 @@ void stress_intent_registry()
         BehaviorId owner = owners[rng() % owners.size()];
         int operation = static_cast<int>(rng() % 10);
 
-        if (operation < 5 && active[owner].size() < MAX_INTENTS) {
-            ComponentSlotId slot = static_cast<ComponentSlotId>(rng() % 16);
+        if (operation < 5 && active[owner].size() < MaxIntents) {
+            ComponentSlotId slot{
+                0,
+                static_cast<Slot>(rng() % 16),
+                1
+            };
             IntentId id = registry.create(owner, type, slot, IntentLifetime::persistent(), StressLight{static_cast<int>(step)});
-            assert(registry.owner_of(id) == owner);
-            assert(registry.target_of(id) == (ComponentTarget{type.id, slot}));
+            REQUIRE(registry.owner_of(id) == owner);
+            REQUIRE(registry.target_of(id) == (ComponentTarget{type.id, slot}));
             bool inserted = active[owner].insert(id).second;
-            assert(inserted);
+            REQUIRE(inserted);
             activeList[owner].push_back(id);
         } else if (operation < 8 && !activeList[owner].empty()) {
             std::uniform_int_distribution<std::size_t> distribution(0, activeList[owner].size() - 1);
@@ -199,10 +227,10 @@ void stress_intent_registry()
         }
 
         for (BehaviorId checkedOwner : owners) {
-            assert(registry.size(checkedOwner) == active[checkedOwner].size());
+            REQUIRE(registry.size(checkedOwner) == active[checkedOwner].size());
 
             for (IntentId id : active[checkedOwner])
-                assert(registry.exists(id));
+                REQUIRE(registry.exists(id));
         }
     }
 }
@@ -259,11 +287,12 @@ void stress_component_registry()
         }
 
         for (const std::string& checkedName : names)
-            assert(registry.has_component_named(type, checkedName) == liveNames.contains(checkedName));
+            REQUIRE(registry.has_component_named(type, checkedName) == liveNames.contains(checkedName));
 
         std::vector<BehaviorId> expectedBehaviors;
 
-        for (BehaviorId checkedBehavior = 0; checkedBehavior < 8; ++checkedBehavior) {
+        for (std::uint16_t checkedSlot = 0; checkedSlot < 8; ++checkedSlot) {
+            BehaviorId checkedBehavior{checkedSlot};
             auto actual = registry.get_components(type, checkedBehavior);
             std::size_t expectedCount = 0;
 
@@ -274,7 +303,7 @@ void stress_component_registry()
                     continue;
 
                 ++expectedCount;
-                assert(actual.contains(accessName));
+                REQUIRE(actual.contains(accessName));
 
                 ComponentSlotId slot = actual.at(accessName);
                 auto observed = observedSlots.find(accessName);
@@ -282,26 +311,26 @@ void stress_component_registry()
                 if (observed == observedSlots.end()) {
                     observedSlots[accessName] = slot;
                 } else {
-                    assert(observed->second == slot);
+                    REQUIRE(observed->second == slot);
                 }
 
-                assert(registry.resolve_component(type, slot) != nullptr);
+                REQUIRE(registry.resolve_component(type, slot) != nullptr);
 
                 ComponentAccessMode accessMode = modelAccess[checkedBehavior][accessName];
                 bool canRead = accessMode == ComponentAccessMode::Read || accessMode == ComponentAccessMode::ReadWrite;
                 bool canWrite = accessMode == ComponentAccessMode::Write || accessMode == ComponentAccessMode::ReadWrite;
-                assert(registry.can_read(type, checkedBehavior, accessName) == canRead);
-                assert(registry.can_write(type, checkedBehavior, accessName) == canWrite);
+                REQUIRE(registry.can_read(type, checkedBehavior, accessName) == canRead);
+                REQUIRE(registry.can_write(type, checkedBehavior, accessName) == canWrite);
             }
 
-            assert(actual.size() == expectedCount);
+            REQUIRE(actual.size() == expectedCount);
 
             if (expectedCount > 0)
                 expectedBehaviors.push_back(checkedBehavior);
         }
 
         auto actualBehaviors = registry.behaviors_with_access(type);
-        assert(actualBehaviors == expectedBehaviors);
+        REQUIRE(actualBehaviors == expectedBehaviors);
     }
 }
 
@@ -342,28 +371,28 @@ void assert_world_model(
             }
         }
 
-        assert(lightComponents.size() == expectedLights.size());
-        assert(temperatureComponents.size() == expectedTemperatures.size());
+        REQUIRE(lightComponents.size() == expectedLights.size());
+        REQUIRE(temperatureComponents.size() == expectedTemperatures.size());
 
         for (const std::string& name : expectedLights) {
-            assert(lightComponents.contains(name));
-            assert(world.resolve_component(lightType, lightComponents.at(name)) != nullptr);
+            REQUIRE(lightComponents.contains(name));
+            REQUIRE(world.resolve_component(lightType, lightComponents.at(name)) != nullptr);
         }
 
         for (const std::string& name : expectedTemperatures) {
-            assert(temperatureComponents.contains(name));
-            assert(world.resolve_component(temperatureType, temperatureComponents.at(name)) != nullptr);
+            REQUIRE(temperatureComponents.contains(name));
+            REQUIRE(world.resolve_component(temperatureType, temperatureComponents.at(name)) != nullptr);
         }
 
         Signature signature = world.behavior_signature(behavior);
         bool hasLight = !expectedLights.empty();
         bool hasTemperature = !expectedTemperatures.empty();
 
-        assert(signature.test(lightType.id) == hasLight);
-        assert(signature.test(temperatureType.id) == hasTemperature);
-        assert(world.system_has_behavior<StressLightSystem>(behavior) == hasLight);
-        assert(world.system_has_behavior<StressTemperatureSystem>(behavior) == hasTemperature);
-        assert(world.system_has_behavior<StressCombinedSystem>(behavior) == (hasLight && hasTemperature));
+        REQUIRE(signature.test(lightType.id) == hasLight);
+        REQUIRE(signature.test(temperatureType.id) == hasTemperature);
+        REQUIRE(world.system_has_behavior<StressLightSystem>(behavior) == hasLight);
+        REQUIRE(world.system_has_behavior<StressTemperatureSystem>(behavior) == hasTemperature);
+        REQUIRE(world.system_has_behavior<StressCombinedSystem>(behavior) == (hasLight && hasTemperature));
     }
 }
 
@@ -474,7 +503,7 @@ void stress_world()
             }
         }
 
-        assert(world.behavior_count() == model.liveBehaviors.size());
+        REQUIRE(world.behavior_count() == model.liveBehaviors.size());
         assert_world_model(world, lightType, temperatureType, model);
     }
 }
@@ -524,48 +553,57 @@ void stress_runtime_lua()
             temporaryIntentLive = true;
         }
 
-        assert(log.completed);
-        assert(log.frame == frame);
-        assert(log.now == frame);
-        assert(log.systems_run == 1);
-        assert(log.resolution_requests == 1);
-        assert(log.expired_intents == expectedExpired);
-        assert(log.selected_intents == 1);
-        assert(world.intent_count(behavior) == expectedLiveIntents);
+        REQUIRE(log.completed);
+        REQUIRE(log.frame == frame);
+        REQUIRE(log.now == frame);
+        REQUIRE(log.systems_run == 1);
+        REQUIRE(log.resolution_requests == 1);
+        REQUIRE(log.expired_intents == expectedExpired);
+        REQUIRE(log.selected_intents == 1);
+        REQUIRE(world.intent_count(behavior) == expectedLiveIntents);
 
         const auto& selections = log.intent_selections.at(lightType.id);
         IntentId selectedId = selections.at("light");
         const auto& selected = world.typed_intent(lightType, selectedId);
-        assert(selected.owner == behavior);
+        REQUIRE(selected.owner == behavior);
 
         if (shouldFail) {
-            assert(selected.value.value == brightnesses.front());
-            assert(selected.priority == IntentPriority::Low);
-            assert(selected.lifetime.kind == IntentLifetimeKind::Persistent);
+            REQUIRE(selected.value.value == brightnesses.front());
+            REQUIRE(selected.priority == IntentPriority::Low);
+            REQUIRE(selected.lifetime.kind == IntentLifetimeKind::Persistent);
         } else {
-            assert(selected.value.value == brightnesses.at(static_cast<std::size_t>(frame)));
-            assert(selected.priority == IntentPriority::Medium);
-            assert(selected.lifetime.kind == IntentLifetimeKind::UntilTime);
-            assert(selected.lifetime.expiresAt == frame + 1);
+            REQUIRE(selected.value.value == brightnesses.at(static_cast<std::size_t>(frame)));
+            REQUIRE(selected.priority == IntentPriority::Medium);
+            REQUIRE(selected.lifetime.kind == IntentLifetimeKind::UntilTime);
+            REQUIRE(selected.lifetime.expiresAt == frame + 1);
         }
 
-        assert(world.get_component_named(lightType, "light")->value == 0);
-        assert(!runtime.faulted());
-        assert(runtime.frame() == frame + 1);
+        REQUIRE(world.get_component_named(lightType, "light")->value == 0);
+        REQUIRE(!runtime.faulted());
+        REQUIRE(runtime.frame() == frame + 1);
     }
 
     const auto& system = world.get_system<StressLuaSystem>();
-    assert(system.successes == 990);
-    assert(system.failures == 10);
+    REQUIRE(system.successes == 990);
+    REQUIRE(system.failures == 10);
 }
 
-int main()
-{
+TEST_CASE("stress behavior registry") {
     stress_behavior_registry();
-    stress_intent_registry();
-    stress_component_registry();
-    stress_world();
-    stress_runtime_lua();
+}
 
-    return 0;
+TEST_CASE("stress intent registry") {
+    stress_intent_registry();
+}
+
+TEST_CASE("stress component registry") {
+    stress_component_registry();
+}
+
+TEST_CASE("stress world") {
+    stress_world();
+}
+
+TEST_CASE("stress runtime Lua") {
+    stress_runtime_lua();
 }

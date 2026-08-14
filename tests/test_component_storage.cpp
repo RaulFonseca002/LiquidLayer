@@ -1,9 +1,11 @@
-#include "liquid/ComponentStorage.hpp"
+#include "liquid/detail/ComponentStorage.hpp"
 
-#include <cassert>
+#include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <memory>
 #include <stdexcept>
+
+using namespace liquid;
 
 struct Light {
     int brightness = 0;
@@ -48,40 +50,40 @@ void expect_throw(Function function)
         thrown = true;
     }
 
-    assert(thrown);
+    REQUIRE(thrown);
 }
 
-int main()
+TEST_CASE("test_component_storage")
 {
     {
-        liquid::ComponentStorage<Light> storage;
+        liquid::detail::ComponentStorage<Light> storage;
 
         ComponentSlotId first = storage.add(Light{10});
         ComponentSlotId second = storage.add(Light{20});
 
-        assert(first == 0);
-        assert(second == 1);
-        assert(storage.size() == 2);
-        assert(storage.slot_count() == 2);
-        assert(storage.has(first));
-        assert(storage.has(second));
-        assert(storage.get(first)->brightness == 10);
-        assert(storage.get(second)->brightness == 20);
+        REQUIRE(first.slot == 0);
+        REQUIRE(second.slot == 1);
+        REQUIRE(storage.size() == 2);
+        REQUIRE(storage.slot_count() == 2);
+        REQUIRE(storage.has(first));
+        REQUIRE(storage.has(second));
+        REQUIRE(storage.get(first)->brightness == 10);
+        REQUIRE(storage.get(second)->brightness == 20);
 
         const auto& constStorage = storage;
-        assert(constStorage.get(first)->brightness == 10);
-        assert(constStorage[first].brightness == 10);
+        REQUIRE(constStorage.get(first)->brightness == 10);
+        REQUIRE(constStorage[first].brightness == 10);
 
         storage[first].brightness = 15;
-        assert(storage.get(first)->brightness == 15);
+        REQUIRE(storage.get(first)->brightness == 15);
 
         storage.remove(first);
 
-        assert(!storage.has(first));
-        assert(storage.has(second));
-        assert(storage.get(first) == nullptr);
-        assert(storage.size() == 1);
-        assert(storage.slot_count() == 2);
+        REQUIRE(!storage.has(first));
+        REQUIRE(storage.has(second));
+        REQUIRE(storage.get(first) == nullptr);
+        REQUIRE(storage.size() == 1);
+        REQUIRE(storage.slot_count() == 2);
 
         expect_throw([&] {
             storage[first];
@@ -93,14 +95,14 @@ int main()
 
         ComponentSlotId reused = storage.add(Light{30});
 
-        assert(reused == first);
-        assert(storage.size() == 2);
-        assert(storage.slot_count() == 2);
-        assert(storage.get(reused)->brightness == 30);
+        REQUIRE(reused == first);
+        REQUIRE(storage.size() == 2);
+        REQUIRE(storage.slot_count() == 2);
+        REQUIRE(storage.get(reused)->brightness == 30);
     }
 
     {
-        liquid::ComponentStorage<ThrowingConstruction> storage;
+        liquid::detail::ComponentStorage<ThrowingConstruction> storage;
 
         ComponentSlotId slot = storage.add(ThrowingConstruction{10});
         storage.remove(slot);
@@ -111,36 +113,36 @@ int main()
         });
         ThrowingConstruction::throwOnMoveConstruction = false;
 
-        assert(!storage.has(slot));
-        assert(storage.get(slot) == nullptr);
-        assert(storage.size() == 0);
+        REQUIRE(!storage.has(slot));
+        REQUIRE(storage.get(slot) == nullptr);
+        REQUIRE(storage.size() == 0);
 
         ComponentSlotId reused = storage.add(ThrowingConstruction{30});
-        assert(reused == slot);
-        assert(storage.get(reused)->value == 30);
-        assert(storage.size() == 1);
+        REQUIRE(reused == slot);
+        REQUIRE(storage.get(reused)->value == 30);
+        REQUIRE(storage.size() == 1);
     }
 
     {
-        liquid::ComponentStorage<ResourceComponent> storage;
+        liquid::detail::ComponentStorage<ResourceComponent> storage;
         std::shared_ptr<int> resource = std::make_shared<int>(42);
         std::weak_ptr<int> released = resource;
         ComponentSlotId slot = storage.add(ResourceComponent{resource});
 
         resource.reset();
-        assert(!released.expired());
+        REQUIRE(!released.expired());
 
         storage.remove(slot);
 
-        assert(released.expired());
-        assert(!storage.has(slot));
+        REQUIRE(released.expired());
+        REQUIRE(!storage.has(slot));
     }
 
     {
-        liquid::ComponentStorage<Light> storage;
+        liquid::detail::ComponentStorage<Light> storage;
 
-        assert(!storage.has(42));
-        assert(storage.get(42) == nullptr);
+        REQUIRE(!storage.has(42));
+        REQUIRE(storage.get(42) == nullptr);
 
         expect_throw([&] {
             storage.remove(42);
@@ -152,36 +154,36 @@ int main()
     }
 
     {
-        liquid::ComponentStorage<Light> storage;
+        liquid::detail::ComponentStorage<Light> storage;
 
         ComponentSlotId first = storage.add(Light{10});
         ComponentSlotId second = storage.add(Light{20});
         BehaviorId reader = 4;
         BehaviorId writer = 7;
 
-        storage.addAccess(reader, liquid::ComponentSlotAccess::r, first);
-        storage.addAccess(reader, liquid::ComponentSlotAccess::rw, second);
-        storage.addAccess(writer, liquid::ComponentSlotAccess::w, first);
+        storage.addAccess(reader, liquid::detail::ComponentSlotAccess::r, first);
+        storage.addAccess(reader, liquid::detail::ComponentSlotAccess::rw, second);
+        storage.addAccess(writer, liquid::detail::ComponentSlotAccess::w, first);
 
         expect_throw([&] {
-            storage.addAccess(reader, liquid::ComponentSlotAccess::r, 42);
+            storage.addAccess(reader, liquid::detail::ComponentSlotAccess::r, 42);
         });
         expect_throw([&] {
             storage.addAccess(
                 reader,
-                static_cast<liquid::ComponentSlotAccess::Mode>(3),
+                static_cast<liquid::detail::ComponentSlotAccess::Mode>(3),
                 first
             );
         });
 
-        assert(storage.allAccesses().size() == 2);
-        assert(storage.accessesOf(reader).size() == 2);
-        assert(storage.accessesOf(reader)[0].slot == first);
-        assert(storage.accessesOf(reader)[0].mode == liquid::ComponentSlotAccess::r);
-        assert(storage.accessesOf(reader)[1].slot == second);
-        assert(storage.accessesOf(reader)[1].mode == liquid::ComponentSlotAccess::rw);
-        assert(storage.accessesOf(writer).size() == 1);
-        assert(storage.accessesOf(writer)[0].mode == liquid::ComponentSlotAccess::w);
+        REQUIRE(storage.allAccesses().size() == 2);
+        REQUIRE(storage.accessesOf(reader).size() == 2);
+        REQUIRE(storage.accessesOf(reader)[0].slot == first);
+        REQUIRE(storage.accessesOf(reader)[0].mode == liquid::detail::ComponentSlotAccess::r);
+        REQUIRE(storage.accessesOf(reader)[1].slot == second);
+        REQUIRE(storage.accessesOf(reader)[1].mode == liquid::detail::ComponentSlotAccess::rw);
+        REQUIRE(storage.accessesOf(writer).size() == 1);
+        REQUIRE(storage.accessesOf(writer)[0].mode == liquid::detail::ComponentSlotAccess::w);
 
         expect_throw([&] {
             storage.accessesOf(99);
@@ -189,41 +191,40 @@ int main()
 
         storage.removeAccess(reader, first);
 
-        assert(storage.accessesOf(reader).size() == 1);
-        assert(storage.accessesOf(reader)[0].slot == second);
-        assert(storage.accessesOf(reader)[0].mode == liquid::ComponentSlotAccess::rw);
+        REQUIRE(storage.accessesOf(reader).size() == 1);
+        REQUIRE(storage.accessesOf(reader)[0].slot == second);
+        REQUIRE(storage.accessesOf(reader)[0].mode == liquid::detail::ComponentSlotAccess::rw);
 
         storage.removeAccess(reader, first);
-        assert(storage.accessesOf(reader).size() == 1);
+        REQUIRE(storage.accessesOf(reader).size() == 1);
 
         storage.remove(first);
 
-        assert(!storage.has(first));
-        assert(storage.accessesOf(reader).size() == 1);
+        REQUIRE(!storage.has(first));
+        REQUIRE(storage.accessesOf(reader).size() == 1);
         expect_throw([&] {
             storage.accessesOf(writer);
         });
 
         storage.removeAccessesOf(reader);
-        assert(storage.allAccesses().empty());
+        REQUIRE(storage.allAccesses().empty());
     }
 
     {
-        liquid::ComponentStorage<Light> storage;
+        liquid::detail::ComponentStorage<Light> storage;
 
-        for (std::size_t i = 0; i < MAX_COMPONENT_SLOTS; ++i) {
+        for (std::size_t i = 0; i < MaxComponentSlots; ++i) {
             ComponentSlotId slot = storage.add(Light{static_cast<int>(i)});
-            assert(slot == i);
-            assert(storage.has(slot));
+            REQUIRE(slot.slot == i);
+            REQUIRE(storage.has(slot));
         }
 
-        assert(storage.size() == MAX_COMPONENT_SLOTS);
-        assert(storage.slot_count() == MAX_COMPONENT_SLOTS);
+        REQUIRE(storage.size() == MaxComponentSlots);
+        REQUIRE(storage.slot_count() == MaxComponentSlots);
 
         expect_throw([&] {
             storage.add(Light{1});
         });
     }
 
-    return 0;
 }

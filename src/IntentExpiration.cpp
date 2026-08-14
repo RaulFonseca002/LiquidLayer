@@ -1,12 +1,13 @@
-#include "liquid/IntentExpiration.hpp"
+#include "liquid/detail/IntentExpiration.hpp"
 
-#include "liquid/world/Coordinator.hpp"
-#include "liquid/IntentRegistry.hpp"
+#include "liquid/detail/Coordinator.hpp"
+#include "liquid/detail/IntentRegistry.hpp"
 #include "liquid/world/World.hpp"
 
 #include <stdexcept>
 
 namespace liquid {
+
 
 namespace {
 
@@ -23,6 +24,8 @@ bool lifetime_is_expired(const IntentLifetime& lifetime, IntentTime now) {
 }
 
 }
+
+namespace detail {
 
 std::vector<IntentId> expired_intent_ids(const IntentRegistry& intents, IntentTime now) {
     std::vector<IntentId> expired;
@@ -62,6 +65,8 @@ std::size_t destroy_expired_intents(Coordinator& coordinator, IntentTime now) {
         coordinator.destroy_intent(id);
 
     return expired.size();
+}
+
 }
 
 std::vector<IntentId> expired_intent_ids(const World& world, IntentTime now) {

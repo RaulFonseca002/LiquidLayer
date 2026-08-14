@@ -9,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -44,6 +45,8 @@ public:
     const std::string& as_string() const;
     const Array& as_array() const;
     const Table& as_table() const;
+
+    friend bool operator==(const LuaValue&, const LuaValue&) = default;
 };
 
 template <typename Component>
@@ -58,10 +61,13 @@ struct LuaExecutionLimits {
     std::size_t maxInstructions = 100'000;
     std::size_t maxDiagnosticBytes = 4 * 1024;
     std::size_t maxCreatedIntents = 64;
+    std::size_t maxCancelledIntents = 64;
+    std::size_t maxWatches = 64;
     std::size_t maxTableDepth = 16;
     std::size_t maxTableEntries = 4'096;
     std::size_t maxStringBytes = 64 * 1024;
     std::size_t maxBufferedValueBytes = 8 * 1024 * 1024;
+    bool recordFullSource = true;
 };
 
 enum class LuaExecutionStatus {
@@ -82,6 +88,16 @@ struct LuaExecutionResult {
     LuaExecutionStatus status = LuaExecutionStatus::Success;
     std::string diagnostic;
     std::vector<IntentId> createdIntents;
+    std::vector<IntentId> cancelledIntents;
+
+    struct Watch {
+        TypeName type;
+        ComponentName name;
+
+        friend bool operator==(const Watch&, const Watch&) = default;
+    };
+
+    std::vector<Watch> watches;
 
     bool succeeded() const;
 };
@@ -90,6 +106,8 @@ class LuaBehaviorRunner {
 private:
     struct PendingIntent {
         virtual ~PendingIntent() = default;
+        virtual const IntentName& intent_name() const = 0;
+        virtual void validate(World& world, BehaviorId owner) const = 0;
         virtual IntentId commit(World& world, BehaviorId owner) = 0;
     };
 
@@ -99,6 +117,7 @@ private:
         ComponentName name;
         IntentLifetime lifetime;
         IntentPriority priority;
+        IntentName intentName;
         Component value;
 
         TypedPendingIntent(
@@ -106,14 +125,27 @@ private:
             ComponentName componentName,
             IntentLifetime intentLifetime,
             IntentPriority intentPriority,
+            IntentName stableIntentName,
             Component intentValue
         )
             : type(componentType),
               name(std::move(componentName)),
               lifetime(intentLifetime),
               priority(intentPriority),
+              intentName(std::move(stableIntentName)),
               value(std::move(intentValue))
         {
+        }
+
+        const IntentName& intent_name() const override {
+            return intentName;
+        }
+
+        void validate(World& world, BehaviorId owner) const override {
+            std::map<ComponentName, ComponentSlotId> components = world.get_components(type, owner);
+            auto target = components.find(name);
+            if (target == components.end() || !world.can_write_component(type, owner, name))
+                throw std::runtime_error("component write access denied");
         }
 
         IntentId commit(World& world, BehaviorId owner) override {
@@ -129,7 +161,8 @@ private:
                 target->second,
                 lifetime,
                 std::move(value),
-                priority
+                priority,
+                std::move(intentName)
             );
         }
     };
@@ -137,6 +170,7 @@ private:
     struct CapabilityDescription {
         std::size_t binding = 0;
         ComponentName name;
+        ComponentSlotId slot{};
         bool readable = false;
         bool writable = false;
     };
@@ -150,7 +184,8 @@ private:
             const ComponentName&,
             const LuaValue&,
             IntentLifetime,
-            IntentPriority
+            IntentPriority,
+            IntentName
         )> makePending;
     };
 
@@ -181,6 +216,30 @@ public:
         IntentTime now,
         std::string_view source
     );
+
+    struct ComponentChange {
+        TypeName type;
+        ComponentName name;
+        LuaValue before;
+        LuaValue after;
+    };
+
+    LuaExecutionResult execute_lifecycle(
+        World& world,
+        BehaviorId owner,
+        FrameNumber frame,
+        IntentTime now,
+        IntentTime delta,
+        bool start,
+        const std::vector<ComponentChange>& changes,
+        std::string_view source
+    );
+
+    std::optional<LuaValue> snapshot(
+        World& world,
+        BehaviorId owner,
+        const LuaExecutionResult::Watch& watch
+    );
 };
 
 template <typename Component>
@@ -204,7 +263,7 @@ void LuaBehaviorRunner::expose_component(
             bool writable = world.can_write_component(type, owner, name);
 
             if (readable || writable)
-                descriptions.push_back({bindingIndex, name, readable, writable});
+                descriptions.push_back({bindingIndex, name, slot, readable, writable});
         }
 
         return descriptions;
@@ -221,13 +280,15 @@ void LuaBehaviorRunner::expose_component(
         const ComponentName& name,
         const LuaValue& value,
         IntentLifetime lifetime,
-        IntentPriority priority
+        IntentPriority priority,
+        IntentName intentName
     ) -> std::unique_ptr<PendingIntent> {
         return std::make_unique<TypedPendingIntent<Component>>(
             type,
             name,
             lifetime,
             priority,
+            std::move(intentName),
             decode(value)
         );
     };

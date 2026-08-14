@@ -3,7 +3,10 @@
 #include "SimulationInput.hpp"
 #include "SimulationScenario.hpp"
 
+#include <cstdint>
+#include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -89,6 +92,71 @@ std::string string_array(const std::vector<std::string>& values) {
     return encoded.str();
 }
 
+std::string json_value(const Value& value) {
+    switch (value.kind()) {
+    case Value::Kind::Null: return "null";
+    case Value::Kind::Boolean: return value.as_boolean() ? "true" : "false";
+    case Value::Kind::SignedInteger:
+        return std::to_string(value.as_signed_integer());
+    case Value::Kind::UnsignedInteger:
+        return std::to_string(value.as_unsigned_integer());
+    case Value::Kind::Double: {
+        std::ostringstream encoded;
+        encoded << value.as_double();
+        return encoded.str();
+    }
+    case Value::Kind::String: return json_string(value.as_string());
+    case Value::Kind::Bytes: {
+        std::ostringstream encoded;
+        encoded << '"';
+        constexpr char Hex[] = "0123456789abcdef";
+        for (std::uint8_t byte : value.as_bytes()) {
+            encoded << Hex[byte >> 4U] << Hex[byte & 0x0fU];
+        }
+        encoded << '"';
+        return encoded.str();
+    }
+    case Value::Kind::Array: {
+        std::ostringstream encoded;
+        encoded << '[';
+        bool first = true;
+        for (const Value& child : value.as_array()) {
+            if (!first) encoded << ',';
+            first = false;
+            encoded << json_value(child);
+        }
+        encoded << ']';
+        return encoded.str();
+    }
+    case Value::Kind::Object: {
+        std::ostringstream encoded;
+        encoded << '{';
+        bool first = true;
+        for (const auto& [key, child] : value.as_object()) {
+            if (!first) encoded << ',';
+            first = false;
+            encoded << json_string(key) << ':' << json_value(child);
+        }
+        encoded << '}';
+        return encoded.str();
+    }
+    }
+    throw std::logic_error("unknown Value kind");
+}
+
+std::string command_status_name(CommandStatus status) {
+    switch (status) {
+    case CommandStatus::Pending: return "pending";
+    case CommandStatus::Applied: return "applied";
+    case CommandStatus::Rejected: return "rejected";
+    case CommandStatus::Failed: return "failed";
+    case CommandStatus::TimedOut: return "timed-out";
+    case CommandStatus::Superseded: return "superseded";
+    case CommandStatus::Indeterminate: return "indeterminate";
+    }
+    return "unknown";
+}
+
 class TraceObserver : public SimulationObserver {
 private:
     std::ostream* output;
@@ -98,7 +166,7 @@ private:
     void emit(std::string_view event, const std::string& fields = {}) {
         if (writeFailed)
             return;
-        *output << "{\"schema\":\"liquid.trace.v1\",\"seq\":" << nextSequence++
+        *output << "{\"schema\":\"liquid.trace.v2\",\"seq\":" << nextSequence++
                 << ",\"event\":" << json_string(event);
         if (!fields.empty())
             *output << ',' << fields;
@@ -115,6 +183,7 @@ private:
                << ",\"type\":" << json_string(intent.typeName)
                << ",\"type_id\":" << intent.type
                << ",\"component\":" << json_string(intent.component)
+               << ",\"name\":" << json_string(intent.name)
                << ",\"desired_brightness\":" << intent.brightness
                << ",\"priority\":" << json_string(priority_name(intent.priority))
                << ",\"lifetime\":" << json_string(lifetime_name(intent.lifetime.kind));
@@ -131,6 +200,14 @@ private:
         fields << "\"outcome\":" << json_string(result)
                << ",\"script_status\":" << json_string(lua_status_name(outcome.script.status))
                << ",\"final_brightness\":" << outcome.finalBrightness
+               << ",\"device_brightness\":";
+        if (outcome.deviceBrightness)
+            fields << *outcome.deviceBrightness;
+        else
+            fields << "null";
+        fields << ",\"commands_issued\":" << outcome.commandsIssued
+               << ",\"reports_applied\":" << outcome.reportsApplied
+               << ",\"observations_applied\":" << outcome.observationsApplied
                << ",\"tracking_system_runs\":" << outcome.trackingSystemRuns
                << ",\"frames_completed\":" << outcome.framesCompleted
                << ",\"faulted\":" << (outcome.faulted ? "true" : "false");
@@ -145,7 +222,17 @@ public:
     void run_started(const SimulationOptions& options) override {
         std::ostringstream fields;
         fields << "\"initial_brightness\":" << options.initialBrightness
-               << ",\"frame_times\":" << number_array(options.frameTimes);
+               << ",\"frame_times\":" << number_array(options.frameTimes)
+               << ",\"feedback_timing\":" << json_string(
+                    options.feedbackTiming == FeedbackTiming::Deferred
+                        ? "deferred" : "immediate")
+               << ",\"latency_ms\":" << options.latencyMs
+               << ",\"adapter_outcome\":" << json_string(
+                    command_status_name(options.adapterOutcome))
+               << ",\"duplicate_reports\":" << options.duplicateReports
+               << ",\"silent\":" << (options.silent ? "true" : "false")
+               << ",\"reverse_delivery\":"
+               << (options.reverseDelivery ? "true" : "false");
         emit("run_started", fields.str());
     }
 
@@ -189,10 +276,11 @@ public:
     }
 
     void intent_created(FrameNumber frame, IntentTime now, const IntentSnapshot& intent) override {
-        emit("intent_created", intent_fields(frame, now, intent));
+        emit("desire_created", intent_fields(frame, now, intent));
     }
 
-    void frame_completed(const FrameLog& frame) override {
+    void frame_completed(const FrameResult& result) override {
+        const FrameLog& frame = result.frame;
         std::ostringstream fields;
         fields << "\"frame\":" << frame.frame
                << ",\"now_ms\":" << frame.now
@@ -206,15 +294,64 @@ public:
     }
 
     void intent_selected(FrameNumber frame, IntentTime now, const IntentSnapshot& intent) override {
-        emit("intent_selected", intent_fields(frame, now, intent));
+        emit("desire_selected", intent_fields(frame, now, intent));
     }
 
-    void component_snapshot(FrameNumber frame, IntentTime now, int actualBrightness) override {
+    void runtime_record(const EventRecord& record) override {
+        std::string_view event;
+        switch (record.type) {
+        case EventType::CommandIssued: event = "command_issued"; break;
+        case EventType::CommandAttempted: event = "command_attempt"; break;
+        case EventType::ReportReceived: event = "command_result"; break;
+        case EventType::ObservedStateChanged: event = "observed_changed"; break;
+        case EventType::ExternalObservationReceived:
+            event = "external_observation"; break;
+        case EventType::CommandStatusChanged: {
+            const auto& payload = record.payload.as_object();
+            const auto status = payload.find("status");
+            if (status != payload.end() && status->second.kind() == Value::Kind::String &&
+                status->second.as_string() == "timed-out") {
+                event = "command_timeout";
+            } else {
+                event = "command_status";
+            }
+            break;
+        }
+        default: return;
+        }
+        std::ostringstream fields;
+        fields << "\"record_seq\":" << record.sequence.value
+               << ",\"record_type\":" << static_cast<std::uint32_t>(record.type)
+               << ",\"data\":" << json_value(record.payload);
+        emit(event, fields.str());
+
+        if (record.type == EventType::CommandAttempted) {
+            const auto& payload = record.payload.as_object();
+            const auto attempt = payload.find("attempt");
+            if (attempt != payload.end() &&
+                attempt->second.kind() == Value::Kind::UnsignedInteger &&
+                attempt->second.as_unsigned_integer() > 1) {
+                emit("command_retry", fields.str());
+            }
+        }
+    }
+
+    void component_snapshot(
+        FrameNumber frame,
+        IntentTime now,
+        int actualBrightness,
+        std::optional<int> deviceBrightness
+    ) override {
         std::ostringstream fields;
         fields << "\"frame\":" << frame
                << ",\"now_ms\":" << now
                << ",\"component\":\"officeLight\""
-               << ",\"actual_brightness\":" << actualBrightness;
+               << ",\"actual_brightness\":" << actualBrightness
+               << ",\"device_brightness\":";
+        if (deviceBrightness)
+            fields << *deviceBrightness;
+        else
+            fields << "null";
         emit("component_snapshot", fields.str());
     }
 
@@ -223,7 +360,7 @@ public:
         fields << "\"frame\":" << frame
                << ",\"now_ms\":" << now
                << ",\"intent_id\":" << id;
-        emit("intent_disappeared", fields.str());
+        emit("desire_disappeared", fields.str());
     }
 
     void run_completed(const SimulationOutcome& outcome) override {
@@ -277,7 +414,17 @@ int run_trace_cli(
 
         TraceObserver observer(output);
         SimulationOutcome outcome = run_scenario(
-            {parsed.options.initialBrightness, std::move(source), parsed.options.frameTimes},
+            {
+                parsed.options.initialBrightness,
+                std::move(source),
+                parsed.options.frameTimes,
+                parsed.options.feedbackTiming,
+                parsed.options.latencyMs,
+                parsed.options.adapterOutcome,
+                parsed.options.duplicateReports,
+                parsed.options.silent,
+                parsed.options.reverseDelivery
+            },
             observer
         );
         if (observer.failed()) {

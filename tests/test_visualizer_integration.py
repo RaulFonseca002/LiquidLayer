@@ -70,41 +70,66 @@ def main() -> int:
         assert default_script
         connection.close()
 
-        scenario = json.dumps(
+        def run_scenario(payload: dict) -> list[dict]:
+            scenario = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            run_connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+            run_connection.request(
+                "POST",
+                "/api/run",
+                body=scenario,
+                headers={
+                    "Host": host,
+                    "Origin": f"http://{host}",
+                    "Content-Type": "application/json",
+                    "X-Solid-Scope-Token": token,
+                },
+            )
+            run_response = run_connection.getresponse()
+            run_body = run_response.read().decode("ascii")
+            assert run_response.status == 200
+            assert run_response.headers.get_content_type() == "application/x-ndjson"
+            run_events = [json.loads(line) for line in run_body.splitlines()]
+            assert [event["seq"] for event in run_events] == list(range(len(run_events)))
+            assert run_events[0]["event"] == "run_started"
+            run_connection.close()
+            return run_events
+
+        events = run_scenario(
             {
                 "initial_brightness": 10,
                 "script": default_script,
-                "frame_times": [100, 105],
-            },
-            separators=(",", ":"),
-        ).encode("utf-8")
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
-        connection.request(
-            "POST",
-            "/api/run",
-            body=scenario,
-            headers={
-                "Host": host,
-                "Origin": f"http://{host}",
-                "Content-Type": "application/json",
-                "X-Solid-Scope-Token": token,
-            },
+                "frame_times": [100, 105, 110],
+            }
         )
-        response = connection.getresponse()
-        body = response.read().decode("ascii")
-        assert response.status == 200
-        assert response.headers.get_content_type() == "application/x-ndjson"
-        events = [json.loads(line) for line in body.splitlines()]
-        assert [event["seq"] for event in events] == list(range(len(events)))
-        assert events[0]["event"] == "run_started"
         assert events[-1]["event"] == "run_completed"
         assert events[-1]["outcome"] == "success"
         assert events[-1]["faulted"] is False
-        selected = [event["desired_brightness"] for event in events if event["event"] == "intent_selected"]
+        selected = [event["desired_brightness"] for event in events if event["event"] == "desire_selected"]
         actual = [event["actual_brightness"] for event in events if event["event"] == "component_snapshot"]
-        assert selected == [70, 30]
-        assert actual == [10, 10]
-        connection.close()
+        device = [event["device_brightness"] for event in events if event["event"] == "component_snapshot"]
+        # The full loop is truthful: 70 is confirmed only after the device
+        # report lands, and 30 only after the fallback command is applied.
+        assert selected == [70, 30, 30]
+        assert actual == [10, 70, 30]
+        assert device == [70, 30, 30]
+        assert events[-1]["final_brightness"] == 30
+        assert events[-1]["device_brightness"] == 30
+
+        # A rejected adapter must never fabricate confirmed state.
+        rejected = run_scenario(
+            {
+                "initial_brightness": 10,
+                "script": default_script,
+                "frame_times": [100, 105, 110],
+                "adapter_outcome": "rejected",
+            }
+        )
+        assert rejected[-1]["event"] == "run_completed"
+        assert rejected[-1]["outcome"] == "success"
+        rejected_actual = [event["actual_brightness"] for event in rejected if event["event"] == "component_snapshot"]
+        assert rejected_actual == [10, 10, 10]
+        assert rejected[-1]["final_brightness"] == 10
+        assert not [event for event in rejected if event["event"] == "observed_changed"]
     finally:
         server.shutdown()
         server.server_close()

@@ -336,6 +336,50 @@ h3 {
     font-weight: 450;
 }
 
+.advanced-controls {
+    margin: 2px 0 18px;
+    border: 1px solid var(--line);
+    border-radius: var(--control-radius);
+    background: var(--surface);
+}
+
+.advanced-controls summary {
+    padding: 10px 12px;
+    cursor: pointer;
+    font-size: 0.8125rem;
+    font-weight: 680;
+}
+
+.advanced-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    padding: 4px 12px 12px;
+}
+
+.advanced-grid label:not(.check-control) {
+    display: grid;
+    gap: 5px;
+    color: var(--muted);
+    font-size: 0.75rem;
+}
+
+.advanced-grid select {
+    width: 100%;
+    padding: 9px 11px;
+}
+
+.check-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.75rem;
+}
+
+.check-control input {
+    width: auto;
+}
+
 .number-field {
     display: flex;
     align-items: center;
@@ -527,7 +571,7 @@ textarea {
 
 .phase-rail {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(7, minmax(0, 1fr));
     margin: 24px 0 12px;
     padding: 0;
     list-style: none;
@@ -623,6 +667,11 @@ pre {
     overflow: hidden;
 }
 
+.effect-lanes {
+    margin-top: 12px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .evidence-lane {
     min-width: 0;
     min-height: 180px;
@@ -668,6 +717,41 @@ pre {
     align-items: baseline;
     gap: 8px;
     margin-top: 24px;
+}
+
+/* A calibrated lamp patch: its fill luminance is the evidence itself.
+   Unknown state stays visibly "off the bench" via the dashed ring. */
+.lamp {
+    align-self: center;
+    flex: none;
+    width: 18px;
+    height: 18px;
+    border: 2px dashed var(--line);
+    border-radius: 50%;
+    background: var(--surface-strong);
+}
+
+.lamp[data-known="true"] {
+    border-style: solid;
+    border-color: var(--ink);
+    background: color-mix(
+        in oklab,
+        oklch(0.97 0.055 85) var(--lamp-level, 0%),
+        oklch(0.28 0.012 250)
+    );
+}
+
+@keyframes value-tick {
+    from { background-color: var(--trace-orange-soft); }
+    to { background-color: transparent; }
+}
+
+.lane-value output[data-tick] {
+    border-radius: var(--control-radius);
+}
+
+.lane-value output.value-tick {
+    animation: value-tick 420ms ease-out;
 }
 
 .lane-value output {
@@ -956,6 +1040,10 @@ tbody tr:last-child td {
 }
 
 @media (max-width: 560px) {
+    .advanced-grid {
+        grid-template-columns: 1fr;
+    }
+
     .status-chip {
         max-width: 150px;
     }
