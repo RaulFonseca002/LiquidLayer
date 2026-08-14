@@ -1112,3 +1112,181 @@ TEST_CASE("explicit session and inputs produce identical runtime records") {
 
     REQUIRE(record_run() == record_run());
 }
+
+TEST_CASE("runtime records destroyed-intent evidence when an intent expires") {
+    liquid::EventStoreMetadata metadata;
+    metadata.session = liquid::SessionId{42};
+    metadata.engineVersion = "0.1.0";
+    metadata.feedbackTiming = liquid::FeedbackTiming::Deferred;
+    liquid::MemoryEventStore store{metadata};
+    auto runtimeOptions = options(FeedbackTiming::Deferred);
+    runtimeOptions.eventStore = &store;
+    Runtime runtime{runtimeOptions};
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::ReadWrite);
+    const ComponentSlotId slot =
+        world.get_components(levelType, behavior).at("level");
+    const IntentId expiring = world.create_intent(
+        behavior, levelType, slot,
+        IntentLifetime::until_time(105), std::uint64_t{70},
+        IntentPriority::High);
+
+    runtime.run_frame(FrameInput{100, {}, {}});
+    runtime.run_frame(FrameInput{105, {}, {}});
+
+    std::size_t created = 0;
+    std::size_t destroyed = 0;
+    for (const liquid::EventRecord& record : store.read_all()) {
+        if (record.type == liquid::EventType::IntentCreated) {
+            created++;
+            REQUIRE(record.payload.as_object().at("intent_slot")
+                .as_unsigned_integer() == expiring.slot);
+        }
+        if (record.type == liquid::EventType::IntentDestroyed) {
+            destroyed++;
+            REQUIRE(record.payload.as_object().at("intent_slot")
+                .as_unsigned_integer() == expiring.slot);
+        }
+    }
+    REQUIRE(created == 1);
+    REQUIRE(destroyed == 1);
+}
+
+TEST_CASE("runtime rejects an event store with mismatched session metadata") {
+    liquid::EventStoreMetadata metadata;
+    metadata.session = liquid::SessionId{7};
+    metadata.engineVersion = "0.1.0";
+    metadata.feedbackTiming = liquid::FeedbackTiming::Deferred;
+    liquid::MemoryEventStore store{metadata};
+
+    auto mismatchedSession = options(FeedbackTiming::Deferred);
+    mismatchedSession.eventStore = &store;
+    REQUIRE_THROWS_AS(Runtime{mismatchedSession}, std::invalid_argument);
+
+    auto mismatchedTiming = options(FeedbackTiming::Immediate);
+    mismatchedTiming.sessionId = liquid::SessionId{7};
+    mismatchedTiming.eventStore = &store;
+    REQUIRE_THROWS_AS(Runtime{mismatchedTiming}, std::invalid_argument);
+}
+
+TEST_CASE("effect routes and targets reject invalid text") {
+    REQUIRE_THROWS_AS(
+        liquid::AdapterRoute{"bad route!"}, std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        liquid::EffectTarget{std::string(2048, 'x')}, std::invalid_argument);
+}
+
+TEST_CASE("effect reports keep an explicitly valid state revision") {
+    const liquid::EffectReport explicitRevision{
+        liquid::SessionId{42},
+        liquid::CommandId{3},
+        liquid::AdapterRoute{"test.light"},
+        liquid::EffectTarget{"level"},
+        liquid::CommandStatus::Applied,
+        liquid::Value{std::uint64_t{70}},
+        {},
+        100,
+        liquid::StateRevision{9}};
+    REQUIRE(explicitRevision.stateRevision == liquid::StateRevision{9});
+
+    const liquid::EffectReport derivedRevision{
+        liquid::SessionId{42},
+        liquid::CommandId{3},
+        liquid::AdapterRoute{"test.light"},
+        liquid::EffectTarget{"level"},
+        liquid::CommandStatus::Applied,
+        liquid::Value{std::uint64_t{70}},
+        {},
+        100};
+    REQUIRE(derivedRevision.stateRevision == liquid::StateRevision{3});
+}
+
+TEST_CASE("projecting an observation equal to confirmed state is a no-op") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::ReadWrite);
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"level"});
+
+    liquid::FeedbackSender sender = runtime.feedback_sender();
+    REQUIRE(sender.try_send(liquid::ExternalObservation{
+        liquid::SessionId{42},
+        liquid::AdapterRoute{"test.light"},
+        liquid::EffectTarget{"level"},
+        liquid::Value{std::uint64_t{10}},
+        liquid::StateRevision{1},
+        100}) == liquid::FeedbackSendResult::Sent);
+
+    const FrameResult frame = runtime.run_frame(FrameInput{100, {}, {}});
+    REQUIRE(frame.observations.size() == 1);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 10);
+}
+
+TEST_CASE("effect records compare by value") {
+    const liquid::EffectReport applied{
+        liquid::SessionId{42},
+        liquid::CommandId{3},
+        liquid::AdapterRoute{"test.light"},
+        liquid::EffectTarget{"level"},
+        liquid::CommandStatus::Applied,
+        liquid::Value{std::uint64_t{70}},
+        {},
+        100,
+        liquid::StateRevision{9}};
+    liquid::EffectReport laterRevision = applied;
+    laterRevision.stateRevision = liquid::StateRevision{10};
+    REQUIRE(applied == applied);
+    REQUIRE_FALSE(applied == laterRevision);
+
+    const liquid::ResolvedEffect desire{
+        liquid::AdapterRoute{"test.light"},
+        liquid::EffectTarget{"level"},
+        liquid::Value{std::uint64_t{70}}};
+    const liquid::ResolvedEffect otherDesire{
+        liquid::AdapterRoute{"test.light"},
+        liquid::EffectTarget{"level"},
+        liquid::Value{std::uint64_t{30}}};
+    REQUIRE(desire == desire);
+    REQUIRE_FALSE(desire == otherDesire);
+
+    const liquid::EffectCommand command{
+        liquid::SessionId{42}, liquid::CommandId{3}, desire, 100};
+    liquid::EffectCommand reissued = command;
+    reissued.issuedAtMs = 105;
+    REQUIRE(command == command);
+    REQUIRE_FALSE(command == reissued);
+
+    const liquid::ExternalObservation observation{
+        liquid::SessionId{42},
+        liquid::AdapterRoute{"test.light"},
+        liquid::EffectTarget{"level"},
+        liquid::Value{std::uint64_t{15}},
+        liquid::StateRevision{2},
+        115};
+    liquid::ExternalObservation newer = observation;
+    newer.observedAtMs = 120;
+    REQUIRE(observation == observation);
+    REQUIRE_FALSE(observation == newer);
+
+    const liquid::EventRecord record{
+        liquid::RecordId{1}, liquid::EventType::FrameStarted, 1,
+        liquid::Value{std::uint64_t{100}}};
+    liquid::EventRecord differentPayload = record;
+    differentPayload.payload = liquid::Value{std::uint64_t{105}};
+    REQUIRE(record == record);
+    REQUIRE_FALSE(record == differentPayload);
+}

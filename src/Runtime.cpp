@@ -1066,6 +1066,9 @@ void Runtime::record_world_evidence() {
     }
     ownedWorld.clear_intent_lifecycle_records();
 
+    // GCOVR_EXCL_START: script evidence is produced only through the Lua
+    // boundary, which the Core-only coverage gate excludes by design; the
+    // Lua-enabled suite (test_lua_lifecycle, test_lua_behavior) covers it.
     for (const auto& script : ownedWorld.script_execution_evidence()) {
         liquid::Value::Object payload;
         payload.emplace("key", liquid::Value{
@@ -1092,6 +1095,7 @@ void Runtime::record_world_evidence() {
             liquid::EventType::ScriptExecuted,
             liquid::Value{std::move(payload)});
     }
+    // GCOVR_EXCL_STOP
     ownedWorld.clear_script_execution_evidence();
 }
 

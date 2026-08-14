@@ -839,7 +839,24 @@ public:
         EventStoreMetadata replacementMetadata,
         std::vector<EventRecord> replacementRecords,
         FileEventStoreFaultPoint replacedPoint) {
+#ifdef _WIN32
+        // Windows cannot replace a destination that still has an open handle,
+        // so the current handle closes first and the untouched original file
+        // reopens if the replacement move fails.
+        file.reset();
+        try {
+            replace_file(replacement_path(), path);
+        } catch (...) {
+            try {
+                file = std::make_unique<LockedFile>(path);
+            } catch (...) {
+                faulted = true;
+            }
+            throw;
+        }
+#else
         replace_file(replacement_path(), path);
+#endif
 
         metadata = std::move(replacementMetadata);
         records = std::move(replacementRecords);
