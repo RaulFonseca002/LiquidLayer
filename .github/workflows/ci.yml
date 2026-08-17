@@ -1,8 +1,10 @@
 name: CI
 
-# The full matrix costs roughly 75-80 charged minutes per run (Windows
-# bills at 2x, macOS at 10x), so it runs only when work lands on main,
-# on pull requests, or on demand - never on ordinary branch pushes.
+# Linux-only by design: the project is developed and deployed on Linux,
+# and every job here bills at 1x. The macOS and Windows portability
+# check lives in portability.yml and runs only on manual dispatch.
+# The matrix runs when work lands on main, on pull requests, or on
+# demand - never on ordinary branch pushes.
 on:
   push:
     branches: [main]
@@ -33,12 +35,6 @@ jobs:
           - name: Linux Clang
             os: ubuntu-latest
             configure: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-          - name: macOS AppleClang
-            os: macos-latest
-            configure: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-          - name: Windows MSVC
-            os: windows-latest
-            configure: -A x64
     steps:
       - uses: actions/checkout@v4
       - name: Configure

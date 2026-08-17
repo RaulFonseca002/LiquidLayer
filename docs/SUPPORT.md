@@ -16,19 +16,21 @@ No third-party license grant is made for Liquid itself. Bundled third-party code
 
 ## Verification matrix
 
-The release CI definition exercises strict warnings as errors in Release mode
-with Linux GCC, Linux Clang, macOS AppleClang, and Windows MSVC. It also builds,
-installs, and runs consumers of `Liquid::Core`, `Liquid::Lua`, and
-`Liquid::Simulation` on each platform.
+Linux is the developed and continuously verified platform. The standing CI
+matrix runs on every landing to `main`: strict warnings-as-errors Release
+builds with GCC and Clang, ASan/UBSan, TSan, the Core-only build/install
+boundary, the Core coverage thresholds, and installed consumers of
+`Liquid::Core`, `Liquid::Lua`, and `Liquid::Simulation`. Keeping this matrix
+green is a standing release gate.
 
-Separate Linux jobs exercise ASan/UBSan, TSan, the Core-only build/install
-boundary, and the Core coverage thresholds. Sanitizer support is limited to
-the GCC/Clang configurations accepted by the corresponding CMake options.
-The full matrix first passed on `main` on 17 August 2026; keeping it green is
-a standing release gate.
+macOS AppleClang and Windows MSVC remain source-compatibility targets but are
+verified only on demand through the manual Portability workflow, which builds,
+tests, installs, and runs the consumers on both platforms. The full
+four-platform pass last completed on 17 August 2026; rerun the Portability
+workflow before a release candidate or after changing platform-conditional
+code.
 
 Solid Scope's Python bridge regressions are Linux-verified: they are
 registered only on Linux because the bridge is an owner-operated Linux
 development instrument and its suites hang under the macOS kqueue selector on
-hosted CI. macOS still compiles every Scope target and runs the C++ scenario,
-trace, and renderer self-test coverage.
+hosted CI.
