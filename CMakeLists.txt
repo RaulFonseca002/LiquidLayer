@@ -113,7 +113,7 @@ add_library(liquid
     src/world/Coordinator.cpp
     src/IntentExpiration.cpp
     src/IntentRegistry.cpp
-    src/Runtime.cpp
+    src/runtime/Runtime.cpp
     src/SystemRegistry.cpp
     src/world/World.cpp
 )
