@@ -9,7 +9,7 @@ A row may be marked complete only after its regression first failed against the 
 | S2 | Canonical values, memory/file stores, recovery, replay | `event_store`, `replay`, v1 golden fixture, decoder fuzz smoke, recovery/retention fault injection, Lua source evidence | Complete |
 | S3 | Effects, commands, feedback, retry | `feedback`, `idempotent_dispatcher`, `runtime_effects`; restart, reconciliation, bounded history, durable outbox | Complete |
 | S4 | Simulator and canonical scenarios | `simulation_adapter`, `runtime_effects`; full failure matrix, 5,000-target/1,000-frame stress, durable projection/verifier demo | Complete |
-| S5 | Package and platform support | Core-only/full source and installed consumers; vendored Lua; CI matrix; sanitizer/fuzzer jobs; 90.8% line and 80.1% branch coverage | Complete — CI execution remains an S7 release gate |
+| S5 | Package and platform support | Core-only/full source and installed consumers; vendored Lua; CI matrix; sanitizer/fuzzer jobs; coverage gate | Complete — remote CI matrix first passed on `main` 2026-08-17; keeping it green remains an S7 gate |
 | S6 | Solid Scope v2 | Bridge, schema, process, dependency-free browser self-test, owner manual browser verification, performance tests | Pending |
 | S7 | Release audit | Audit findings and release gates | Pending |
 
@@ -26,6 +26,14 @@ A row may be marked complete only after its regression first failed against the 
 - The production audit closed the accepted headless critical, high, and medium
   findings. The remaining gates are remote platform CI and Solid Scope S6.
 
-These results are implementation evidence, not a release declaration. S6
-begins only after the reviewed headless branch lands on `main` and is then
-forward-merged into the visualization track.
+These results are implementation evidence, not a release declaration.
+
+## Remote CI snapshot — 17 August 2026
+
+- The full 8-job matrix passed on `main`: strict warnings-as-errors Release
+  on Linux GCC, Linux Clang, macOS AppleClang, and Windows MSVC; Clang
+  ASan/UBSan; Clang TSan; the Core coverage gate (90.5% line, 80.8% branch
+  with pinned gcovr 8.3); and the Core-only source and installed consumers.
+- The repository now develops on the single `main` branch carrying the
+  engine and Solid Scope; the Scope Python bridge regressions are registered
+  on Linux only, as documented in `AGENTS.md` and `docs/SUPPORT.md`.

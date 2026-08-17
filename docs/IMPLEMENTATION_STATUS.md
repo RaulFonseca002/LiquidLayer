@@ -52,3 +52,15 @@ Implemented work includes:
 - run the S7 whole-codebase audit and close any new findings.
 
 The authoritative per-stage status is in `docs/TRACEABILITY.md`.
+
+## Update — 17 August 2026
+
+- The headless framework landed on `main`, and the repository was unified on
+  a single `main` branch carrying the engine and Solid Scope; the former
+  `experiment/stage2` track was fast-forwarded into `main` and retired.
+- The remote 8-job CI matrix passed in full on `main`: strict Release on
+  Linux GCC, Linux Clang, macOS AppleClang, and Windows MSVC; ASan/UBSan;
+  TSan; the Core coverage gate; and the Core-only consumers. The Scope
+  Python bridge regressions are Linux-verified (see `docs/SUPPORT.md`).
+- Remaining blockers: the S6 owner manual browser verification record and the
+  S7 whole-codebase audit.

@@ -24,5 +24,11 @@ installs, and runs consumers of `Liquid::Core`, `Liquid::Lua`, and
 Separate Linux jobs exercise ASan/UBSan, TSan, the Core-only build/install
 boundary, and the Core coverage thresholds. Sanitizer support is limited to
 the GCC/Clang configurations accepted by the corresponding CMake options.
-These jobs define release gates; their presence is not evidence that a release
-candidate has passed them.
+The full matrix first passed on `main` on 17 August 2026; keeping it green is
+a standing release gate.
+
+Solid Scope's Python bridge regressions are Linux-verified: they are
+registered only on Linux because the bridge is an owner-operated Linux
+development instrument and its suites hang under the macOS kqueue selector on
+hosted CI. macOS still compiles every Scope target and runs the C++ scenario,
+trace, and renderer self-test coverage.

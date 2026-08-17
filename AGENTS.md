@@ -30,69 +30,34 @@ Superposition ECS reference lives at `/home/raul/Desktop/superposition`. Use it 
 
 M1 through M6 complete the original deterministic decision core. The approved current work is the S0-S7 Solid finalization program in `COMPLETE_SOLID.md` and `DEVELOPMENT_TRACKING.md`, ending in a private reusable C++20 framework release at version 0.1.0.
 
-Current milestone: **complete S6 with Solid Lifecycle Scripting and the Full-Loop Scope Simulation on `experiment/stage2`**. The headless lifecycle core is forward-merged; Scope must now exercise that one Runtime through script proposal, resolution, command dispatch, simulated feedback, and authoritative component projection. Remote platform CI remains part of S7.
+Current milestone: **complete S6 with Solid Lifecycle Scripting and the Full-Loop Scope Simulation on `main`**. The lifecycle core and Scope now live on the one `main` branch; Scope must exercise that one Runtime through script proposal, resolution, command dispatch, simulated feedback, and authoritative component projection. The remote CI matrix runs green on `main` (first full pass 2026-08-17); keeping it green is a standing gate.
 
-Codex may add only the files required by the approved ordered milestone and its regression evidence. Core work belongs on a short-lived branch from `origin/main`. After each headless milestone lands on `main`, forward-merge it into `experiment/stage2` and verify the experiment track. Solid Scope remains an optional Unix-only development application and must not introduce a second Runtime.
+Codex may add only the files required by the approved ordered milestone and its regression evidence. All work belongs on a short-lived branch from `origin/main`. Solid Scope remains an optional Unix-only development application and must not introduce a second Runtime; its Python bridge regressions are Linux-verified in CI.
 
 The approved finalization includes public API hardening, world-bound generational handles, bounded encoded values and codecs, transactional component replacement, durable records and replay, effects/commands/feedback, deterministic retry and reconciliation, simulation, packaging, and the accepted Solid Scope fixes. It does not include LLM integration, MQTT, voice, biosignals, real hardware, or final Liquid Layer behavior.
 
 ---
 
-## Headless and Visualization Branch Workflow
+## Branch Workflow
 
-This project currently uses one GitHub repository, `RaulFonseca002/tcc`, with two long-lived branches. Do not treat them as separate repositories unless the remotes are explicitly changed later.
+This project uses one GitHub repository, `RaulFonseca002/tcc`, with one long-lived branch.
 
-- `main` is the canonical headless engine. It must not acquire the Solid Scope browser UI, bridge, or visualization-only dependencies.
-- `experiment/stage2` is the visualization and verification track. It contains Solid Scope, trace tooling, and test applications while consuming the same Solid core.
-- Never merge `experiment/stage2` wholesale into `main`.
-- Never force-push or rebase either shared long-lived branch after it has been published.
+- `main` is the single development branch. It carries the Solid engine and the development instruments (Solid Scope, trace tooling, test applications) in one tree.
+- Engine/tool separation is enforced at the CMake packaging boundary, not by branches: installed consumers receive only the `Liquid::Core`, `Liquid::Lua`, and `Liquid::Simulation` targets; `apps/`, the visualizer, and their tests are never installed or exported.
+- `experiment/stage2` is retired. It was the former visualization track and was fast-forwarded into `main` at its final commit; do not develop on it.
+- Never force-push or rebase `main` after it has been published.
 
-Before changing code, run `git branch --show-current` and route the work by ownership:
-
-### Core or Runtime Work
+### Making a Change
 
 1. Start a short-lived branch from current `origin/main`.
-2. Implement and verify the headless change without depending on visualization code.
-3. Merge the change into `main` through its normal review path.
-4. Merge the updated `origin/main` into `experiment/stage2` and resolve conflicts without changing Solid semantics.
-5. Run the experiment branch's complete build and test suite before publishing the synchronization.
+2. Implement the smallest complete change with its regression evidence.
+3. Run the strict full suite (`-DLIQUID_ENABLE_STRICT_WARNINGS=ON -DLIQUID_WARNINGS_AS_ERRORS=ON`, `ctest --output-on-failure`).
+4. Merge into `main` through its normal review path and confirm the remote CI matrix stays green (strict Release on Linux GCC/Clang, macOS AppleClang, Windows MSVC, plus ASan/UBSan, TSan, the Core coverage gate, and the Core-only consumers).
+5. Core changes must not depend on visualization code; Scope changes must not alter Solid core semantics. The Python bridge regressions run on Linux CI only — the bridge is an owner-operated Linux instrument — while macOS compiles all Scope targets and runs the C++ scenario, trace, and renderer self-test coverage.
 
-Core fixes discovered while working in Solid Scope still follow this path. Do not fix the core only on `experiment/stage2`, because that leaves the canonical headless engine behind.
+### Future Separation
 
-### Visualization or Test-Application Work
-
-1. Start a short-lived branch from current `origin/experiment/stage2`.
-2. Keep changes within the approved experiment surface: `apps/`, focused tests, CMake wiring, and design/documentation files.
-3. Target the pull request at `experiment/stage2`, never `main`.
-4. Verify that no Solid core semantics changed. If a core change is required, split it into the core workflow above.
-
-### Synchronizing the Tracks
-
-Use forward merges from the headless track into the visualization track:
-
-```bash
-git fetch origin
-git switch experiment/stage2
-git merge origin/main
-cmake -S . -B build -DLIQUID_ENABLE_STRICT_WARNINGS=ON -DLIQUID_WARNINGS_AS_ERRORS=ON
-cmake --build build
-ctest --test-dir build --output-on-failure
-git push
-```
-
-Do not merge in the opposite direction. A synchronization conflict must preserve `main` as the source of truth for `include/`, `src/`, and Solid runtime behavior, while preserving visualization-only integration on `experiment/stage2`.
-
-### Parallel Local Work
-
-Prefer Git worktrees so both tracks can remain checked out and built independently. From the existing `experiment/stage2` checkout:
-
-```bash
-git worktree add ../tcc-headless main
-```
-
-Keep a separate `build/` directory inside each worktree. Never share generated build output between the two tracks.
-
-If the project later moves the visualization track into an actual second GitHub repository, update this section and configure explicit `upstream` and visualization remotes before moving code. Do not infer or invent remote names.
+The intended "proper" separation is a later split of Solid Scope into its own repository that consumes the engine through `find_package(Liquid)` like any other installed consumer. The natural moment is Stage 2 kickoff or the first post-0.1 release. Until then, do not create new long-lived branches, and update this section before moving any code to a second repository.
 
 ---
 
@@ -298,7 +263,7 @@ Avoid:
 
 S1-S5 are complete. S6 is complete when:
 
-1. The reviewed headless work lands on `main` and is forward-merged into the visualization track.
+1. The reviewed lifecycle and Scope work lands on `main` with the complete suite and remote CI matrix green.
 2. Trace schema v2 separates desire, command, attempt, result, retry, timeout, and observed-state evidence.
 3. The bridge enforces bounded parsing/validation and supervises the complete trace process group on Unix.
 4. Incremental rendering and batched catch-up remain responsive for 1,000-frame traces.
@@ -306,7 +271,7 @@ S1-S5 are complete. S6 is complete when:
    owner manually verifies streaming, controls, malformed data,
    reconnect/error states, and responsiveness. No Playwright or Node package
    dependency is required for this internal development instrument.
-6. The experiment suite passes without a second Runtime or semantic divergence from `main`.
+6. The full suite passes with one Runtime and no semantic divergence between Scope and the Solid core.
 
 ---
 

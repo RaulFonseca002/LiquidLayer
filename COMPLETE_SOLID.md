@@ -8,7 +8,7 @@
 
 This document is the accepted Solid completion audit and release gate. On 12 August 2026 the owner approved the full 0.1.0 framework completion contract and the S0-S7 implementation order. M1-M6 remain complete foundations; Stage 2 Liquid work is deferred until S7 closes.
 
-Headless implementation must follow the `main` workflow in `AGENTS.md`. Visualization-only evidence remains on `experiment/stage2` and consumes the headless core by forward merge.
+All implementation follows the single-branch `main` workflow in `AGENTS.md`. Since 17 August 2026 the engine and Solid Scope share `main`; the former `experiment/stage2` track was fast-forwarded into `main` and retired. Engine/tool separation is enforced by the CMake packaging boundary, and the remote CI matrix on `main` is a standing gate.
 
 ## Completion Definition
 
@@ -231,7 +231,7 @@ Ship static Core/Lua/Simulation targets, vendored Lua 5.4.8, source/install cons
 
 ### S6 — Solid Scope completion
 
-Forward-merge headless work and make Scope exercise the complete lifecycle through the one Solid Runtime: lifecycle script callbacks, automatic intent resolution, simulated adapter commands and feedback, authoritative component projection, and trace v2 lanes. Close the accepted bridge, process, schema, playback, platform-gating, browser, and performance findings without adding a second Runtime or a Playwright/Node dependency.
+Make Scope exercise the complete lifecycle through the one Solid Runtime: lifecycle script callbacks, automatic intent resolution, simulated adapter commands and feedback, authoritative component projection, and trace v2 lanes. Close the accepted bridge, process, schema, playback, platform-gating, browser, and performance findings without adding a second Runtime or a Playwright/Node dependency.
 
 ### S7 — Final audit and release candidate
 
@@ -271,4 +271,4 @@ Unless the owner explicitly changes the boundary, the following remain outside t
 
 M1-M6 are internally coherent, comprehensively tested for their stated contracts, and clean under the current strict, Release, and sanitizer gates. Solid Scope correctly observes that core without changing it. No critical defect was found that reopens a completed M1-M6 milestone.
 
-The headless audit found no unresolved critical, high, or medium finding after the S1-S5 regression loop. The remaining work is operational: land and forward-merge the canonical headless implementation, complete the Unix-only Solid Scope S6 contract without semantic divergence, and obtain the supported-platform CI evidence required by S7. The support boundaries documented for local filesystems, private/no-license use, and optional components remain intentional v0.1 limits.
+The headless audit found no unresolved critical, high, or medium finding after the S1-S5 regression loop. The canonical implementation is landed on `main` and the supported-platform CI matrix passes there (first full green run 17 August 2026; the Solid Scope Python bridge regressions are Linux-verified by documented boundary). The remaining work is the Unix-only Solid Scope S6 contract without semantic divergence and the final S7 audit. The support boundaries documented for local filesystems, private/no-license use, and optional components remain intentional v0.1 limits.

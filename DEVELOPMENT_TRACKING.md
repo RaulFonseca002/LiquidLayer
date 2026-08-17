@@ -86,7 +86,7 @@ Not active yet.
 
 Start flat and small. Add folders only when the current approved S0-S7 milestone needs them.
 
-Current milestone: **land completed S1-S5, then execute S6 on the visualization track**. Local headless traceability and coverage gates pass; remote platform CI remains an S7 gate.
+Current milestone: **execute S6 on `main`**. S1-S5 are landed, the repository uses a single `main` branch carrying the engine and the development instruments, and the remote CI matrix runs green (first full pass 2026-08-17). Keeping that matrix green is a standing gate; the S7 audit remains.
 
 Current minimal structure:
 
@@ -556,10 +556,9 @@ The owner approved the completion definition and S0-S7 order on 12 August 2026. 
 
 ### S6 — Solid Scope completion
 
-**Status:** Pending; owned by `experiment/stage2`
+**Status:** Pending; developed on `main`
 
-- forward-merge the completed headless core;
-- trace schema v2, bounded bridge errors, process-group cleanup, complete validation, Unix gating;
+- trace schema v2, bounded bridge errors, process-group cleanup, complete validation, Unix gating (Python bridge regressions are Linux-verified in CI);
 - incremental playback and real-browser coverage without a second Runtime.
 
 ### S7 — Final audit and release candidate
@@ -579,12 +578,13 @@ The owner approved the completion definition and S0-S7 order on 12 August 2026. 
 
 No Stage 2 implementation milestone is current. Liquid planning resumes only after S7 completes.
 
-Experimental branch note:
+Solid Scope note:
 
-- `experiment/stage2` contains **Solid Scope**, a local browser visualization of the completed M6 scenario.
-- This is an observability/development-tool experiment, not a promoted Stage 2 milestone.
+- **Solid Scope**, the local browser visualization of the full-loop scenario, now lives on `main` beside the engine; the former `experiment/stage2` branch is retired after being fast-forwarded into `main`.
+- Scope is an observability/development tool, not a promoted Stage 2 milestone, and is excluded from the installed package by the CMake boundary.
 - It must reuse the existing Runtime and Lua execution path, preserve deterministic semantics, and keep actual component state separate from selected desired state.
-- The experiment adds a shared app-level scenario, deterministic NDJSON trace executable, hardened loopback bridge, responsive browser instrument, and focused success/failure/stress regressions without changing Solid core semantics.
+- It comprises a shared app-level scenario, deterministic NDJSON trace executable, hardened loopback bridge, responsive browser instrument, and focused success/failure/stress regressions without changing Solid core semantics.
+- The intended future separation is a dedicated Scope repository consuming `find_package(Liquid)`, at Stage 2 kickoff or the first post-0.1 release.
 
 Expected future areas:
 
