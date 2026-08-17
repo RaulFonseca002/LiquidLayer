@@ -61,10 +61,11 @@ The intended "proper" separation is a later split of Solid Scope into its own re
 
 ---
 
-## Current Minimal Repository Shape
+## Current Repository Shape
 
-Start small. Do not create folders before their approved S0-S7 milestone needs them.
-During S0, only contract and tracking documentation is added to the completed M1-M6 headless baseline.
+Do not create folders before an approved milestone needs them. The map below is
+directory-level; the CMake source list in `CMakeLists.txt` is the authoritative
+file inventory.
 
 ```text
 liquid/
@@ -75,65 +76,26 @@ liquid/
   ARTICLE_NOTES.md
   COMPLETE_SOLID.md
 
-  docs/
-    PUBLIC_API.md
-    EVENT_FORMAT_V1.md
-    THREADING.md
-    ADAPTER_CONTRACT.md
-    REPLAY.md
-    COMPATIBILITY.md
-    SECURITY_BOUNDARY.md
-    SUPPORT.md
-    TRACEABILITY.md
-
-  apps/
-
-  include/
-    liquid/
-      Ids.hpp
-      IntentLifetime.hpp
-      IntentExpiration.hpp
-      ComponentStorage.hpp
-      ComponentRegistry.hpp
-      world/
-        WorldState.hpp
-        Coordinator.hpp
-        World.hpp
-      BehaviorRegistry.hpp
-      IntentRegistry.hpp
-      SystemRegistry.hpp
-      Runtime.hpp
-      scripting/
-
+  docs/            # frozen v0.1 contracts and operational guides
+  apps/            # simulation CLI, trace executable, Solid Scope visualizer
+  include/liquid/  # public headers; detail/ is internal implementation
   src/
-    ComponentRegistry.cpp
-    world/
-      Coordinator.cpp
-      World.cpp
-    BehaviorRegistry.cpp
-    IntentRegistry.cpp
-    SystemRegistry.cpp
-    IntentExpiration.cpp
-    Runtime.cpp
-    scripting/
-
-  tests/
-    test_ids.cpp
-    test_component_storage.cpp
-    test_component_registry.cpp
-    test_world.cpp
-    test_behavior_registry.cpp
-    test_intent_registry.cpp
-    test_system_registry.cpp
-    test_intent_expiration.cpp
-    test_intent_resolution.cpp
-    test_runtime.cpp
-    test_lua_behavior.cpp
-    test_simulation_cli.cpp
-    test_stress.cpp
+    world/         # World and Coordinator
+    runtime/       # Runtime frame driver, effects state, evidence,
+                   # feedback, restore; src-private RuntimeInternals.hpp
+    events/        # event stores, on-disk format codec, value codec, replay
+    effects/       # effect types, feedback channel, idempotent dispatcher
+    scripting/     # sandboxed Lua boundary
+  tests/           # Catch2 suites and golden fixtures
+  fuzz/            # decoder fuzz targets
+  examples/        # source-tree and installed-package consumers
+  third_party/     # pinned Catch2 and Lua distributions
 ```
 
 Allowed to add new folders only when a milestone explicitly requires them.
+Src-private headers (for example `src/runtime/RuntimeInternals.hpp` and the
+`src/events/FileEventStore*.hpp` pair) are included by quoted relative path,
+are never installed, and never appear in `include/liquid`.
 
 ---
 

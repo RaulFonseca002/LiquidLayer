@@ -88,72 +88,11 @@ Start flat and small. Add folders only when the current approved S0-S7 milestone
 
 Current milestone: **execute S6 on `main`**. S1-S5 are landed, the repository uses a single `main` branch carrying the engine and the development instruments, and the remote CI matrix runs green (first full pass 2026-08-17). Keeping that matrix green is a standing gate; the S7 audit remains.
 
-Current minimal structure:
-
-```text
-liquid/
-  CMakeLists.txt
-  AGENTS.md
-  CURRENT_STATE_EVALUATION.md
-  DEVELOPMENT_TRACKING.md
-  Liquid_Concepts_and_Architecture.md
-  ARTICLE_NOTES.md
-  COMPLETE_SOLID.md
-
-  docs/
-    PUBLIC_API.md
-    EVENT_FORMAT_V1.md
-    THREADING.md
-    ADAPTER_CONTRACT.md
-    REPLAY.md
-    COMPATIBILITY.md
-    SECURITY_BOUNDARY.md
-    SUPPORT.md
-    TRACEABILITY.md
-
-  include/
-    liquid/
-      Ids.hpp
-      IntentLifetime.hpp
-      IntentExpiration.hpp
-      ComponentStorage.hpp
-      ComponentRegistry.hpp
-      world/
-        WorldState.hpp
-        Coordinator.hpp
-        World.hpp
-      BehaviorRegistry.hpp
-      IntentRegistry.hpp
-      SystemRegistry.hpp
-      Runtime.hpp
-      scripting/
-
-  src/
-    ComponentRegistry.cpp
-    world/
-      Coordinator.cpp
-      World.cpp
-    BehaviorRegistry.cpp
-    IntentRegistry.cpp
-    SystemRegistry.cpp
-    IntentExpiration.cpp
-    Runtime.cpp
-    scripting/
-
-  tests/
-    test_ids.cpp
-    test_component_storage.cpp
-    test_component_registry.cpp
-    test_world.cpp
-    test_behavior_registry.cpp
-    test_intent_registry.cpp
-    test_system_registry.cpp
-    test_intent_expiration.cpp
-    test_intent_resolution.cpp
-    test_runtime.cpp
-    test_lua_behavior.cpp
-    test_stress.cpp
-```
+Current structure: see the directory-level map in `AGENTS.md` ("Current
+Repository Shape"). The CMake source list in `CMakeLists.txt` is the
+authoritative file inventory; the runtime implementation lives under
+`src/runtime/` and the event stores under `src/events/` since the
+maintainability decomposition of August 2026.
 
 ---
 

@@ -21,9 +21,12 @@ All notable framework changes will be recorded here. Dates are release dates, no
 - Source-tree and installed-package consumers across the supported compiler platforms.
 - Official Catch2 v3.8.1 amalgamated tests under CTest, vendored for offline
   reproducibility.
-- Solid Scope full-loop simulation console on the experiment branch: a
-  `liquid.trace.v2` NDJSON stream over the loopback bridge with distinct
-  desire, command, device, feedback, and confirmed-state lanes, a
-  seven-phase runtime rail, and a headless renderer self-test harness.
+- Solid Scope full-loop simulation console: a `liquid.trace.v2` NDJSON
+  stream over the loopback bridge with distinct desire, command, device,
+  feedback, and confirmed-state lanes, a seven-phase runtime rail, and a
+  headless renderer self-test harness.
+- Maintainability decomposition of the runtime and file event store into
+  cohesive translation units under `src/runtime/` and `src/events/`, with
+  no public API or behavior change.
 
 The 0.1.0 entry will be dated only after the traceability matrix and release gates are complete.
