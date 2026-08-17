@@ -106,6 +106,7 @@ add_library(liquid
     src/events/EventStore.cpp
     src/events/MemoryEventStore.cpp
     src/events/FileEventStore.cpp
+    src/events/FileEventStoreFormat.cpp
     src/events/ValueCodec.cpp
     src/events/Replay.cpp
     src/BehaviorRegistry.cpp
