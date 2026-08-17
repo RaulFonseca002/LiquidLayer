@@ -6,7 +6,6 @@
 #include "FileEventStoreIo.hpp"
 
 #include <algorithm>
-#include <array>
 #include <limits>
 #include <span>
 #include <string>
@@ -229,9 +228,9 @@ public:
         }
     }
 
-    RecordId append_one(EventData event, Durability durability) {
-        const std::array<EventData, 1> batch{event};
-        return append_many(batch, durability).front();
+    RecordId append_one(const EventData& event, Durability durability) {
+        return append_many(std::span<const EventData>(&event, 1), durability)
+            .front();
     }
 
     std::vector<RecordId> append_many(std::span<const EventData> events,
