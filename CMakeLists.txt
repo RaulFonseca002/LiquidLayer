@@ -114,6 +114,7 @@ add_library(liquid
     src/IntentExpiration.cpp
     src/IntentRegistry.cpp
     src/runtime/Runtime.cpp
+    src/runtime/RuntimeEvidence.cpp
     src/SystemRegistry.cpp
     src/world/World.cpp
 )
