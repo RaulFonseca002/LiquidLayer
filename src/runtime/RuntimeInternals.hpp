@@ -101,6 +101,7 @@ public:
     void restore_observed_values(const Value::Object& states);
 
     void prune_terminal_history(bool reserveCommandSlot = false);
+    void set_status(CommandState& state, CommandStatus status);
     void transition(
         CommandState& state,
         CommandStatus status,
@@ -116,6 +117,13 @@ public:
     );
     void validate_effects(std::span<const ResolvedEffect> effects) const;
 
+    void commit_authoritative(
+        const AdapterRoute& route,
+        const EffectTarget& target,
+        const Value& observedValue,
+        StateRevision revision,
+        std::uint64_t commandId
+    );
     void apply_report(const EffectReport& report, std::vector<EffectReport>& accepted);
     void apply_observation(
         const ExternalObservation& observation,

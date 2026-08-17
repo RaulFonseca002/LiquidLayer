@@ -64,18 +64,38 @@ void RuntimeEffectsState::apply_report(const EffectReport& report, std::vector<E
         return;
     }
 
+    commit_authoritative(
+        report.adapterRoute,
+        report.target,
+        *report.observedValue,
+        report.stateRevision,
+        report.commandId.value);
+}
+
+// The one place an authoritative command outcome becomes observed state:
+// the ObservedStateChanged evidence and the observed/revision/authority
+// maps must always change together, from validated reports here and from
+// host reconciliation in Runtime::reconcile_indeterminate.
+void RuntimeEffectsState::commit_authoritative(
+    const AdapterRoute& route,
+    const EffectTarget& target,
+    const Value& observedValue,
+    StateRevision revision,
+    std::uint64_t commandId
+) {
     append(EventType::ObservedStateChanged, event_payload({
-        {"key", Value{report.adapterRoute.value() + ":" + report.target.value()}},
-        {"value", *report.observedValue},
-        {"command_id", Value{report.commandId.value}},
-        {"route", Value{report.adapterRoute.value()}},
-        {"target", Value{report.target.value()}},
-        {"state_revision", Value{report.stateRevision.value}},
-        {"observed", *report.observedValue}
+        {"key", Value{route.value() + ":" + target.value()}},
+        {"value", observedValue},
+        {"command_id", Value{commandId}},
+        {"route", Value{route.value()}},
+        {"target", Value{target.value()}},
+        {"state_revision", Value{revision.value}},
+        {"observed", observedValue}
     }));
-    observed.insert_or_assign(key, *report.observedValue);
-    observedRevisions.insert_or_assign(key, report.stateRevision);
-    authoritativeByTarget.insert_or_assign(key, report.commandId.value);
+    const TargetKey key = target_key(route, target);
+    observed.insert_or_assign(key, observedValue);
+    observedRevisions.insert_or_assign(key, revision);
+    authoritativeByTarget.insert_or_assign(key, commandId);
 }
 
 void RuntimeEffectsState::apply_observation(

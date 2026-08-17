@@ -364,21 +364,13 @@ void Runtime::reconcile_indeterminate(
         revision
     };
     effectsState->transition(state, reconciledStatus, "host reconciliation");
-    effectsState->append(liquid::EventType::ObservedStateChanged,
-        liquid::detail::event_payload({
-            {"key", liquid::Value{route.value() + ":" + target.value()}},
-            {"value", observedValue},
-            {"command_id", liquid::Value{state.command.commandId.value}},
-            {"route", liquid::Value{route.value()}},
-            {"target", liquid::Value{target.value()}},
-            {"state_revision", liquid::Value{revision.value}},
-            {"observed", std::move(observedValue)}
-        }));
+    effectsState->commit_authoritative(
+        route,
+        target,
+        reconciledObserved,
+        revision,
+        state.command.commandId.value);
     state.terminalReport = std::move(terminalReport);
-    effectsState->observed.insert_or_assign(key, reconciledObserved);
-    effectsState->observedRevisions.insert_or_assign(key, revision);
-    effectsState->authoritativeByTarget.insert_or_assign(
-        key, state.command.commandId.value);
     effectsState->store->flush();
 }
 

@@ -86,6 +86,17 @@ void RuntimeEffectsState::prune_terminal_history(bool reserveCommandSlot) {
         throw EventStoreError("active command capacity exceeded");
 }
 
+// The non-recording half of a status transition: every live status write
+// and its terminal bookkeeping must go through here so the restore path in
+// RuntimeEffectsRestore.cpp has one contract to mirror.
+void RuntimeEffectsState::set_status(CommandState& state, CommandStatus status) {
+    const bool becameTerminal = active(state.status) && !active(status);
+    state.status = status;
+    if (becameTerminal) {
+        terminalOrder.push_back(state.command.commandId.value);
+    }
+}
+
 void RuntimeEffectsState::transition(
     CommandState& state,
     CommandStatus status,
@@ -98,11 +109,7 @@ void RuntimeEffectsState::transition(
         {"status", Value{status_name(status)}},
         {"reason", Value{reason}}
     }));
-    const bool becameTerminal = active(state.status) && !active(status);
-    state.status = status;
-    if (becameTerminal) {
-        terminalOrder.push_back(state.command.commandId.value);
-    }
+    set_status(state, status);
 }
 
 void RuntimeEffectsState::append(EventType type, Value payload,

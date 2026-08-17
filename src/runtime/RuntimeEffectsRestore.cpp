@@ -98,6 +98,10 @@ void RuntimeEffectsState::restore(std::span<const EventRecord> records) {
             const auto found = commands.find(id);
             if (found == commands.end())
                 throw EventStoreError("status references unknown command");
+            // Raw write, deliberately not set_status(): restore rebuilds
+            // terminalOrder once below instead of per record. Any new
+            // terminal side effect added to set_status() in
+            // RuntimeEffectsState.cpp must be mirrored in that rebuild.
             found->second.status = parse_status(required_string(
                 object, "status", "recorded command status"));
         } else if (record.type == EventType::ObservedStateChanged) {
