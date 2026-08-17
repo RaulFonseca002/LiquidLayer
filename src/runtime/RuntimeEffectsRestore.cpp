@@ -46,17 +46,6 @@ std::string required_string(
     return value.as_string();
 }
 
-CommandStatus parse_status(const std::string& value) {
-    if (value == "pending") return CommandStatus::Pending;
-    if (value == "applied") return CommandStatus::Applied;
-    if (value == "rejected") return CommandStatus::Rejected;
-    if (value == "failed") return CommandStatus::Failed;
-    if (value == "timed-out") return CommandStatus::TimedOut;
-    if (value == "superseded") return CommandStatus::Superseded;
-    if (value == "indeterminate") return CommandStatus::Indeterminate;
-    throw EventStoreError("recorded command status is invalid");
-}
-
 }
 
 void RuntimeEffectsState::restore(std::span<const EventRecord> records) {

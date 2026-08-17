@@ -3,18 +3,14 @@
 #include "liquid/Runtime.hpp"
 #include "liquid/events/MemoryEventStore.hpp"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <exception>
 #include <initializer_list>
-#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,6 +34,19 @@ inline const char* status_name(CommandStatus status) {
     case CommandStatus::Indeterminate: return "indeterminate";
     }
     return "unknown";
+}
+
+// Inverse of status_name for the same seven wire strings; keep the two
+// tables adjacent so a status change cannot update one without the other.
+inline CommandStatus parse_status(const std::string& value) {
+    if (value == "pending") return CommandStatus::Pending;
+    if (value == "applied") return CommandStatus::Applied;
+    if (value == "rejected") return CommandStatus::Rejected;
+    if (value == "failed") return CommandStatus::Failed;
+    if (value == "timed-out") return CommandStatus::TimedOut;
+    if (value == "superseded") return CommandStatus::Superseded;
+    if (value == "indeterminate") return CommandStatus::Indeterminate;
+    throw EventStoreError("recorded command status is invalid");
 }
 
 inline Value event_payload(std::initializer_list<std::pair<const std::string, Value>> fields) {
