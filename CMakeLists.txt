@@ -106,6 +106,7 @@ add_library(liquid
     src/events/EventStore.cpp
     src/events/MemoryEventStore.cpp
     src/events/FileEventStore.cpp
+    src/events/FileEventStoreFormat.cpp
     src/events/ValueCodec.cpp
     src/events/Replay.cpp
     src/BehaviorRegistry.cpp
@@ -113,7 +114,11 @@ add_library(liquid
     src/world/Coordinator.cpp
     src/IntentExpiration.cpp
     src/IntentRegistry.cpp
-    src/Runtime.cpp
+    src/runtime/Runtime.cpp
+    src/runtime/RuntimeEffectsFeedback.cpp
+    src/runtime/RuntimeEffectsState.cpp
+    src/runtime/RuntimeEffectsRestore.cpp
+    src/runtime/RuntimeEvidence.cpp
     src/SystemRegistry.cpp
     src/world/World.cpp
 )

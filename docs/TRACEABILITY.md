@@ -37,3 +37,21 @@ These results are implementation evidence, not a release declaration.
 - The repository now develops on the single `main` branch carrying the
   engine and Solid Scope; the Scope Python bridge regressions are registered
   on Linux only, as documented in `AGENTS.md` and `docs/SUPPORT.md`.
+
+## S7 maintainability finding — closed 17 August 2026
+
+The external codebase analysis flagged `src/Runtime.cpp` (1,427 lines) and
+`src/events/FileEventStore.cpp` (1,079 lines) as excessive responsibility
+concentrations. Both were decomposed by mechanical, semantics-preserving
+extraction: the runtime now spans five units under `src/runtime/` (frame
+driver, effects state, evidence, feedback, restore) and the file store three
+under `src/events/` (facade, format codec, platform I/O), the largest at 443
+lines. Evidence: every moved body verified byte-identical against the
+pre-refactor sources, strict suite green after each of the extraction
+commits, ASan/UBSan clean, the Core coverage gate unchanged at 90% line, the
+golden binary fixture byte-identical, and a high-effort adversarial review
+whose confirmed findings (header macro hazard, format-codec linkage, shared
+authoritative-commit and status seams, documentation drift) were fixed on
+the same branch. The remaining accepted follow-up is encapsulating the
+all-public `RuntimeEffectsState` member bag behind invariant-preserving
+operations, deferred as an S7 audit candidate.

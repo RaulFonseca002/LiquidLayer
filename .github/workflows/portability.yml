@@ -1,0 +1,61 @@
+name: Portability
+
+# On-demand macOS and Windows strict builds. These bill at 10x and 2x
+# real minutes respectively, so they never run automatically; trigger
+# with `gh workflow run Portability` before a release candidate or after
+# touching platform-conditional code (last full green pass: 2026-08-17).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CTEST_OUTPUT_ON_FAILURE: "1"
+
+jobs:
+  strict-release:
+    name: ${{ matrix.name }} strict Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS AppleClang
+            os: macos-latest
+            configure: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          - name: Windows MSVC
+            os: windows-latest
+            configure: -A x64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=ON
+          -DLIQUID_ENABLE_STRICT_WARNINGS=ON
+          -DLIQUID_WARNINGS_AS_ERRORS=ON
+          ${{ matrix.configure }}
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Install package
+        run: >-
+          cmake --install build
+          --config Release
+          --prefix "${{ github.workspace }}/build/prefix"
+      - name: Configure installed component consumers
+        run: >-
+          cmake -S examples/installed-package -B build/installed-consumers
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="${{ github.workspace }}/build/prefix"
+          -DLIQUID_CONSUMER_STRICT_WARNINGS=ON
+      - name: Build installed component consumers
+        run: cmake --build build/installed-consumers --config Release --parallel 2
+      - name: Test installed component consumers
+        run: >-
+          ctest --test-dir build/installed-consumers
+          -C Release
+          --output-on-failure

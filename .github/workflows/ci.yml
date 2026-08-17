@@ -1,9 +1,19 @@
 name: CI
 
+# Linux-only by design: the project is developed and deployed on Linux,
+# and every job here bills at 1x. The macOS and Windows portability
+# check lives in portability.yml and runs only on manual dispatch.
+# The matrix runs when work lands on main, on pull requests, or on
+# demand - never on ordinary branch pushes.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -25,12 +35,6 @@ jobs:
           - name: Linux Clang
             os: ubuntu-latest
             configure: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-          - name: macOS AppleClang
-            os: macos-latest
-            configure: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-          - name: Windows MSVC
-            os: windows-latest
-            configure: -A x64
     steps:
       - uses: actions/checkout@v4
       - name: Configure
