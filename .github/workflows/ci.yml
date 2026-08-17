@@ -1,9 +1,17 @@
 name: CI
 
+# The full matrix costs roughly 75-80 charged minutes per run (Windows
+# bills at 2x, macOS at 10x), so it runs only when work lands on main,
+# on pull requests, or on demand - never on ordinary branch pushes.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
