@@ -114,6 +114,7 @@ add_library(liquid
     src/IntentExpiration.cpp
     src/IntentRegistry.cpp
     src/runtime/Runtime.cpp
+    src/runtime/RuntimeEffectsFeedback.cpp
     src/runtime/RuntimeEffectsRestore.cpp
     src/runtime/RuntimeEvidence.cpp
     src/SystemRegistry.cpp
