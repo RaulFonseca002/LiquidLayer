@@ -14,7 +14,12 @@
 #include <vector>
 
 #ifdef _WIN32
+// NOMINMAX has no effect if another header already pulled in windows.h,
+// so every std::min/std::numeric_limits call below uses the parenthesized
+// form, which stays valid even when the min/max macros are live.
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -167,7 +172,7 @@ public:
     std::vector<std::uint8_t> read_all() const {
         const std::uint64_t byteCount = size();
         if (byteCount > EventLimits::maxFileBytes ||
-            byteCount > std::numeric_limits<std::size_t>::max()) {
+            byteCount > (std::numeric_limits<std::size_t>::max)()) {
             throw EventStoreError("event-store file size limit exceeded");
         }
 
@@ -180,8 +185,8 @@ public:
             const std::uint64_t absolute = consumed;
             offset.Offset = static_cast<DWORD>(absolute);
             offset.OffsetHigh = static_cast<DWORD>(absolute >> 32U);
-            const DWORD requested = static_cast<DWORD>(std::min<std::size_t>(
-                bytes.size() - consumed, std::numeric_limits<DWORD>::max()));
+            const DWORD requested = static_cast<DWORD>((std::min<std::size_t>)(
+                bytes.size() - consumed, (std::numeric_limits<DWORD>::max)()));
             DWORD actual = 0;
             if (!ReadFile(handle, bytes.data() + consumed, requested, &actual, &offset) ||
                 actual == 0) {
@@ -214,8 +219,8 @@ public:
             const std::uint64_t absolute = offset + consumed;
             position.Offset = static_cast<DWORD>(absolute);
             position.OffsetHigh = static_cast<DWORD>(absolute >> 32U);
-            const DWORD requested = static_cast<DWORD>(std::min<std::size_t>(
-                bytes.size() - consumed, std::numeric_limits<DWORD>::max()));
+            const DWORD requested = static_cast<DWORD>((std::min<std::size_t>)(
+                bytes.size() - consumed, (std::numeric_limits<DWORD>::max)()));
             DWORD actual = 0;
             if (!WriteFile(handle, bytes.data() + consumed, requested, &actual,
                            &position) || actual == 0) {
