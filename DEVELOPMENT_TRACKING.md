@@ -84,9 +84,13 @@ Not active yet.
 
 ## Current Development Policy
 
-Start flat and small. Add folders only when the current approved S0-S7 milestone needs them.
+Start flat and small. Do not add Stage 2 folders until its first implementation
+milestone is explicitly approved.
 
-Current milestone: **execute S6 on `main`**. S1-S5 are landed, the repository uses a single `main` branch carrying the engine and the development instruments, and the remote CI matrix runs green (first full pass 2026-08-17). Keeping that matrix green is a standing gate; the S7 audit remains.
+Current milestone: **research, debate, and approve the first Stage 2 Liquid
+implementation milestone**. Solid v0.1.0 and finalization S0-S7 are complete.
+No Stage 2 code, dependencies, or new directories are approved during this
+definition phase.
 
 Current structure: see the directory-level map in `AGENTS.md` ("Current
 Repository Shape"). The CMake source list in `CMakeLists.txt` is the
@@ -437,7 +441,7 @@ Done when:
 
 ## Stage 1 Finalization — Solid v0.1
 
-**Status:** In progress through S6/S7; S0-S5 complete
+**Status:** Complete — 22 August 2026
 
 The owner approved the completion definition and S0-S7 order on 12 August 2026. `COMPLETE_SOLID.md` is the audit authority and `docs/` contains the frozen implementation contracts.
 
@@ -486,7 +490,7 @@ The owner approved the completion definition and S0-S7 order on 12 August 2026. 
 
 ### S5 — Framework packaging
 
-**Status:** Complete; remote matrix execution remains an S7 gate
+**Status:** Complete
 
 - static `Liquid::Core`, `Liquid::Lua`, and `Liquid::Simulation` targets;
 - source-tree and installed-package consumers;
@@ -495,27 +499,43 @@ The owner approved the completion definition and S0-S7 order on 12 August 2026. 
 
 ### S6 — Solid Scope completion
 
-**Status:** Pending; developed on `main`
+**Status:** Complete — 22 August 2026
 
-- trace schema v2, bounded bridge errors, process-group cleanup, complete validation, Unix gating (Python bridge regressions are Linux-verified in CI);
+- trace schema v2, bounded bridge errors, process-group cleanup, bounded envelope validation, Unix gating (Python bridge regressions are Linux-verified in CI);
 - incremental playback and real-browser coverage without a second Runtime.
+
+Completion note: the bridge now validates bounded request/trace envelopes and
+supervises the complete Unix process group; trace, presentation, malformed
+input, and 1,000-frame paths have automated regressions. The owner accepted
+Scope as an internal Linux instrument with no browser compatibility promise
+and waived a repeat manual browser matrix.
 
 ### S7 — Final audit and release candidate
 
-**Status:** Pending
+**Status:** Complete — 22 August 2026
 
 - repeat regression-first fixes for every final finding;
 - close all critical, high, and medium findings;
 - document accepted low support boundaries;
 - mark `COMPLETE_SOLID.md` complete only when every traceability and release gate passes.
 
+Completion note: regression-first fixes closed lifecycle intent atomicity,
+checkpoint/retention/restore validation, adapter-registration durability,
+Scope supervision, assertion, coverage, and package-export findings. Three
+independent re-reviews found no remaining blocker, and the local Linux GCC,
+Clang, ASan/UBSan, TSan, coverage, consumer, Scope, browser-self-test, and fuzz
+matrix passed. The owner accepted the documented local-only release evidence.
+
 ---
 
 ## Stage 2 — Liquid Milestones
 
-**Status:** Blocked on Solid v0.1 finalization
+**Status:** Current — research and milestone definition only
 
-No Stage 2 implementation milestone is current. Liquid planning resumes only after S7 completes.
+No Stage 2 implementation milestone is approved yet. Current work is to
+research candidate adaptive boundaries, debate their tradeoffs, and obtain
+owner approval for the smallest first milestone. Do not create Stage 2 source
+folders or dependencies before that decision is recorded.
 
 Solid Scope note:
 
@@ -564,8 +584,9 @@ When a milestone is completed:
 
 ## Current Notes
 
-- Stage 1 Solid is complete through M6, but framework finalization S0-S7 is current before Stage 2 begins.
-- S0 contract and branch alignment is complete; S1 public core hardening is current.
+- Stage 1 Solid v0.1.0 is complete through M1-M6 and finalization S0-S7.
+- Stage 2 Liquid is current only as research and milestone definition; no
+  implementation scope is approved.
 - M1 modified ECS core is complete and should be treated as foundation, not active scope.
 - M2 now uses typed intent-record storage with owner and component-target indexes; `IntentId` no longer encodes the owner behavior.
 - M3 registry-owned intent resolution is complete and should be treated as foundation, not active scope.
@@ -583,4 +604,6 @@ When a milestone is completed:
 - Use named constants for packed key shifts/masks instead of repeating raw numeric literals when a packed key is still useful.
 - Intents are not component rows. They are immutable proposals to change component state or emit effects.
 - Intent lifetime is metadata on immutable intent records, not component storage.
-- Script components and systems that execute them are future work; the completed M1 storage/query model only makes that path possible later.
+- Lifecycle script components and their Behavior-phase system are implemented
+  on the completed Solid foundation; future Liquid work may generate or modify
+  scripts only through the same bounded capability and transaction contracts.

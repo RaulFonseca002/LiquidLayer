@@ -18,10 +18,19 @@ Record full Lua source by default. Hash-only recording reduces stored script con
 1. Open and validate the session file before starting Runtime.
 2. Reject mid-file corruption, unsupported versions, sequence gaps, and bounds violations.
 3. Allow writable recovery to truncate only a corrupt or incomplete final batch, then require a durable recovery record.
-4. Request checkpoints explicitly; verify a checkpoint before using it as a retention boundary.
+4. Request checkpoints explicitly; verify their complete shape, session,
+   replay anchor, pending commands, and attempt progress against the canonical
+   pre-checkpoint projection before using one as a retention boundary.
 5. Compact by creating, validating, flushing, and atomically replacing a new generation. Never delete arbitrary records in place.
 
 If event-store append or flush fails, Runtime must fault before dispatching an external effect without durable evidence. Buffered durability is limited to disposable simulations and must not be presented as a durable replay source.
+
+Retention is transactional: both memory and file stores project and validate
+the candidate retained stream before replacing their current records. A
+failure leaves the prior records and file generation unchanged. Runtime
+restore validates the whole stream before rebuilding live effect state, so a
+retained retry resumes at the recorded next attempt rather than restarting its
+schedule.
 
 ## Diagnose divergence
 

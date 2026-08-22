@@ -12,7 +12,10 @@
 ![Liquid runtime flow: intent proposals are resolved, dispatched through bounded adapters, and committed only after validated feedback.](docs/liquid-runtime-flow.svg)
 
 > [!IMPORTANT]
-> **Current status:** Solid v0.1.0 finalization stages S0-S5 are complete. The S6 lifecycle implementation and Solid Scope v2 now live on `main`, but S6 remains pending the owner's recorded manual browser verification and S7 remains the final audit/release-candidate gate. This repository is **not yet a release declaration**.
+> **Current status:** Solid v0.1.0 is complete. All S0-S7 finalization gates
+> closed on 22 August 2026 with the local Linux release matrix green. Stage 2
+> Liquid is now in research and milestone-definition; no adaptive-layer code
+> is approved yet.
 
 | Deterministic core | Evidence-first effects | Portable package |
 | --- | --- | --- |
@@ -51,7 +54,7 @@ A selected value is only a **desire**. Solid updates externally controlled state
 - **Bounded authority** — adapters receive commands, not `World`, registries, component slots, or mutation access.
 - **Replayable evidence** — memory and file event stores support projection replay and host-assisted verification.
 - **Controlled scripting** — Lua runs in fresh, capability-limited sandboxes with transactional proposal commits.
-- **Portable verification** — CI defines strict Release builds for GCC, Clang, AppleClang, and MSVC, plus sanitizer, coverage, and consumer-package gates.
+- **Portable verification** — the release matrix covers strict GCC/Clang builds, sanitizers, coverage, fuzz smoke, and consumer-package gates; AppleClang and MSVC remain on-demand source-compatibility targets.
 
 ## Build and test
 

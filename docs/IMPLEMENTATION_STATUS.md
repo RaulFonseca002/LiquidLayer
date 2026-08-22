@@ -1,8 +1,9 @@
 # Solid v0.1 Implementation Status
 
 > Historical implementation snapshot. This file preserves the 13 August 2026
-> branch outcome and its 17 August landing update. `docs/TRACEABILITY.md` and
-> `DEVELOPMENT_TRACKING.md` are authoritative for the current S6/S7 status.
+> branch outcome and its later landing/finalization updates.
+> `docs/TRACEABILITY.md` and `DEVELOPMENT_TRACKING.md` are authoritative for
+> the completed S0-S7 status and current Stage 2 planning boundary.
 
 Date: 13 August 2026
 
@@ -68,3 +69,21 @@ The authoritative per-stage status is in `docs/TRACEABILITY.md`.
   Python bridge regressions are Linux-verified (see `docs/SUPPORT.md`).
 - Remaining blockers: the S6 owner manual browser verification record and the
   S7 whole-codebase audit.
+
+## Finalization — 22 August 2026
+
+- S6 closed with one Runtime, trace schema v2, bounded bridge validation,
+  complete Unix process-group supervision, responsive 1,000-frame rendering,
+  and the dependency-free presentation self-test. The owner accepted Scope as
+  an internal Linux instrument with no browser compatibility promise and
+  waived a repeat manual browser matrix.
+- The S7 audit closed lifecycle intent transaction, checkpoint/retention and
+  restore validation, adapter-registration atomicity, Scope supervision, and
+  package-export findings with regression tests. Independent data-integrity,
+  safety, and delivery-scope reviews found no remaining blocker.
+- The local Linux release matrix passed under GCC 14 and Clang 19, including
+  30/30 full suites, ASan/UBSan, TSan, 18/18 Core-only tests, Core coverage at
+  91% line and 80% branch, three libFuzzer smoke tests, Scope bridge tests,
+  browser self-tests, install, and source/installed consumers.
+- Solid v0.1.0 is complete. Stage 2 is limited to research and approval of its
+  first milestone; no Liquid implementation work is current.

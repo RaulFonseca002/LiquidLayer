@@ -1,10 +1,10 @@
 # Liquid Concepts and Architecture v0.3
 
-**Status:** Living baseline during Solid v0.1 finalization
+**Status:** Living baseline after Solid v0.1.0 completion
 **Scope:** Conceptual architecture, vocabulary, and accepted design direction  
 **Project:** Liquid Layer  
 **Engine / framework:** Liquid  
-**Current development stage:** Solid v0.1, S0-S7 finalization
+**Current development stage:** Stage 2 Liquid research and milestone definition
 **Date:** August 2026
 
 ---
@@ -25,8 +25,8 @@ The project is divided into three conceptual layers.
 |---|---|---|
 | **Liquid Layer** | Final application/research project focused on adaptive smart environments for neurodivergent people. | Future project layer |
 | **Liquid** | Standalone engine/framework/runtime used by Liquid Layer and by simulation/data-collection tools. | Engine repo |
-| **Solid** | First implementation stage of Liquid: deterministic ECS-inspired runtime. | M1-M6 and S0-S5 complete; S6 verification and S7 remain |
-| **Liquid stage** | Later implementation stage: adaptive/LLM layer that creates, modifies, and explains Solid blocks. | Future focus |
+| **Solid** | First implementation stage of Liquid: deterministic ECS-inspired runtime. | v0.1.0 complete through M1-M6 and S0-S7 |
+| **Liquid stage** | Later implementation stage: adaptive/LLM layer that creates, modifies, and explains Solid blocks. | Current research; first implementation milestone not yet approved |
 
 The internal code should not overuse metaphorical names. Folder and file names should describe responsibility: `vocabulary`, `core`, `runtime`, `events`, `behaviors`, `intents`, `systems`, and `adapters`.
 
@@ -373,7 +373,7 @@ Folder responsibility:
 - M5 Lua receives a narrow capability API: typed component name and value, host-fixed behavior owner and current time, and persistent or checked-duration lifetime. Scripts never receive `World`, coordinator/registry/storage objects, raw slots, component pointers, or owner selection.
 - Capability layouts cache only immutable host descriptions keyed by lifecycle-unique world and behavior access revisions. Every execution creates a fresh Lua state, fresh access tables, and copied component snapshots, so script mutations cannot retain or enlarge authority.
 - Writable capabilities expose only `propose(request)`. A script may buffer multiple requests for the same component, such as a temporary high-priority intent plus a persistent lower-priority fallback; access-table fields are never interpreted as authority.
-- Every Lua execution is protected by instruction, Lua-memory, buffered-host-value, string, table, source, diagnostic, and created-intent limits. Proposals commit only after successful execution; partial commit failure rolls back only the intents created by that execution, and errors do not escape `System::run`.
+- Every Lua execution is protected by instruction, Lua-memory, buffered-host-value, string, table, source, diagnostic, and created-intent limits. Lifecycle proposals and owner-scoped cancellations commit only after successful execution; any commit failure restores the exact pre-execution intent state, and errors do not escape `System::run`.
 - The script environment omits protected-call and coroutine facilities as well as dynamic loading, package, OS, I/O, debug, raw-table, and metatable authority. This prevents hook errors from being caught in an unbounded loop and keeps the capability table as the only effect boundary.
 - Lua host closures catch C++ exceptions at the C boundary and avoid Lua long jumps across live C++ RAII objects.
 - No C++ inheritance between components in v1.
@@ -634,17 +634,25 @@ light.propose({
 
 This represents a temporary high-priority state with a persistent lower-priority fallback. The normal immutable-intent resolver decides which intent wins.
 
-After successful script execution, the host closes the Lua state, then commits buffered proposals. Immediately before each commit it:
+After successful script execution, the host closes the Lua state, then commits
+the complete buffered cancellation/proposal bundle as one transaction. During
+that commit it:
 
 1. uses the host-fixed `BehaviorId`;
 2. resolves the host-bound component name to its current slot;
 3. verifies that the target still exists;
 4. verifies current write permission;
-5. creates a new immutable intent through `World`.
+5. creates each new immutable intent through `World` without permitting
+   structural topology mutation to reenter the transaction.
 
-If the script, instruction hook, allocator, codec, or callback fails, no buffered proposal is committed. If a later commit fails after earlier proposals from this execution were created, only those newly created intent IDs are destroyed in reverse order. Pre-existing intents remain untouched.
+If the script, instruction hook, allocator, codec, callback, or commit fails,
+the exact prior typed intent records, indexes, ordering sequences, and pool
+capacity are restored. There is no visible partial cancellation, replacement,
+or proposal bundle.
 
-Lua cannot inspect, modify, or delete an existing intent.
+Lua receives immutable snapshots only for the executing behavior's named
+intents. It cannot mutate them or supply a raw ID, but lifecycle scripts may
+cancel one of those opaque owner-scoped snapshots inside the same transaction.
 
 ### 13.7 Default execution limits
 

@@ -18,10 +18,10 @@ Buffered mode is explicitly weaker and is appropriate only for disposable simula
 
 Readers validate the header, CRCs, versions, bounds, and permanent logical sequence numbers while scanning. A sequence gap or corruption before the final batch is a hard error. Writable recovery may remove only an incomplete or corrupt final batch, return to the last valid byte, and append a durable recovery record.
 
-Do not copy a live file as a checkpoint and do not repair bytes manually. A checkpoint is a host-requested record containing the complete generic projection, pending command state, handle generations, and replay position.
+Do not copy a live file as a checkpoint and do not repair bytes manually. A checkpoint is a host-requested record containing the complete generic projection, pending command state and attempt progress, handle generations, and replay position. Every checkpoint, including one retained after earlier history, must match the canonical projection immediately before it.
 
 ## Retention
 
-Retention starts only at a verified checkpoint. Write the checkpoint and later batches to a replacement generation, validate the whole replacement, flush file and required directory metadata, then atomically replace the prior generation and record the pruned sequence range. Keep the original file when any stage fails.
+Retention starts only at a verified checkpoint. Write the checkpoint and later batches to a replacement generation, validate the whole replacement, flush file and required directory metadata, then atomically replace the prior generation and record the pruned sequence range. Keep the original bytes and generation when any stage fails. The memory store follows the same project-before-replace rule.
 
 Unknown file, batch, record, or canonical-value versions are rejected unless the format contract explicitly defines a skippable envelope. Use the golden binary fixtures and byte-level truncation/corruption tests before changing any encoder or decoder.

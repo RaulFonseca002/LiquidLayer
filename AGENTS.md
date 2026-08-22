@@ -18,7 +18,9 @@ Liquid is being developed in stages:
 2. **Liquid** — adaptive/LLM layer that generates or modifies solid behavior blocks.
 3. **Liquid Layer** — final neurodivergent-support application built on top of Liquid.
 
-Stage 1, **Solid**, is complete through M6. The current work is the S6/S7 Solid v0.1 finalization; Stage 2, **Liquid**, planning resumes only after S7 closes.
+Stage 1, **Solid**, is complete and released at v0.1.0, including the S0-S7
+framework finalization. Current work is limited to researching, debating, and
+approving the first Stage 2, **Liquid**, milestone.
 
 Superposition ECS reference lives at `/home/raul/Desktop/superposition`. Use it as a local design reference for component managers, coordinator-owned signatures, and template-driven component type lookup.
 
@@ -26,15 +28,28 @@ Superposition ECS reference lives at `/home/raul/Desktop/superposition`. Use it 
 
 ## Current Coding Milestone
 
-### Solid v0.1 Finalization
+### Stage 2 Liquid Research and Milestone Definition
 
-M1 through M6 complete the original deterministic decision core. The approved current work is the S0-S7 Solid finalization program in `COMPLETE_SOLID.md` and `DEVELOPMENT_TRACKING.md`, ending in a private reusable C++20 framework release at version 0.1.0.
+Solid v0.1.0 is complete. M1-M6 and S0-S7 provide the frozen deterministic
+foundation: lifecycle scripting, effects/feedback, durable replay, simulation,
+packaging, and the optional Solid Scope instrument.
 
-Current milestone: **complete S6 with Solid Lifecycle Scripting and the Full-Loop Scope Simulation on `main`**. The lifecycle core and Scope now live on the one `main` branch; Scope must exercise that one Runtime through script proposal, resolution, command dispatch, simulated feedback, and authoritative component projection. The remote CI matrix runs green on `main` (first full pass 2026-08-17); keeping it green is a standing gate.
+Current milestone: **define and obtain owner approval for the first Stage 2
+Liquid implementation milestone**. This is a research/design phase. Compare
+candidate adaptive/LLM boundaries against the frozen Solid contracts, make
+tradeoffs explicit, and record the approved smallest complete milestone in
+`DEVELOPMENT_TRACKING.md` before implementation begins.
 
-Codex may add only the files required by the approved ordered milestone and its regression evidence. All work belongs on a short-lived branch from `origin/main`. Solid Scope remains an optional Unix-only development application and must not introduce a second Runtime; its Python bridge regressions are Linux-verified in CI.
+Do not add Stage 2 source folders, dependencies, LLM integrations, prompts,
+adapters, or runtime behavior during this research phase. Documentation may be
+updated to record research decisions, but repository expansion waits for the
+owner-approved milestone. Solid v0.1 contracts must not be weakened to make an
+adaptive design easier.
 
-The approved finalization includes public API hardening, world-bound generational handles, bounded encoded values and codecs, transactional component replacement, durable records and replay, effects/commands/feedback, deterministic retry and reconciliation, simulation, packaging, and the accepted Solid Scope fixes. It does not include LLM integration, MQTT, voice, biosignals, real hardware, or final Liquid Layer behavior.
+All later implementation still belongs on a short-lived branch from current
+`origin/main`. Solid Scope remains an optional Unix-only owner-operated
+development application, is excluded from the installed package, and must
+never become a second Runtime.
 
 ---
 
@@ -205,7 +220,7 @@ Current planned ID model:
 - Access-table contents are data, not authority. Writable entries expose only `propose(request)`, and one execution may buffer multiple proposals for the same target before any intent is committed.
 - The host fixes the executing `BehaviorId` and current time. Lua may request only persistent lifetime or a checked duration in milliseconds.
 - Each execution has bounded instructions, Lua memory, buffered host values, strings, tables, source size, diagnostic size, and created-intent count.
-- A failed script returns an execution error and destroys only the intents created by that execution. Script errors must not escape `System::run` and fault the whole runtime.
+- A failed script returns an execution error and restores the exact pre-execution intent transaction state, including cancellations, replacements, indexes, sequences, and capacity. Script errors must not escape `System::run` and fault the whole runtime.
 - Lua C closures catch C++ exceptions before returning to Lua, and Lua error jumps must not cross live C++ RAII objects.
 - `Liquid_Concepts_and_Architecture.md`, section 13, is the canonical Lua script-authoring and future model-prompt contract. Generated scripts also require a trusted dynamic capability manifest; never infer codec schemas or permissions from snapshots alone.
 
@@ -224,23 +239,24 @@ Avoid:
 
 ## Current Success Criteria
 
-S1-S5 are complete. S6 is complete when:
+The Stage 2 research phase is complete when:
 
-1. The reviewed lifecycle and Scope work lands on `main` with the complete suite and remote CI matrix green.
-2. Trace schema v2 separates desire, command, attempt, result, retry, timeout, and observed-state evidence.
-3. The bridge enforces bounded parsing/validation and supervises the complete trace process group on Unix.
-4. Incremental rendering and batched catch-up remain responsive for 1,000-frame traces.
-5. The dependency-free browser self-test covers presentation paths, and the
-   owner manually verifies streaming, controls, malformed data,
-   reconnect/error states, and responsiveness. No Playwright or Node package
-   dependency is required for this internal development instrument.
-6. The full suite passes with one Runtime and no semantic divergence between Scope and the Solid core.
+1. The problem and smallest useful Liquid capability are stated without
+   assuming an LLM must sit inside the deterministic Runtime.
+2. Candidate designs are compared against Solid's authority, determinism,
+   replay, privacy, failure, and testability contracts.
+3. Open questions and rejected alternatives are explicit enough for the owner
+   to debate and decide.
+4. The owner approves one bounded first milestone, its evidence, and its
+   allowed files before any implementation begins.
+5. `DEVELOPMENT_TRACKING.md` and this file are updated to promote that
+   milestone; no speculative repository structure is added beforehand.
 
 ---
 
 ## What Not to Build Yet
 
-Do not add these during Solid v0.1 finalization:
+Do not add these until an approved Stage 2 milestone explicitly requires them:
 
 - LLM integration;
 - MQTT or real hardware adapters;

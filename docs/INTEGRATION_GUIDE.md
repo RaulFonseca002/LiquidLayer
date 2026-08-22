@@ -1,6 +1,7 @@
 # Integration Guide
 
-Status: v0.1.0 release-target guide. Packaging is complete only when the S5 and S7 evidence in the traceability matrix passes.
+Status: released v0.1.0 guide. The S5 and S7 package evidence is complete in
+the traceability matrix.
 
 ## Requirements
 
@@ -47,6 +48,10 @@ target_link_libraries(my_app PRIVATE Liquid::Core)
 ```
 
 Request `Lua` or `Simulation` only when needed. A Core-only consumer must configure and link without Lua. Unknown or unavailable required components make package discovery fail with a bounded diagnostic.
+
+The installed package exports exactly `Liquid::Core`, `Liquid::Lua`, and
+`Liquid::Simulation` when their components are built. Vendored Lua objects are
+folded into `Liquid::Lua`; no private vendor target is exported.
 
 ## Compatibility and ownership
 
