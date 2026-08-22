@@ -6,7 +6,7 @@ Each optional component has its own export file so a Core-only consumer does not
 
 - `LiquidCoreTargets.cmake` exports `Liquid::Core`;
 - `LiquidLuaTargets.cmake` exports `Liquid::Lua` and depends on `Liquid::Core`;
-- `LiquidSimulationTargets.cmake` exports `Liquid::Simulation` and depends on `Liquid::Core`.
+- `LiquidSimulationTargets.cmake` exports `Liquid::Simulation` and depends on both `Liquid::Core` and `Liquid::Lua`.
 
 All installed target include paths use relocatable `INSTALL_INTERFACE`
 locations. The package config treats Core as mandatory, rejects unknown

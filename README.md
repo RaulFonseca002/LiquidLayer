@@ -12,7 +12,7 @@
 ![Liquid runtime flow: intent proposals are resolved, dispatched through bounded adapters, and committed only after validated feedback.](docs/liquid-runtime-flow.svg)
 
 > [!IMPORTANT]
-> **Current status:** the Solid v0.1.0 headless implementation is complete through S5. Solid Scope synchronization and remote S7 release gates remain, so this repository is **not yet a release declaration**.
+> **Current status:** Solid v0.1.0 finalization stages S0-S5 are complete. The S6 lifecycle implementation and Solid Scope v2 now live on `main`, but S6 remains pending the owner's recorded manual browser verification and S7 remains the final audit/release-candidate gate. This repository is **not yet a release declaration**.
 
 | Deterministic core | Evidence-first effects | Portable package |
 | --- | --- | --- |

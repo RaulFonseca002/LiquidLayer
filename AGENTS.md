@@ -18,7 +18,7 @@ Liquid is being developed in stages:
 2. **Liquid** — adaptive/LLM layer that generates or modifies solid behavior blocks.
 3. **Liquid Layer** — final neurodivergent-support application built on top of Liquid.
 
-Stage 1, **Solid**, is complete through M6. The current work is limited to defining and approving the first Stage 2, **Liquid**, milestone.
+Stage 1, **Solid**, is complete through M6. The current work is the S6/S7 Solid v0.1 finalization; Stage 2, **Liquid**, planning resumes only after S7 closes.
 
 Superposition ECS reference lives at `/home/raul/Desktop/superposition`. Use it as a local design reference for component managers, coordinator-owned signatures, and template-driven component type lookup.
 
@@ -43,7 +43,7 @@ The approved finalization includes public API hardening, world-bound generationa
 This project uses one GitHub repository, `RaulFonseca002/tcc`, with one long-lived branch.
 
 - `main` is the single development branch. It carries the Solid engine and the development instruments (Solid Scope, trace tooling, test applications) in one tree.
-- Engine/tool separation is enforced at the CMake packaging boundary, not by branches: installed consumers receive only the `Liquid::Core`, `Liquid::Lua`, and `Liquid::Simulation` targets; `apps/`, the visualizer, and their tests are never installed or exported.
+- Engine/tool separation is enforced at the CMake packaging boundary, not by branches: installed consumers receive only the `Liquid::Core`, `Liquid::Lua`, and `Liquid::Simulation` targets and their public package files; Solid Scope, app executables, and their tests are never installed or exported.
 - `experiment/stage2` is retired. It was the former visualization track and was fast-forwarded into `main` at its final commit; do not develop on it.
 - Never force-push or rebase `main` after it has been published.
 

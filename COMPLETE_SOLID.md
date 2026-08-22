@@ -180,14 +180,13 @@ The first two experiment findings are resource/safety defects and should precede
 
 ## Documentation and Operational Polish
 
-The repository documentation contains historical snapshots that are useful but no longer read as historical:
+The initial audit found useful historical snapshots that read as current. Those documentation findings are now closed:
 
-- `CURRENT_STATE_EVALUATION.md` still says M6 is current, reports 12/12 tests, and contains pre-M6 line references. Add a prominent superseded/historical banner pointing here rather than rewriting its dated evidence.
-- `M6_TEST_BASE.md` still says it is under final owner acceptance even though M6 is done.
-- `Liquid_Concepts_and_Architecture.md` says M1-M5 complete and M6 current; it also calls a speculative broad folder tree “current intended” and lists some already-settled decisions as open.
-- `DEVELOPMENT_TRACKING.md` and `AGENTS.md` call Stage 1 complete and Stage 2 planning current, which conflicts with the completion definition in this audit.
-- the minimal repository trees in operational documents omit the current app scenario, trace, visualizer, and focused tests or fail to label themselves as the headless baseline.
-- `ARTICLE_NOTES.md` stops its implemented-stage narrative around early Solid work; it should be labeled historical or extended through M6.
+- `CURRENT_STATE_EVALUATION.md` and `M6_TEST_BASE.md` retain their dated evidence behind prominent historical banners.
+- `Liquid_Concepts_and_Architecture.md` reflects M1-M6 and the S6 lifecycle/effect loop, and labels its broad folder tree as conceptual rather than current inventory.
+- `DEVELOPMENT_TRACKING.md` and `AGENTS.md` agree that S6/S7 finalization precedes Stage 2 planning.
+- operational repository maps include the current scenario, trace, visualizer, and focused regression surfaces at the appropriate directory level.
+- `ARTICLE_NOTES.md` is explicitly labeled as historical research notes rather than implementation guidance.
 
 Documentation authority after owner approval should be:
 

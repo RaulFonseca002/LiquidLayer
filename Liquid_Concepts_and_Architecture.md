@@ -25,7 +25,7 @@ The project is divided into three conceptual layers.
 |---|---|---|
 | **Liquid Layer** | Final application/research project focused on adaptive smart environments for neurodivergent people. | Future project layer |
 | **Liquid** | Standalone engine/framework/runtime used by Liquid Layer and by simulation/data-collection tools. | Engine repo |
-| **Solid** | First implementation stage of Liquid: deterministic ECS-inspired runtime. | M1-M5 complete; M6 current |
+| **Solid** | First implementation stage of Liquid: deterministic ECS-inspired runtime. | M1-M6 and S0-S5 complete; S6 verification and S7 remain |
 | **Liquid stage** | Later implementation stage: adaptive/LLM layer that creates, modifies, and explains Solid blocks. | Future focus |
 
 The internal code should not overuse metaphorical names. Folder and file names should describe responsibility: `vocabulary`, `core`, `runtime`, `events`, `behaviors`, `intents`, `systems`, and `adapters`.
@@ -155,7 +155,7 @@ Behaviors do not own components exclusively. Multiple behaviors may have read/wr
 
 A system is logic that processes matching component sets during a frame. Systems are responsible for updating lifetimes, resolving intents, advancing behavior runs, applying events, cleanup, and producing effects.
 
-For example, a future script system would process behaviors with script-related components and create intents from those behavior owners.
+The implemented Lua lifecycle system processes behaviors with `LuaBehaviorScript` components and creates or cancels intents for those behavior owners through transactional callback bundles.
 
 ### Intent
 
@@ -181,7 +181,7 @@ Normal code should use factories/bundles to create valid intent records and avoi
 
 ### Resolved Effect
 
-A resolved effect is the future result of applying a selected intent. Current M3 resolution returns `ComponentName -> IntentId`; later runtime/application work will turn selected handles into component changes or adapter-facing effects.
+A resolved effect is the typed result of applying a selected intent to its registered component codec and control policy. The current runtime turns selected encoded values into evidence-only selections, transactional internal-state changes, or adapter-facing external effects. External component state changes only after an authoritative report or revisioned observation.
 
 ### Command / Adapter Action
 
@@ -189,7 +189,7 @@ A command is the adapter-facing operation produced from a resolved effect. The a
 
 ### Frame
 
-A frame is one deterministic execution step of the runtime. In the current Solid core, `Runtime` begins the frame, expires old intents, runs systems, resolves explicit intent requests, records completion, and advances the frame number. Future input, event, effect, and adapter phases must be added around this fixed ownership boundary rather than bypassing it.
+A frame is one deterministic execution step of the runtime. The current Solid core applies queued feedback, begins the frame, expires old intents, runs Input, Behavior, and Decision systems in order, resolves every live intent target, derives and dispatches effects, records completion, and advances the frame number. These phases remain owned by the one `Runtime`; applications and tools do not reproduce the loop.
 
 ---
 
@@ -263,13 +263,13 @@ Intent record:
   merge/conflict policy
 ```
 
-The scheduler/runtime should not need to know every intent policy detail. `IntentRegistry` owns resolution-time cleanup and selected-handle resolution; later runtime work applies accepted selections deterministically.
+The scheduler/runtime does not need to know every intent policy detail. `IntentRegistry` owns resolution-time cleanup and selected-handle resolution; `Runtime` consumes those selections and deterministically applies their component control or derives external effects.
 
 ---
 
 ## 11. Repository and Folder Direction
 
-Current intended engine repo:
+Conceptual long-term engine layout (not the current repository inventory):
 
 ```text
 liquid/
@@ -364,8 +364,8 @@ Folder responsibility:
 - Intent owner pools are aligned with behavior creation/destruction through `World`.
 - World-created component intents require write access and are cleaned up when their target slot or owner write access becomes invalid.
 - The completed M1 test suite uses assert binaries, deterministic stress coverage, and an opt-in AddressSanitizer/UBSan CMake mode.
-- Intent resolution should be target-oriented; current M3 resolves one component type from `ComponentName -> ComponentSlotId` into `ComponentName -> IntentId`.
-- A selected intent handle later becomes a resolved effect, then an adapter command/action.
+- Intent resolution is target-oriented: the runtime resolves every live component target from `ComponentName -> ComponentSlotId` into `ComponentName -> IntentId` selections.
+- A selected intent handle is decoded through its component codec and control policy, then becomes evidence, an internal component commit, or a resolved effect and adapter command.
 - Completed M2 intent lifetime is persistent or until-time; future factories/bundles should create valid intent records without missing required metadata.
 - `IntentTime` means monotonic milliseconds since the runtime session began. It is not epoch or wall-clock time.
 - Component pointers and references are borrowed views valid only until the next structural mutation of that typed storage; they are never retained across frames or exposed to Lua.
