@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 #include <functional>
+#include <memory>
 #include <thread>
 
 namespace liquid {
@@ -62,6 +63,7 @@ private:
     std::vector<liquid::TopologyMutation> topologyMutations;
     std::vector<liquid::ScriptExecutionEvidence> scriptExecutions;
     bool scriptEvidenceEnabled = false;
+    bool intentTransactionActive = false;
     std::thread::id ownerThread;
 
     void ensure_structural_mutation_allowed() const;
@@ -70,6 +72,27 @@ private:
     void record_component_mutation(ComponentMutation mutation);
     void enable_script_evidence();
     void record_script_execution(ScriptExecutionEvidence evidence);
+    std::unique_ptr<detail::IntentRegistry::Transaction> begin_intent_transaction(
+        std::size_t cancellationCount);
+    void cancel_intent_transaction(
+        detail::IntentRegistry::Transaction& transaction,
+        IntentId id
+    );
+    void commit_intent_transaction(
+        detail::IntentRegistry::Transaction& transaction);
+    void rollback_intent_transaction(
+        detail::IntentRegistry::Transaction& transaction) noexcept;
+    template <typename Component>
+    IntentId create_intent_transaction(
+        detail::IntentRegistry::Transaction& transaction,
+        BehaviorId owner,
+        ComponentType<Component> type,
+        ComponentSlotId slot,
+        IntentLifetime lifetime,
+        Component value,
+        IntentPriority priority,
+        IntentName name
+    );
     bool resolution_request_is_current(
         ComponentTypeId type,
         const std::map<ComponentName, ComponentSlotId>& components
@@ -637,6 +660,23 @@ IntentId World::create_intent(
 ) {
     return coordinator.create_intent(
         owner, type, slot, lifetime, std::move(value), priority, std::move(name));
+}
+
+template <typename Component>
+IntentId World::create_intent_transaction(
+    detail::IntentRegistry::Transaction& transaction,
+    BehaviorId owner,
+    ComponentType<Component> type,
+    ComponentSlotId slot,
+    IntentLifetime lifetime,
+    Component value,
+    IntentPriority priority,
+    IntentName name
+) {
+    ensure_owner_thread();
+    return coordinator.create_intent(
+        transaction, owner, type, slot, lifetime, std::move(value), priority,
+        std::move(name));
 }
 
 template <typename Component>

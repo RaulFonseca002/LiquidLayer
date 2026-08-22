@@ -19,6 +19,101 @@ IntentRegistry::IntentRegistry(WorldInstanceId world)
     availableSlots.reserve(MaxIntents);
 }
 
+void IntentRegistry::ensure_no_active_transaction() const {
+    if (transactionActive)
+        throw std::logic_error(
+            "ordinary intent mutation is forbidden during a transaction");
+}
+
+IntentRegistry::Transaction::Transaction(
+    IntentRegistry& owner,
+    std::size_t cancellationCount
+)
+    : registry(&owner),
+      storages(owner.storages),
+      intentTypes(owner.intentTypes),
+      availableSlots(owner.availableSlots),
+      generations(owner.generations),
+      nextSlot(owner.nextSlot),
+      lastSequence(owner.lastSequence),
+      lifecycleRecordCount(owner.lifecycleRecords.size()),
+      byOwner(owner.byOwner),
+      byOwnerName(owner.byOwnerName),
+      byTarget(owner.byTarget) {
+    cancelled.reserve(cancellationCount);
+}
+
+IntentRegistry::Transaction::~Transaction() {
+    if (active)
+        registry->rollback(*this);
+}
+
+std::unique_ptr<IntentRegistry::Transaction> IntentRegistry::begin_transaction(
+    std::size_t cancellationCount
+) {
+    if (transactionActive)
+        throw std::logic_error("intent transaction is already active");
+    auto transaction = std::unique_ptr<Transaction>(
+        new Transaction(*this, cancellationCount));
+    transactionActive = true;
+    return transaction;
+}
+
+void IntentRegistry::cancel(Transaction& transaction, IntentId id) {
+    if (transaction.registry != this || !transaction.active || !transactionActive)
+        throw std::logic_error("intent transaction is not active");
+
+    Intent removed = intent(id);
+    const ComponentTypeId type = intentTypes.at(id);
+    constexpr std::size_t maximumBufferedLifecycleRecords = 1'000'000;
+    if (lifecycleRecords.size() >= maximumBufferedLifecycleRecords)
+        throw std::length_error("intent lifecycle evidence capacity exceeded");
+    lifecycleRecords.push_back({false, removed});
+
+    std::shared_ptr<I_IntentStorage> storage = storages.at(type);
+    std::unique_ptr<I_IntentStorage::Node> node = storage->extract(id);
+    transaction.cancelled.push_back({std::move(storage), std::move(node)});
+    erase_from_indexes(removed);
+    intentTypes.erase(id);
+    retire_intent_id(id);
+}
+
+void IntentRegistry::commit(Transaction& transaction) {
+    if (transaction.registry != this || !transaction.active || !transactionActive)
+        throw std::logic_error("intent transaction is not active");
+    transaction.active = false;
+    transactionActive = false;
+    transaction.cancelled.clear();
+}
+
+void IntentRegistry::rollback(Transaction& transaction) noexcept {
+    if (transaction.registry != this || !transaction.active || !transactionActive)
+        std::terminate();
+
+    for (const auto& [id, type] : intentTypes) {
+        if (!transaction.intentTypes.contains(id))
+            storages.at(type)->destroy(id);
+    }
+    for (auto& cancelled : transaction.cancelled)
+        cancelled.storage->restore(std::move(cancelled.node));
+
+    storages.swap(transaction.storages);
+    intentTypes.swap(transaction.intentTypes);
+    availableSlots.swap(transaction.availableSlots);
+    generations.swap(transaction.generations);
+    byOwner.swap(transaction.byOwner);
+    byOwnerName.swap(transaction.byOwnerName);
+    byTarget.swap(transaction.byTarget);
+    nextSlot = transaction.nextSlot;
+    lastSequence = transaction.lastSequence;
+    lifecycleRecords.erase(
+        lifecycleRecords.begin() +
+            static_cast<std::ptrdiff_t>(transaction.lifecycleRecordCount),
+        lifecycleRecords.end());
+    transaction.active = false;
+    transactionActive = false;
+}
+
 void IntentRegistry::validate_metadata(IntentLifetime lifetime, IntentPriority priority) {
     if (lifetime.kind != IntentLifetimeKind::Persistent &&
         lifetime.kind != IntentLifetimeKind::UntilTime) {
@@ -118,6 +213,7 @@ void IntentRegistry::erase_from_indexes(const Intent& intent) {
 }
 
 void IntentRegistry::destroy(IntentId id) {
+    ensure_no_active_transaction();
     Intent removed = intent(id);
     ComponentTypeId type = intentTypes.at(id);
 
@@ -136,10 +232,12 @@ const std::vector<IntentLifecycleRecord>& IntentRegistry::lifecycle_records() co
 }
 
 void IntentRegistry::clear_lifecycle_records() {
+    ensure_no_active_transaction();
     lifecycleRecords.clear();
 }
 
 void IntentRegistry::destroy_owned_by(BehaviorId owner) {
+    ensure_no_active_transaction();
     auto found = byOwner.find(owner);
 
     if (found == byOwner.end())
@@ -271,6 +369,7 @@ std::map<ComponentName, IntentId> IntentRegistry::resolve(
     const std::map<ComponentName, ComponentSlotId>& components,
     IntentTime now
 ) {
+    ensure_no_active_transaction();
     std::vector<IntentId> expired;
 
     for (IntentId id : live_intent_ids()) {

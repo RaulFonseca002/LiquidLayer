@@ -108,7 +108,10 @@ private:
         virtual ~PendingIntent() = default;
         virtual const IntentName& intent_name() const = 0;
         virtual void validate(World& world, BehaviorId owner) const = 0;
-        virtual IntentId commit(World& world, BehaviorId owner) = 0;
+        virtual IntentId commit(
+            World& world,
+            BehaviorId owner,
+            detail::IntentRegistry::Transaction& transaction) = 0;
     };
 
     template <typename Component>
@@ -148,14 +151,19 @@ private:
                 throw std::runtime_error("component write access denied");
         }
 
-        IntentId commit(World& world, BehaviorId owner) override {
+        IntentId commit(
+            World& world,
+            BehaviorId owner,
+            detail::IntentRegistry::Transaction& transaction
+        ) override {
             std::map<ComponentName, ComponentSlotId> components = world.get_components(type, owner);
             auto target = components.find(name);
 
             if (target == components.end() || !world.can_write_component(type, owner, name))
                 throw std::runtime_error("component write access denied");
 
-            return world.create_intent(
+            return world.create_intent_transaction(
+                transaction,
                 owner,
                 type,
                 target->second,

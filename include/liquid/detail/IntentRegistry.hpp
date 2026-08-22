@@ -3,6 +3,7 @@
 #include "liquid/Intent.hpp"
 
 #include <cstddef>
+#include <exception>
 #include <map>
 #include <memory>
 #include <optional>
@@ -20,17 +21,31 @@ struct IntentLifecycleRecord {
 
 class I_IntentStorage {
 public:
+    class Node {
+    public:
+        virtual ~Node() = default;
+    };
+
     virtual ~I_IntentStorage() = default;
 
     virtual void destroy(IntentId id) = 0;
     virtual bool exists(IntentId id) const = 0;
     virtual const Intent& intent(IntentId id) const = 0;
+    virtual std::unique_ptr<Node> extract(IntentId id) = 0;
+    virtual void restore(std::unique_ptr<Node> node) noexcept = 0;
 };
 
 template <typename Component>
 class IntentStorage : public I_IntentStorage {
 private:
-    std::map<IntentId, ComponentIntent<Component>> records;
+    using RecordMap = std::map<IntentId, ComponentIntent<Component>>;
+
+    class ExtractedNode final : public I_IntentStorage::Node {
+    public:
+        typename RecordMap::node_type record;
+    };
+
+    RecordMap records;
 
 public:
     void add(ComponentIntent<Component>&& intent) {
@@ -58,6 +73,23 @@ public:
         return found->second;
     }
 
+    std::unique_ptr<I_IntentStorage::Node> extract(IntentId id) override {
+        auto extracted = std::make_unique<ExtractedNode>();
+        extracted->record = records.extract(id);
+        if (extracted->record.empty())
+            throw std::runtime_error("intent id not found");
+        return extracted;
+    }
+
+    void restore(std::unique_ptr<I_IntentStorage::Node> node) noexcept override {
+        auto* extracted = dynamic_cast<ExtractedNode*>(node.get());
+        if (extracted == nullptr || extracted->record.empty())
+            std::terminate();
+        auto inserted = records.insert(std::move(extracted->record));
+        if (!inserted.inserted)
+            std::terminate();
+    }
+
     const ComponentIntent<Component>& typed_intent(IntentId id) const {
         auto found = records.find(id);
 
@@ -82,7 +114,9 @@ private:
     std::map<BehaviorId, std::set<IntentId>> byOwner;
     std::map<BehaviorId, std::map<IntentName, IntentId>> byOwnerName;
     IntentTargetIndex byTarget;
+    bool transactionActive = false;
 
+    void ensure_no_active_transaction() const;
     IntentId next_intent_id();
     liquid::IntentSequence next_intent_sequence();
     void release_intent_id(IntentId id);
@@ -97,15 +131,76 @@ private:
     template <typename Component>
     std::shared_ptr<const IntentStorage<Component>> storage_for(ComponentType<Component> type) const;
 
+    template <typename Component>
+    IntentId create_impl(
+        BehaviorId owner,
+        ComponentType<Component> type,
+        ComponentSlotId slot,
+        IntentLifetime lifetime,
+        Component value,
+        IntentPriority priority,
+        liquid::Value encodedValue,
+        IntentName name
+    );
+
 public:
+    class Transaction {
+        friend class IntentRegistry;
+
+        struct CancelledIntent {
+            std::shared_ptr<I_IntentStorage> storage;
+            std::unique_ptr<I_IntentStorage::Node> node;
+        };
+
+        IntentRegistry* registry;
+        std::map<ComponentTypeId, std::shared_ptr<I_IntentStorage>> storages;
+        std::map<IntentId, ComponentTypeId> intentTypes;
+        std::vector<std::uint32_t> availableSlots;
+        std::vector<std::uint32_t> generations;
+        std::uint32_t nextSlot;
+        liquid::IntentSequence lastSequence;
+        std::size_t lifecycleRecordCount;
+        std::map<BehaviorId, std::set<IntentId>> byOwner;
+        std::map<BehaviorId, std::map<IntentName, IntentId>> byOwnerName;
+        IntentTargetIndex byTarget;
+        std::vector<CancelledIntent> cancelled;
+        bool active = true;
+
+        Transaction(IntentRegistry& owner, std::size_t cancellationCount);
+
+    public:
+        ~Transaction();
+        Transaction(const Transaction&) = delete;
+        Transaction& operator=(const Transaction&) = delete;
+    };
+
     explicit IntentRegistry(WorldInstanceId world = 0);
     IntentRegistry(const IntentRegistry&) = delete;
     IntentRegistry& operator=(const IntentRegistry&) = delete;
     IntentRegistry(IntentRegistry&&) = delete;
     IntentRegistry& operator=(IntentRegistry&&) = delete;
 
+    std::unique_ptr<Transaction> begin_transaction(
+        std::size_t cancellationCount);
+    void cancel(Transaction& transaction, IntentId id);
+    void commit(Transaction& transaction);
+    void rollback(Transaction& transaction) noexcept;
+
     template <typename Component>
     IntentId create(
+        BehaviorId owner,
+        ComponentType<Component> type,
+        ComponentSlotId slot,
+        IntentLifetime lifetime,
+        Component value,
+        IntentPriority priority = IntentPriority::Medium,
+        liquid::Value encodedValue = liquid::Value{},
+        IntentName name = {}
+    );
+
+    template <typename Component>
+    IntentId create(
+        Transaction& transaction,
         BehaviorId owner,
         ComponentType<Component> type,
         ComponentSlotId slot,
@@ -182,6 +277,33 @@ std::shared_ptr<const IntentStorage<Component>> IntentRegistry::storage_for(Comp
 
 template <typename Component>
 IntentId IntentRegistry::create(BehaviorId owner, ComponentType<Component> type, ComponentSlotId slot, IntentLifetime lifetime, Component value, IntentPriority priority, liquid::Value encodedValue, IntentName name) {
+    ensure_no_active_transaction();
+    return create_impl(
+        owner, type, slot, lifetime, std::move(value), priority,
+        std::move(encodedValue), std::move(name));
+}
+
+template <typename Component>
+IntentId IntentRegistry::create(
+    Transaction& transaction,
+    BehaviorId owner,
+    ComponentType<Component> type,
+    ComponentSlotId slot,
+    IntentLifetime lifetime,
+    Component value,
+    IntentPriority priority,
+    liquid::Value encodedValue,
+    IntentName name
+) {
+    if (transaction.registry != this || !transaction.active || !transactionActive)
+        throw std::logic_error("intent transaction is not active");
+    return create_impl(
+        owner, type, slot, lifetime, std::move(value), priority,
+        std::move(encodedValue), std::move(name));
+}
+
+template <typename Component>
+IntentId IntentRegistry::create_impl(BehaviorId owner, ComponentType<Component> type, ComponentSlotId slot, IntentLifetime lifetime, Component value, IntentPriority priority, liquid::Value encodedValue, IntentName name) {
     if (!byOwner.contains(owner))
         throw std::runtime_error("behavior intent pool not found");
 
