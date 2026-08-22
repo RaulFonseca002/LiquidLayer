@@ -1,7 +1,5 @@
 #include "liquid/Runtime.hpp"
 #include "RuntimeInternals.hpp"
-#include "liquid/events/MemoryEventStore.hpp"
-#include "liquid/events/Replay.hpp"
 
 #include <chrono>
 #include <algorithm>
@@ -203,10 +201,10 @@ liquid::FrameResult Runtime::run_frame(liquid::FrameInput input) {
                     liquid::detail::event_payload({
                         {"key", liquid::Value{
                             std::to_string(type) + ":" + name}},
-                        {"value", liquid::Value{effectsState->session.value}},
+                        {"value", liquid::Value{effectsState->session_id().value}},
                         {"type", liquid::Value{static_cast<std::uint64_t>(type)}},
                         {"name", liquid::Value{name}},
-                        {"intent_world", liquid::Value{effectsState->session.value}},
+                        {"intent_world", liquid::Value{effectsState->session_id().value}},
                         {"intent_slot", liquid::Value{
                             static_cast<std::uint64_t>(id.slot)}},
                         {"intent_generation", liquid::Value{
@@ -229,7 +227,7 @@ liquid::FrameResult Runtime::run_frame(liquid::FrameInput input) {
                 {"frame", liquid::Value{result.frame.frame}},
                 {"now", liquid::Value{input.now}}
             }));
-        effectsState->store->flush();
+        effectsState->flush();
     } catch (...) {
         const std::exception_ptr failure = std::current_exception();
         faultedState = true;
@@ -267,7 +265,7 @@ liquid::FrameResult Runtime::run_frame(liquid::FrameInput input) {
                     {"systems_run", liquid::Value{
                         static_cast<std::uint64_t>(result.frame.systems_run)}}
                 }));
-            effectsState->store->flush();
+            effectsState->flush();
         } catch (...) {
         }
         frameInProgress = false;
@@ -290,7 +288,7 @@ liquid::FeedbackSender Runtime::feedback_sender() const {
     ensure_owner_thread();
     if (!effectsState)
         throw std::logic_error("runtime effects were not configured");
-    return effectsState->feedback.sender;
+    return effectsState->feedback_sender();
 }
 
 std::optional<liquid::Value> Runtime::observed_state(
@@ -300,11 +298,7 @@ std::optional<liquid::Value> Runtime::observed_state(
     ensure_owner_thread();
     if (!effectsState)
         throw std::logic_error("runtime effects were not configured");
-    const auto found = effectsState->observed.find(
-        liquid::detail::target_key(route, target));
-    if (found == effectsState->observed.end())
-        return std::nullopt;
-    return found->second;
+    return effectsState->observed_state(route, target);
 }
 
 std::optional<liquid::CommandStatus> Runtime::command_status(
@@ -313,10 +307,7 @@ std::optional<liquid::CommandStatus> Runtime::command_status(
     ensure_owner_thread();
     if (!effectsState)
         throw std::logic_error("runtime effects were not configured");
-    const auto found = effectsState->commands.find(commandId.value);
-    if (found == effectsState->commands.end())
-        return std::nullopt;
-    return found->second.status;
+    return effectsState->command_status(commandId);
 }
 
 void Runtime::reconcile_indeterminate(
@@ -327,51 +318,8 @@ void Runtime::reconcile_indeterminate(
     ensure_owner_thread();
     if (!effectsState)
         throw std::logic_error("runtime effects were not configured");
-    observedValue.validate();
-    const auto key = liquid::detail::target_key(route, target);
-    const auto latest = effectsState->latestByTarget.find(key);
-    if (latest == effectsState->latestByTarget.end() ||
-        effectsState->commands.at(latest->second).status !=
-            liquid::CommandStatus::Indeterminate) {
-        throw std::logic_error("target has no indeterminate command to reconcile");
-    }
-
-    auto& state = effectsState->commands.at(latest->second);
-    const liquid::CommandStatus reconciledStatus =
-        state.command.effect.desiredValue == observedValue
-        ? liquid::CommandStatus::Applied
-        : liquid::CommandStatus::Failed;
-    const liquid::Value reconciledObserved = observedValue;
-    std::uint64_t revisionValue = state.command.commandId.value;
-    const auto priorRevision = effectsState->observedRevisions.find(key);
-    if (priorRevision != effectsState->observedRevisions.end()) {
-        if (priorRevision->second.value == std::numeric_limits<std::uint64_t>::max())
-            throw std::overflow_error("state revision exhausted");
-        revisionValue = priorRevision->second.value + 1;
-    }
-    const liquid::StateRevision revision{revisionValue};
-    liquid::EffectReport terminalReport{
-        effectsState->session,
-        state.command.commandId,
-        route,
-        target,
-        reconciledStatus,
-        reconciledStatus == liquid::CommandStatus::Applied
-            ? std::optional<liquid::Value>{observedValue}
-            : std::nullopt,
-        "host reconciliation",
-        state.command.issuedAtMs,
-        revision
-    };
-    effectsState->transition(state, reconciledStatus, "host reconciliation");
-    effectsState->commit_authoritative(
-        route,
-        target,
-        reconciledObserved,
-        revision,
-        state.command.commandId.value);
-    state.terminalReport = std::move(terminalReport);
-    effectsState->store->flush();
+    effectsState->reconcile_indeterminate(
+        route, target, std::move(observedValue));
 }
 
 RecordId Runtime::checkpoint() {
@@ -381,14 +329,7 @@ RecordId Runtime::checkpoint() {
     if (frameInProgress)
         throw std::logic_error("runtime checkpoint is unavailable during a frame");
     record_world_evidence();
-    ReplayProjector projector;
-    const auto records = effectsState->store->read_all();
-    const SerializedWorldState state = projector.project(
-        effectsState->store->metadata(), records);
-    const RecordId checkpointId = effectsState->store->checkpoint(
-        projector.checkpoint_payload(state), Durability::Durable);
-    effectsState->store->flush();
-    return checkpointId;
+    return effectsState->checkpoint();
 }
 
 const FrameLog& Runtime::last_frame_log() const {

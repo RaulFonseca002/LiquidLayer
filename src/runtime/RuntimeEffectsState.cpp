@@ -1,4 +1,5 @@
 #include "RuntimeInternals.hpp"
+#include "liquid/events/Replay.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -62,6 +63,98 @@ RuntimeEffectsState::RuntimeEffectsState(RuntimeOptions options)
     } else {
         restore(existing);
     }
+}
+
+SessionId RuntimeEffectsState::session_id() const {
+    return session;
+}
+
+FeedbackSender RuntimeEffectsState::feedback_sender() const {
+    return feedback.sender;
+}
+
+std::optional<Value> RuntimeEffectsState::observed_state(
+    const AdapterRoute& route,
+    const EffectTarget& target
+) const {
+    const auto found = observed.find(target_key(route, target));
+    if (found == observed.end())
+        return std::nullopt;
+    return found->second;
+}
+
+std::optional<CommandStatus> RuntimeEffectsState::command_status(
+    CommandId commandId
+) const {
+    const auto found = commands.find(commandId.value);
+    if (found == commands.end())
+        return std::nullopt;
+    return found->second.status;
+}
+
+void RuntimeEffectsState::reconcile_indeterminate(
+    const AdapterRoute& route,
+    const EffectTarget& target,
+    Value observedValue
+) {
+    observedValue.validate();
+    const auto key = target_key(route, target);
+    const auto latest = latestByTarget.find(key);
+    if (latest == latestByTarget.end() ||
+        commands.at(latest->second).status != CommandStatus::Indeterminate) {
+        throw std::logic_error("target has no indeterminate command to reconcile");
+    }
+
+    auto& state = commands.at(latest->second);
+    const CommandStatus reconciledStatus =
+        state.command.effect.desiredValue == observedValue
+        ? CommandStatus::Applied
+        : CommandStatus::Failed;
+    const Value reconciledObserved = observedValue;
+    std::uint64_t revisionValue = state.command.commandId.value;
+    const auto priorRevision = observedRevisions.find(key);
+    if (priorRevision != observedRevisions.end()) {
+        if (priorRevision->second.value == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("state revision exhausted");
+        revisionValue = priorRevision->second.value + 1;
+    }
+    const StateRevision revision{revisionValue};
+    EffectReport terminalReport{
+        session,
+        state.command.commandId,
+        route,
+        target,
+        reconciledStatus,
+        reconciledStatus == CommandStatus::Applied
+            ? std::optional<Value>{observedValue}
+            : std::nullopt,
+        "host reconciliation",
+        state.command.issuedAtMs,
+        revision
+    };
+    transition(state, reconciledStatus, "host reconciliation");
+    commit_authoritative(
+        route,
+        target,
+        reconciledObserved,
+        revision,
+        state.command.commandId.value);
+    state.terminalReport = std::move(terminalReport);
+    flush();
+}
+
+RecordId RuntimeEffectsState::checkpoint() {
+    ReplayProjector projector;
+    const auto records = store->read_all();
+    const SerializedWorldState state = projector.project(store->metadata(), records);
+    const RecordId checkpointId = store->checkpoint(
+        projector.checkpoint_payload(state), Durability::Durable);
+    flush();
+    return checkpointId;
+}
+
+void RuntimeEffectsState::flush() {
+    store->flush();
 }
 
 void RuntimeEffectsState::prune_terminal_history(bool reserveCommandSlot) {

@@ -51,7 +51,7 @@ namespace liquid {
 void Runtime::record_world_evidence() {
     for (const auto& topology : ownedWorld.topology_mutations()) {
         auto [key, value] = liquid::detail::serialized_topology(
-            topology, ownedWorld.instance_id(), effectsState->session);
+            topology, ownedWorld.instance_id(), effectsState->session_id());
         effectsState->append(liquid::EventType::TopologyChanged,
             liquid::detail::event_payload({
                 {"key", liquid::Value{std::move(key)}},
@@ -71,7 +71,7 @@ void Runtime::record_world_evidence() {
                 {"value", mutation.after},
                 {"type", liquid::Value{
                     static_cast<std::uint64_t>(mutation.target.type)}},
-                {"slot_world", liquid::Value{effectsState->session.value}},
+                {"slot_world", liquid::Value{effectsState->session_id().value}},
                 {"slot", liquid::Value{
                     static_cast<std::uint64_t>(mutation.target.slot.slot)}},
                 {"generation", liquid::Value{
@@ -86,14 +86,14 @@ void Runtime::record_world_evidence() {
     for (const auto& lifecycle : ownedWorld.intent_lifecycle_records()) {
         const auto& intent = lifecycle.intent;
         const std::string key = "intent:" +
-            std::to_string(effectsState->session.value) + ":" +
+            std::to_string(effectsState->session_id().value) + ":" +
             std::to_string(intent.id.slot) + ":" +
             std::to_string(intent.id.generation);
         if (!lifecycle.created) {
             effectsState->append(liquid::EventType::IntentDestroyed,
                 liquid::detail::event_payload({
                     {"key", liquid::Value{key}},
-                    {"intent_world", liquid::Value{effectsState->session.value}},
+                    {"intent_world", liquid::Value{effectsState->session_id().value}},
                     {"intent_slot", liquid::Value{
                         static_cast<std::uint64_t>(intent.id.slot)}},
                     {"intent_generation", liquid::Value{
@@ -105,19 +105,19 @@ void Runtime::record_world_evidence() {
             liquid::detail::event_payload({
                 {"key", liquid::Value{key}},
                 {"value", intent.encodedValue},
-                {"intent_world", liquid::Value{effectsState->session.value}},
+                {"intent_world", liquid::Value{effectsState->session_id().value}},
                 {"intent_slot", liquid::Value{
                     static_cast<std::uint64_t>(intent.id.slot)}},
                 {"intent_generation", liquid::Value{
                     static_cast<std::uint64_t>(intent.id.generation)}},
-                {"owner_world", liquid::Value{effectsState->session.value}},
+                {"owner_world", liquid::Value{effectsState->session_id().value}},
                 {"owner_slot", liquid::Value{
                     static_cast<std::uint64_t>(intent.owner.slot)}},
                 {"owner_generation", liquid::Value{
                     static_cast<std::uint64_t>(intent.owner.generation)}},
                 {"type", liquid::Value{
                     static_cast<std::uint64_t>(intent.target.type)}},
-                {"target_world", liquid::Value{effectsState->session.value}},
+                {"target_world", liquid::Value{effectsState->session_id().value}},
                 {"target_slot", liquid::Value{
                     static_cast<std::uint64_t>(intent.target.slot.slot)}},
                 {"target_generation", liquid::Value{
@@ -140,11 +140,11 @@ void Runtime::record_world_evidence() {
     for (const auto& script : ownedWorld.script_execution_evidence()) {
         liquid::Value::Object payload;
         payload.emplace("key", liquid::Value{
-            "script:" + std::to_string(effectsState->session.value) + ":" +
+            "script:" + std::to_string(effectsState->session_id().value) + ":" +
             std::to_string(script.owner.slot) + ":" +
             std::to_string(script.owner.generation) + ":" +
             std::to_string(script.now)});
-        payload.emplace("owner_world", liquid::Value{effectsState->session.value});
+        payload.emplace("owner_world", liquid::Value{effectsState->session_id().value});
         payload.emplace("owner_slot", liquid::Value{
             static_cast<std::uint64_t>(script.owner.slot)});
         payload.emplace("owner_generation", liquid::Value{
