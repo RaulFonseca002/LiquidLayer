@@ -1,4 +1,6 @@
 #include "RuntimeInternals.hpp"
+#include "../events/EventInternals.hpp"
+#include "liquid/events/Replay.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -46,53 +48,81 @@ std::string required_string(
     return value.as_string();
 }
 
+const Value::Object& required_object_payload(
+    const EventRecord& record,
+    const char* context
+) {
+    if (record.payload.kind() != Value::Kind::Object)
+        throw EventStoreError(std::string(context) + " payload must be an object");
+    return record.payload.as_object();
+}
+
+const Value::Object& recorded_command_object(const Value::Object& object) {
+    const auto nestedValue = object.find("value");
+    if (nestedValue != object.end() &&
+        nestedValue->second.kind() == Value::Kind::Object) {
+        return nestedValue->second.as_object();
+    }
+    return object;
+}
+
 }
 
 void RuntimeEffectsState::restore(std::span<const EventRecord> records) {
+    ReplayProjector{}.project(store->metadata(), records);
+
     std::uint64_t maximumCommandId = 0;
     for (const auto& record : records) {
-        if (record.payload.kind() != Value::Kind::Object)
-            continue;
-        const auto& object = record.payload.as_object();
         if (record.type == EventType::Checkpoint) {
-            const auto commandsField = object.find("commands");
-            if (commandsField != object.end() &&
-                commandsField->second.kind() == Value::Kind::Object) {
-                for (const auto& [key, value] : commandsField->second.as_object()) {
-                    static_cast<void>(key);
-                    if (value.kind() != Value::Kind::Object)
-                        continue;
-                    restore_command(value.as_object(), maximumCommandId);
-                }
+            const auto& object = required_object_payload(record, "checkpoint");
+            events_detail::validate_checkpoint_anchor(
+                record.payload, session, record.sequence);
+            commands.clear();
+            latestByTarget.clear();
+            authoritativeByTarget.clear();
+            observed.clear();
+            observedRevisions.clear();
+            terminalOrder.clear();
+            maximumCommandId = 0;
+
+            for (const auto& [key, value] :
+                events_detail::checkpoint_object(object, "commands")) {
+                restore_command(value.as_object(), maximumCommandId);
+                const Value::Object& command = recorded_command_object(
+                    value.as_object());
+                const std::uint64_t id = required_unsigned(
+                    command, "command_id", "checkpoint command");
+                if (key != "command:" + std::to_string(id))
+                    throw EventStoreError("checkpoint command key does not match command ID");
             }
-            const auto observedField = object.find("observed_state");
-            if (observedField != object.end() &&
-                observedField->second.kind() == Value::Kind::Object) {
-                const auto authorityField = object.find("observed_authority");
-                if (authorityField != object.end() &&
-                    authorityField->second.kind() == Value::Kind::Object) {
-                    restore_observed_checkpoint(
-                        authorityField->second.as_object());
-                } else {
-                    restore_observed_values(observedField->second.as_object());
+            for (const Value& encoded :
+                 events_detail::checkpoint_array(object, "command_attempts")) {
+                const Value::Object& attemptRecord = encoded.as_object();
+                if (required_unsigned(
+                        attemptRecord, "type", "checkpoint command attempt") !=
+                    static_cast<std::uint64_t>(EventType::CommandAttempted)) {
+                    throw EventStoreError(
+                        "checkpoint command_attempts contains another event type");
                 }
+                const Value& payload = required_field(
+                    attemptRecord, "payload", "checkpoint command attempt");
+                if (payload.kind() != Value::Kind::Object)
+                    throw EventStoreError(
+                        "checkpoint command attempt payload must be an object");
+                restore_attempt(payload.as_object());
             }
+            restore_observed_checkpoint(
+                events_detail::checkpoint_object(object, "observed_authority"),
+                events_detail::checkpoint_object(object, "observed_state"));
         } else if (record.type == EventType::CommandIssued) {
+            const auto& object = required_object_payload(record, "recorded command");
             restore_command(object, maximumCommandId);
         } else if (record.type == EventType::CommandAttempted) {
-            const std::uint64_t id = required_unsigned(
-                object, "command_id", "recorded command attempt");
-            const auto found = commands.find(id);
-            if (found == commands.end())
-                throw EventStoreError("attempt references unknown command");
-            const std::uint64_t attempt = required_unsigned(
-                object, "attempt", "recorded command attempt");
-            if (attempt == 0 || attempt > EffectLimits::maxRetryDelays + 1)
-                throw EventStoreError("recorded command attempt is out of range");
-            found->second.retryIndex = std::max(
-                found->second.retryIndex,
-                static_cast<std::size_t>(attempt - 1));
+            restore_attempt(required_object_payload(
+                record, "recorded command attempt"));
         } else if (record.type == EventType::CommandStatusChanged) {
+            const auto& object = required_object_payload(
+                record, "recorded command status");
             const std::uint64_t id = required_unsigned(
                 object, "command_id", "recorded command status");
             const auto found = commands.find(id);
@@ -105,6 +135,8 @@ void RuntimeEffectsState::restore(std::span<const EventRecord> records) {
             found->second.status = parse_status(required_string(
                 object, "status", "recorded command status"));
         } else if (record.type == EventType::ObservedStateChanged) {
+            const auto& object = required_object_payload(
+                record, "recorded observed state");
             restore_observed_record(object);
         }
     }
@@ -118,78 +150,71 @@ void RuntimeEffectsState::restore(std::span<const EventRecord> records) {
     prune_terminal_history();
 }
 
+void RuntimeEffectsState::restore_attempt(const Value::Object& object) {
+    const std::uint64_t id = required_unsigned(
+        object, "command_id", "recorded command attempt");
+    const auto found = commands.find(id);
+    if (found == commands.end())
+        throw EventStoreError("attempt references unknown command");
+    const std::uint64_t attempt = required_unsigned(
+        object, "attempt", "recorded command attempt");
+    if (attempt == 0 || attempt > EffectLimits::maxRetryDelays + 1)
+        throw EventStoreError("recorded command attempt is out of range");
+    found->second.retryIndex = std::max(
+        found->second.retryIndex,
+        static_cast<std::size_t>(attempt - 1));
+}
+
 void RuntimeEffectsState::restore_command(
     const Value::Object& object,
     std::uint64_t& maximumCommandId
 ) {
-            const auto nestedValue = object.find("value");
-            const Value::Object* commandObject = &object;
-            if (nestedValue != object.end() &&
-                nestedValue->second.kind() == Value::Kind::Object) {
-                commandObject = &nestedValue->second.as_object();
-            }
-            const std::uint64_t id = required_unsigned(
-                *commandObject, "command_id", "recorded command");
-            const auto route = AdapterRoute{
-                required_string(*commandObject, "route", "recorded command")};
-            const auto target = EffectTarget{
-                required_string(*commandObject, "target", "recorded command")};
-            const Value desired = required_field(
-                *commandObject, "desired", "recorded command");
-            const std::uint64_t issuedAt = required_unsigned(
-                *commandObject, "issued_at", "recorded command");
-            EffectCommand command{
-                session, CommandId{id},
-                ResolvedEffect{route, target, desired}, issuedAt};
-            validate_effect_command(command);
-            CommandStatus status = CommandStatus::Pending;
-            const auto statusField = commandObject->find("status");
-            if (statusField != commandObject->end()) {
-                if (statusField->second.kind() != Value::Kind::String)
-                    throw EventStoreError("recorded command status is not a string");
-                status = parse_status(statusField->second.as_string());
-            }
-            CommandState state{
-                command, nullptr, {}, status, 0, std::nullopt};
-            commands.insert_or_assign(id, std::move(state));
-            latestByTarget.insert_or_assign(
-                target_key(route, target), id);
-            maximumCommandId = std::max(maximumCommandId, id);
+    const Value::Object* commandObject = &recorded_command_object(object);
+    const std::uint64_t id = required_unsigned(
+        *commandObject, "command_id", "recorded command");
+    const auto route = AdapterRoute{
+        required_string(*commandObject, "route", "recorded command")};
+    const auto target = EffectTarget{
+        required_string(*commandObject, "target", "recorded command")};
+    const Value desired = required_field(
+        *commandObject, "desired", "recorded command");
+    const std::uint64_t issuedAt = required_unsigned(
+        *commandObject, "issued_at", "recorded command");
+    EffectCommand command{
+        session, CommandId{id},
+        ResolvedEffect{route, target, desired}, issuedAt};
+    validate_effect_command(command);
+    CommandStatus status = CommandStatus::Pending;
+    const auto statusField = commandObject->find("status");
+    if (statusField != commandObject->end()) {
+        if (statusField->second.kind() != Value::Kind::String)
+            throw EventStoreError("recorded command status is not a string");
+        status = parse_status(statusField->second.as_string());
+    }
+    CommandState state{
+        command, nullptr, {}, status, 0, std::nullopt};
+    commands.insert_or_assign(id, std::move(state));
+    const TargetKey key = target_key(route, target);
+    const auto latest = latestByTarget.find(key);
+    if (latest == latestByTarget.end() || latest->second < id)
+        latestByTarget.insert_or_assign(key, id);
+    maximumCommandId = std::max(maximumCommandId, id);
 }
 
 void RuntimeEffectsState::restore_observed_record(const Value::Object& object) {
-    TargetKey key;
-    const auto route = object.find("route");
-    const auto target = object.find("target");
-    if (route != object.end() && target != object.end()) {
-        if (route->second.kind() != Value::Kind::String ||
-            target->second.kind() != Value::Kind::String)
-            throw EventStoreError("recorded observed route and target must be strings");
-        key = target_key(
-            AdapterRoute{route->second.as_string()},
-            EffectTarget{target->second.as_string()});
-    } else {
-        const std::uint64_t id = required_unsigned(
-            object, "command_id", "recorded observed state");
-        const auto command = commands.find(id);
-        if (command == commands.end())
-            throw EventStoreError("observed state references unknown command");
-        key = target_key(
-            command->second.command.effect.adapterRoute,
-            command->second.command.effect.target);
-    }
+    const AdapterRoute route{
+        required_string(object, "route", "recorded observed state")};
+    const EffectTarget target{
+        required_string(object, "target", "recorded observed state")};
+    const TargetKey key = target_key(route, target);
 
     observed.insert_or_assign(
         key, required_field(object, "observed", "recorded observed state"));
-    const auto revision = object.find("state_revision");
-    if (revision != object.end()) {
-        if (revision->second.kind() != Value::Kind::UnsignedInteger)
-            throw EventStoreError("recorded observed revision must be unsigned");
-        StateRevision restored{revision->second.as_unsigned_integer()};
-        if (!restored.valid())
-            throw EventStoreError("recorded observed revision is invalid");
-        observedRevisions.insert_or_assign(key, restored);
-    }
+    StateRevision restored{required_unsigned(
+        object, "state_revision", "recorded observed state")};
+    if (!restored.valid())
+        throw EventStoreError("recorded observed revision is invalid");
+    observedRevisions.insert_or_assign(key, restored);
 
     const auto idField = object.find("command_id");
     if (idField != object.end()) {
@@ -202,33 +227,30 @@ void RuntimeEffectsState::restore_observed_record(const Value::Object& object) {
     }
 }
 
-void RuntimeEffectsState::restore_observed_checkpoint(const Value::Object& states) {
-    for (const auto& [key, value] : states) {
-        if (value.kind() != Value::Kind::Object)
-            continue;
+void RuntimeEffectsState::restore_observed_checkpoint(
+    const Value::Object& authority,
+    const Value::Object& values
+) {
+    for (const auto& [key, value] : authority) {
         const auto& object = value.as_object();
-        const auto observedField = object.find("observed");
-        if (observedField == object.end())
-            continue;
+        const std::string route = required_string(
+            object, "route", "checkpoint observed authority");
+        const std::string target = required_string(
+            object, "target", "checkpoint observed authority");
+        if (key != route + ":" + target)
+            throw EventStoreError("checkpoint observed-authority key is inconsistent");
+        const auto observedValue = values.find(key);
+        if (observedValue == values.end() ||
+            observedValue->second != required_field(
+                object, "observed", "checkpoint observed authority")) {
+            throw EventStoreError(
+                "checkpoint observed state does not match its authority record");
+        }
         restore_observed_record(object);
     }
-}
-
-void RuntimeEffectsState::restore_observed_values(const Value::Object& states) {
-    for (const auto& [key, value] : states) {
-        for (const auto& [id, state] : commands) {
-            const TargetKey target = target_key(
-                state.command.effect.adapterRoute,
-                state.command.effect.target);
-            if (target.first + ":" + target.second != key)
-                continue;
-            observed.insert_or_assign(target, value);
-            const auto authority = authoritativeByTarget.find(target);
-            if (authority == authoritativeByTarget.end() ||
-                authority->second < id) {
-                authoritativeByTarget.insert_or_assign(target, id);
-            }
-        }
+    if (observed.size() != values.size()) {
+        throw EventStoreError(
+            "checkpoint observed state is missing an authority record");
     }
 }
 

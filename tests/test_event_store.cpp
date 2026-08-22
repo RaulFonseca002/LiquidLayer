@@ -1,5 +1,6 @@
 #include "liquid/events/FileEventStore.hpp"
 #include "liquid/events/MemoryEventStore.hpp"
+#include "liquid/events/Replay.hpp"
 #include "liquid/events/ValueCodec.hpp"
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -42,14 +44,19 @@ liquid::Value object_value(std::string key, liquid::Value value) {
     return liquid::Value(std::move(object));
 }
 
-liquid::Value checkpoint_value() {
-    liquid::Value::Object projection;
-    projection.emplace("topology", liquid::Value(liquid::Value::Object{}));
-    projection.emplace("components", liquid::Value(liquid::Value::Object{}));
-    projection.emplace("intents", liquid::Value(liquid::Value::Object{}));
-    projection.emplace("commands", liquid::Value(liquid::Value::Object{}));
-    projection.emplace("observed_state", liquid::Value(liquid::Value::Object{}));
-    return liquid::Value(std::move(projection));
+liquid::Value checkpoint_value(
+    liquid::RecordId replayPosition = liquid::RecordId{0}
+) {
+    liquid::SerializedWorldState state;
+    state.session = session_id();
+    state.replayPosition = replayPosition;
+    return liquid::ReplayProjector{}.checkpoint_payload(state);
+}
+
+liquid::Value checkpoint_value(const liquid::EventStore& store) {
+    liquid::ReplayProjector projector;
+    return projector.checkpoint_payload(
+        projector.project(store.metadata(), store.read_all()));
 }
 
 liquid::EventData frame_event(std::uint64_t frame) {
@@ -196,13 +203,7 @@ TEST_CASE("test_event_store") {
     futureMetadata.fileFormatVersion = 2;
     expect_store_error([&] { MemoryEventStore unsupported(futureMetadata); });
 
-    Value::Object snapshot;
-    snapshot.emplace("topology", Value(Value::Object{}));
-    snapshot.emplace("components", Value(Value::Object{}));
-    snapshot.emplace("intents", Value(Value::Object{}));
-    snapshot.emplace("commands", Value(Value::Object{}));
-    snapshot.emplace("observed_state", Value(Value::Object{}));
-    const RecordId checkpoint = memory.checkpoint(Value(std::move(snapshot)));
+    const RecordId checkpoint = memory.checkpoint(checkpoint_value(memory));
     memory.append(EventData{EventType::FrameCompleted, 1, Value()});
     memory.retain_from_checkpoint(checkpoint);
     const auto retainedMemory = memory.read_all();
@@ -300,13 +301,7 @@ TEST_CASE("test_event_store") {
     {
         FileEventStore store(retainedFile.path(), metadata());
         store.append(deterministicEvents.front());
-        Value::Object projection;
-        projection.emplace("topology", Value(Value::Object{}));
-        projection.emplace("components", Value(Value::Object{}));
-        projection.emplace("intents", Value(Value::Object{}));
-        projection.emplace("commands", Value(Value::Object{}));
-        projection.emplace("observed_state", Value(Value::Object{}));
-        fileCheckpoint = store.checkpoint(Value(std::move(projection)));
+        fileCheckpoint = store.checkpoint(checkpoint_value(store));
         store.append(deterministicEvents.back());
         store.retain_from_checkpoint(fileCheckpoint);
         REQUIRE(store.metadata().fileGeneration == 2);
@@ -504,7 +499,7 @@ TEST_CASE("compaction replacement is atomic and post-replace failures fault the 
     {
         FileEventStore store(beforeReplace.path(), metadata(), beforeOptions);
         store.append(frame_event(1));
-        const RecordId checkpoint = store.checkpoint(checkpoint_value());
+        const RecordId checkpoint = store.checkpoint(checkpoint_value(store));
         store.append(frame_event(2));
         const auto original = read_bytes(beforeReplace.path());
         expect_store_error([&] { store.retain_from_checkpoint(checkpoint); });
@@ -525,7 +520,7 @@ TEST_CASE("compaction replacement is atomic and post-replace failures fault the 
     {
         FileEventStore store(afterReplace.path(), metadata(), afterOptions);
         store.append(frame_event(1));
-        checkpoint = store.checkpoint(checkpoint_value());
+        checkpoint = store.checkpoint(checkpoint_value(store));
         store.append(frame_event(2));
         expect_store_error([&] { store.retain_from_checkpoint(checkpoint); });
         REQUIRE(store.metadata().fileGeneration == 2);
@@ -539,6 +534,55 @@ TEST_CASE("compaction replacement is atomic and post-replace failures fault the 
         REQUIRE(reopened.read_all().front().sequence == checkpoint);
         REQUIRE(reopened.read_all().back().type == EventType::Retention);
     }
+}
+
+TEST_CASE("retention rejects stale checkpoints without changing either store") {
+    using namespace liquid;
+
+    MemoryEventStore memory(metadata(), 5);
+    memory.append(frame_event(1));
+    const RecordId memoryCheckpoint = memory.checkpoint(
+        checkpoint_value(RecordId{1}));
+    const auto memoryRecords = memory.read_all();
+    const std::uint64_t memoryGeneration = memory.metadata().fileGeneration;
+    expect_store_error([&] { memory.retain_from_checkpoint(memoryCheckpoint); });
+    REQUIRE(memory.read_all() == memoryRecords);
+    REQUIRE(memory.metadata().fileGeneration == memoryGeneration);
+    REQUIRE_THROWS_AS(
+        ReplayProjector{}.project(memory.metadata(), memory.read_all()),
+        EventStoreError);
+
+    TemporaryFile file("stale-checkpoint.bin");
+    FileEventStore durable(file.path(), metadata());
+    durable.append(frame_event(1));
+    const RecordId fileCheckpoint = durable.checkpoint(
+        checkpoint_value(RecordId{1}));
+    const auto fileRecords = durable.read_all();
+    const auto fileBytes = read_bytes(file.path());
+    const std::uint64_t fileGeneration = durable.metadata().fileGeneration;
+    expect_store_error([&] { durable.retain_from_checkpoint(fileCheckpoint); });
+    REQUIRE(durable.read_all() == fileRecords);
+    REQUIRE(read_bytes(file.path()) == fileBytes);
+    REQUIRE(durable.metadata().fileGeneration == fileGeneration);
+    REQUIRE_THROWS_AS(
+        ReplayProjector{}.project(durable.metadata(), durable.read_all()),
+        EventStoreError);
+}
+
+TEST_CASE("memory retention preflights exhausted record sequences") {
+    using namespace liquid;
+
+    MemoryEventStore store(metadata(), 4);
+    store.set_next_sequence_for_test(RecordId{
+        std::numeric_limits<std::uint64_t>::max() - 1});
+    store.append(frame_event(1));
+    const RecordId checkpoint = store.checkpoint(checkpoint_value(store));
+    const auto records = store.read_all();
+    const std::uint64_t generation = store.metadata().fileGeneration;
+
+    expect_store_error([&] { store.retain_from_checkpoint(checkpoint); });
+    REQUIRE(store.read_all() == records);
+    REQUIRE(store.metadata().fileGeneration == generation);
 }
 
 #ifndef _WIN32

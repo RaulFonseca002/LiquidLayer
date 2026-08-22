@@ -1,5 +1,6 @@
 #include "liquid/Runtime.hpp"
 #include "liquid/events/MemoryEventStore.hpp"
+#include "liquid/events/Replay.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
@@ -25,6 +26,7 @@ public:
     };
     bool reportSynchronously = true;
     bool throwOnDispatch = false;
+    mutable bool throwOnCapabilitiesOnce = false;
     std::optional<liquid::DispatchDisposition> disposition;
     std::vector<liquid::EffectCommand> dispatched;
     liquid::FeedbackSender sender;
@@ -34,6 +36,10 @@ public:
     }
 
     liquid::AdapterCapabilities capabilities() const override {
+        if (throwOnCapabilitiesOnce) {
+            throwOnCapabilitiesOnce = false;
+            throw std::runtime_error("simulated capabilities failure");
+        }
         return adapterCapabilities;
     }
 
@@ -106,6 +112,51 @@ public:
     void retain_from_checkpoint(liquid::RecordId) override {}
 };
 
+class FailOnceBatchStore final : public liquid::EventStore {
+    liquid::MemoryEventStore backing;
+
+public:
+    bool failNextBatch = false;
+
+    explicit FailOnceBatchStore(liquid::EventStoreMetadata metadata)
+        : backing(std::move(metadata)) {
+    }
+
+    const liquid::EventStoreMetadata& metadata() const override {
+        return backing.metadata();
+    }
+
+    liquid::RecordId append(
+        liquid::EventData event,
+        liquid::Durability durability = liquid::Durability::Durable
+    ) override {
+        return backing.append(std::move(event), durability);
+    }
+
+    std::vector<liquid::RecordId> append_batch(
+        std::span<const liquid::EventData> events,
+        liquid::Durability durability = liquid::Durability::Durable
+    ) override {
+        if (failNextBatch) {
+            failNextBatch = false;
+            throw liquid::EventStoreError("simulated durable batch failure");
+        }
+        return backing.append_batch(events, durability);
+    }
+
+    std::vector<liquid::EventRecord> read_all() const override {
+        return backing.read_all();
+    }
+
+    void flush() override {
+        backing.flush();
+    }
+
+    void retain_from_checkpoint(liquid::RecordId checkpoint) override {
+        backing.retain_from_checkpoint(checkpoint);
+    }
+};
+
 struct MutatingThrowingSystem final : liquid::System {
     static constexpr std::string_view stableName =
         "tests.runtime.effects.MutatingThrowingSystem";
@@ -154,6 +205,23 @@ liquid::ResolvedEffect light(std::uint64_t level) {
     };
 }
 
+liquid::EventData pending_command(
+    std::uint64_t id,
+    std::string target = "office",
+    std::string route = "test.light"
+) {
+    liquid::Value::Object command;
+    command.emplace("key", liquid::Value{"command:" + std::to_string(id)});
+    command.emplace("value", liquid::Value{"pending"});
+    command.emplace("command_id", liquid::Value{id});
+    command.emplace("route", liquid::Value{std::move(route)});
+    command.emplace("target", liquid::Value{std::move(target)});
+    command.emplace("desired", liquid::Value{std::uint64_t{70}});
+    command.emplace("issued_at", liquid::Value{std::uint64_t{0}});
+    return liquid::EventData{
+        liquid::EventType::CommandIssued, 1, liquid::Value{std::move(command)}};
+}
+
 liquid::EffectReport outcome_report(
     const liquid::EffectCommand& command,
     liquid::CommandStatus status,
@@ -196,6 +264,74 @@ liquid::EffectCodec<std::uint64_t> light_effect_codec() {
     };
 }
 
+}
+
+TEST_CASE("adapter registration remains retryable after capability discovery fails") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    adapter->throwOnCapabilitiesOnce = true;
+
+    REQUIRE_THROWS_AS(runtime.register_adapter(adapter), std::runtime_error);
+    REQUIRE_NOTHROW(runtime.register_adapter(adapter));
+
+    const FrameResult result = runtime.run_frame(FrameInput{0, {}, {light(70)}});
+    REQUIRE(result.commands.size() == 1);
+    REQUIRE(adapter->dispatched.size() == 1);
+}
+
+TEST_CASE("adapter registration is atomic when restored status evidence fails") {
+    liquid::EventStoreMetadata metadata;
+    metadata.session = liquid::SessionId{42};
+    metadata.engineVersion = "0.1.0";
+    metadata.feedbackTiming = liquid::FeedbackTiming::Immediate;
+
+    liquid::MemoryEventStore constrained{metadata, 4};
+    constrained.append(pending_command(1, "office"));
+    constrained.append(pending_command(2, "hall"));
+    constrained.append(pending_command(3, "desk", "other.route"));
+    auto constrainedOptions = options(liquid::FeedbackTiming::Immediate);
+    constrainedOptions.eventStore = &constrained;
+    Runtime constrainedRuntime{constrainedOptions};
+    auto constrainedAdapter = std::make_shared<TestAdapter>();
+    constrainedAdapter->adapterCapabilities.nativeIdempotency = false;
+
+    REQUIRE_THROWS_AS(
+        constrainedRuntime.register_adapter(constrainedAdapter),
+        liquid::EventStoreError);
+    REQUIRE(constrainedRuntime.command_status(liquid::CommandId{1}) ==
+            std::optional<liquid::CommandStatus>{liquid::CommandStatus::Pending});
+    REQUIRE(constrainedRuntime.command_status(liquid::CommandId{2}) ==
+            std::optional<liquid::CommandStatus>{liquid::CommandStatus::Pending});
+    REQUIRE(constrainedRuntime.command_status(liquid::CommandId{3}) ==
+            std::optional<liquid::CommandStatus>{liquid::CommandStatus::Pending});
+    REQUIRE_THROWS_AS(
+        constrainedRuntime.register_adapter(constrainedAdapter),
+        liquid::EventStoreError);
+
+    FailOnceBatchStore retryable{metadata};
+    retryable.append(pending_command(1, "office"));
+    retryable.append(pending_command(2, "hall"));
+    retryable.append(pending_command(3, "desk", "other.route"));
+    auto retryableOptions = options(liquid::FeedbackTiming::Immediate);
+    retryableOptions.eventStore = &retryable;
+    Runtime retryableRuntime{retryableOptions};
+    auto retryableAdapter = std::make_shared<TestAdapter>();
+    retryableAdapter->adapterCapabilities.nativeIdempotency = false;
+    retryableAdapter->adapterCapabilities.readAfterWriteReconciliation = false;
+    retryable.failNextBatch = true;
+
+    REQUIRE_THROWS_AS(
+        retryableRuntime.register_adapter(retryableAdapter),
+        liquid::EventStoreError);
+    REQUIRE_NOTHROW(retryableRuntime.register_adapter(retryableAdapter));
+    REQUIRE(retryableRuntime.command_status(liquid::CommandId{1}) ==
+            std::optional<liquid::CommandStatus>{
+                liquid::CommandStatus::Indeterminate});
+    REQUIRE(retryableRuntime.command_status(liquid::CommandId{2}) ==
+            std::optional<liquid::CommandStatus>{
+                liquid::CommandStatus::Indeterminate});
+    REQUIRE(retryableRuntime.command_status(liquid::CommandId{3}) ==
+            std::optional<liquid::CommandStatus>{liquid::CommandStatus::Pending});
 }
 
 TEST_CASE("selected intents drive deferred effects and confirmed components") {
@@ -526,6 +662,95 @@ TEST_CASE("runtime restores pending commands after checkpoint retention") {
     REQUIRE(adapter.dispatched.front().commandId == originalId);
 }
 
+TEST_CASE("checkpoint restore selects the newest numeric command ID") {
+    liquid::EventStoreMetadata metadata;
+    metadata.session = liquid::SessionId{42};
+    metadata.engineVersion = "0.1.0";
+    metadata.feedbackTiming = liquid::FeedbackTiming::Immediate;
+    liquid::MemoryEventStore store{metadata};
+    liquid::CommandId latest;
+
+    {
+        auto runtimeOptions = options(liquid::FeedbackTiming::Immediate);
+        runtimeOptions.eventStore = &store;
+        Runtime runtime{runtimeOptions};
+        TestAdapter adapter;
+        runtime.register_adapter(adapter);
+
+        for (std::uint64_t value = 1; value < 10; ++value) {
+            REQUIRE(runtime.run_frame(
+                liquid::FrameInput{value - 1, {}, {light(value)}}
+            ).commands.size() == 1);
+        }
+
+        adapter.reportSynchronously = false;
+        latest = runtime.run_frame(
+            liquid::FrameInput{9, {}, {light(10)}}).commands.front().commandId;
+        REQUIRE(latest == liquid::CommandId{10});
+        const auto checkpoint = runtime.checkpoint();
+        store.retain_from_checkpoint(checkpoint);
+    }
+
+    auto runtimeOptions = options(liquid::FeedbackTiming::Immediate);
+    runtimeOptions.eventStore = &store;
+    Runtime reopened{runtimeOptions};
+    TestAdapter adapter;
+    adapter.reportSynchronously = false;
+    reopened.register_adapter(adapter);
+
+    REQUIRE(reopened.run_frame(
+        liquid::FrameInput{10, {}, {light(10)}}).commands.empty());
+    REQUIRE(adapter.dispatched.empty());
+    REQUIRE(reopened.command_status(latest) ==
+            std::optional<liquid::CommandStatus>{liquid::CommandStatus::Pending});
+}
+
+TEST_CASE("checkpoint retention preserves pending command retry progress") {
+    liquid::EventStoreMetadata metadata;
+    metadata.session = liquid::SessionId{42};
+    metadata.engineVersion = "0.1.0";
+    metadata.feedbackTiming = liquid::FeedbackTiming::Immediate;
+    liquid::MemoryEventStore store{metadata};
+    liquid::CommandId command;
+
+    {
+        auto runtimeOptions = options(liquid::FeedbackTiming::Immediate);
+        runtimeOptions.eventStore = &store;
+        Runtime runtime{runtimeOptions};
+        TestAdapter adapter;
+        adapter.reportSynchronously = false;
+        runtime.register_adapter(adapter);
+        command = runtime.run_frame(
+            liquid::FrameInput{0, {}, {light(70)}}).commands.front().commandId;
+        runtime.run_frame(liquid::FrameInput{250, {}, {}});
+        REQUIRE(adapter.dispatched.size() == 2);
+        const auto checkpoint = runtime.checkpoint();
+        store.retain_from_checkpoint(checkpoint);
+    }
+
+    auto runtimeOptions = options(liquid::FeedbackTiming::Immediate);
+    runtimeOptions.eventStore = &store;
+    Runtime reopened{runtimeOptions};
+    TestAdapter adapter;
+    adapter.reportSynchronously = false;
+    reopened.register_adapter(adapter);
+
+    reopened.run_frame(liquid::FrameInput{499, {}, {}});
+    REQUIRE(adapter.dispatched.empty());
+    reopened.run_frame(liquid::FrameInput{500, {}, {}});
+    REQUIRE(adapter.dispatched.size() == 1);
+    REQUIRE(adapter.dispatched.front().commandId == command);
+
+    std::vector<std::uint64_t> attempts;
+    for (const auto& record : store.read_all()) {
+        if (record.type == liquid::EventType::CommandAttempted) {
+            attempts.push_back(record.payload.as_object()
+                .at("attempt").as_unsigned_integer());
+        }
+    }
+    REQUIRE(attempts == std::vector<std::uint64_t>{3});
+}
+
 TEST_CASE("runtime restores observed state and suppresses redundant commands") {
     liquid::EventStoreMetadata metadata;
     metadata.session = liquid::SessionId{42};
@@ -814,6 +1039,122 @@ TEST_CASE("command and record sequences never wrap") {
         commandExhausted = true;
     }
     REQUIRE(commandExhausted);
+}
+
+TEST_CASE("runtime restore rejects malformed state-bearing records") {
+    using namespace liquid;
+
+    EventStoreMetadata metadata;
+    metadata.session = SessionId{42};
+    metadata.engineVersion = "0.1.0";
+    metadata.feedbackTiming = FeedbackTiming::Immediate;
+
+    for (const EventType type : {
+             EventType::CommandIssued,
+             EventType::CommandAttempted,
+             EventType::CommandStatusChanged,
+             EventType::ObservedStateChanged}) {
+        MemoryEventStore store{metadata};
+        store.append(EventData{type, 1, Value{"malformed"}});
+        auto runtimeOptions = options(FeedbackTiming::Immediate);
+        runtimeOptions.eventStore = &store;
+        REQUIRE_THROWS_AS(Runtime(runtimeOptions), EventStoreError);
+    }
+
+    SerializedWorldState malformedCommands;
+    malformedCommands.session = metadata.session;
+    malformedCommands.commands.emplace(
+        "command:1", Value(Value::Object{}));
+    MemoryEventStore commandCheckpoint{metadata};
+    commandCheckpoint.checkpoint(
+        ReplayProjector{}.checkpoint_payload(malformedCommands));
+    auto commandOptions = options(FeedbackTiming::Immediate);
+    commandOptions.eventStore = &commandCheckpoint;
+    REQUIRE_THROWS_AS(Runtime(commandOptions), EventStoreError);
+
+    SerializedWorldState mismatchedObservation;
+    mismatchedObservation.session = metadata.session;
+    mismatchedObservation.observedState.emplace(
+        "test.light:office", Value(std::uint64_t{70}));
+    Value::Object authority;
+    authority.emplace("route", Value("test.light"));
+    authority.emplace("target", Value("office"));
+    authority.emplace("observed", Value(std::uint64_t{30}));
+    authority.emplace("state_revision", Value(std::uint64_t{1}));
+    mismatchedObservation.observedAuthority.emplace(
+        "test.light:office", Value(std::move(authority)));
+    MemoryEventStore observationCheckpoint{metadata};
+    observationCheckpoint.checkpoint(
+        ReplayProjector{}.checkpoint_payload(mismatchedObservation));
+    auto observationOptions = options(FeedbackTiming::Immediate);
+    observationOptions.eventStore = &observationCheckpoint;
+    REQUIRE_THROWS_AS(Runtime(observationOptions), EventStoreError);
+
+    const auto rejects_checkpoint = [&](SerializedWorldState state) {
+        MemoryEventStore store{metadata};
+        store.checkpoint(ReplayProjector{}.checkpoint_payload(state));
+        auto runtimeOptions = options(FeedbackTiming::Immediate);
+        runtimeOptions.eventStore = &store;
+        try {
+            Runtime runtime(runtimeOptions);
+        } catch (const EventStoreError& error) {
+            return std::string(error.what());
+        }
+        return std::string{};
+    };
+    const auto valid_command = [] {
+        return pending_command(1).payload;
+    };
+
+    SerializedWorldState wrongAttemptFamily;
+    wrongAttemptFamily.session = metadata.session;
+    wrongAttemptFamily.commands.emplace("command:1", valid_command());
+    EventRecord reportInAttempts;
+    reportInAttempts.sequence = RecordId{1};
+    reportInAttempts.type = EventType::ReportReceived;
+    reportInAttempts.payload = Value(Value::Object{});
+    wrongAttemptFamily.commandAttempts.push_back(std::move(reportInAttempts));
+    REQUIRE(rejects_checkpoint(std::move(wrongAttemptFamily)) ==
+            "checkpoint command_attempts contains another event type");
+
+    SerializedWorldState scalarAttempt;
+    scalarAttempt.session = metadata.session;
+    scalarAttempt.commands.emplace("command:1", valid_command());
+    EventRecord scalarAttemptRecord;
+    scalarAttemptRecord.sequence = RecordId{1};
+    scalarAttemptRecord.type = EventType::CommandAttempted;
+    scalarAttemptRecord.payload = Value("malformed");
+    scalarAttempt.commandAttempts.push_back(std::move(scalarAttemptRecord));
+    REQUIRE(rejects_checkpoint(std::move(scalarAttempt)) ==
+            "checkpoint command attempt payload must be an object");
+
+    SerializedWorldState unknownAttemptCommand;
+    unknownAttemptCommand.session = metadata.session;
+    EventRecord unknownAttemptRecord;
+    unknownAttemptRecord.sequence = RecordId{1};
+    unknownAttemptRecord.type = EventType::CommandAttempted;
+    unknownAttemptRecord.payload = Value(Value::Object{
+        {"command_id", Value(std::uint64_t{9})},
+        {"attempt", Value(std::uint64_t{1})}
+    });
+    unknownAttemptCommand.commandAttempts.push_back(
+        std::move(unknownAttemptRecord));
+    REQUIRE(rejects_checkpoint(std::move(unknownAttemptCommand)) ==
+            "attempt references unknown command");
+
+    SerializedWorldState zeroAttempt;
+    zeroAttempt.session = metadata.session;
+    zeroAttempt.commands.emplace("command:1", valid_command());
+    EventRecord zeroAttemptRecord;
+    zeroAttemptRecord.sequence = RecordId{1};
+    zeroAttemptRecord.type = EventType::CommandAttempted;
+    zeroAttemptRecord.payload = Value(Value::Object{
+        {"command_id", Value(std::uint64_t{1})},
+        {"attempt", Value(std::uint64_t{0})}
+    });
+    zeroAttempt.commandAttempts.push_back(std::move(zeroAttemptRecord));
+    REQUIRE(rejects_checkpoint(std::move(zeroAttempt)) ==
+            "recorded command attempt is out of range");
 }
 
 TEST_CASE("runtime owns registered adapters for its full lifetime") {

@@ -1,5 +1,6 @@
 #include "liquid/events/FileEventStore.hpp"
 
+#include "liquid/events/Replay.hpp"
 #include "liquid/events/ValueCodec.hpp"
 #include "EventInternals.hpp"
 #include "FileEventStoreFormat.hpp"
@@ -345,7 +346,13 @@ void FileEventStore::retain_from_checkpoint(RecordId checkpointSequence) {
 
     if (checkpoint == state.records.end() || checkpoint->type != EventType::Checkpoint)
         throw EventStoreError("retention requires a retained checkpoint record");
-    events_detail::validate_checkpoint_projection(checkpoint->payload);
+    events_detail::validate_checkpoint_anchor(
+        checkpoint->payload, state.metadata.session, checkpointSequence);
+    const std::size_t checkpointIndex =
+        static_cast<std::size_t>(checkpoint - state.records.begin());
+    ReplayProjector{}.project(
+        state.metadata,
+        std::span<const EventRecord>{state.records.data(), checkpointIndex + 1});
 
     if (state.metadata.fileGeneration == std::numeric_limits<std::uint64_t>::max())
         throw EventStoreError("file generation exhausted");

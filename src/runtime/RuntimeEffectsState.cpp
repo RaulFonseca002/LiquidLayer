@@ -226,28 +226,56 @@ void RuntimeEffectsState::record_status(const CommandState& state, const std::st
 void RuntimeEffectsState::register_adapter(std::shared_ptr<EffectAdapter> adapter) {
     if (!adapter)
         throw std::invalid_argument("adapter ownership must not be null");
-    const auto key = adapter->route().value();
-    if (!adapters.emplace(key, adapter).second)
-        throw std::invalid_argument("adapter route is already registered");
+    const AdapterRoute route = adapter->route();
     const AdapterCapabilities capabilities = adapter->capabilities();
-    for (auto& [id, state] : commands) {
+    const auto key = route.value();
+    if (adapters.contains(key))
+        throw std::invalid_argument("adapter route is already registered");
+
+    std::vector<std::uint64_t> indeterminate;
+    std::vector<EventData> statusEvents;
+    indeterminate.reserve(commands.size());
+    statusEvents.reserve(commands.size());
+    for (const auto& [id, state] : commands) {
         static_cast<void>(id);
-        if (state.command.effect.adapterRoute != adapter->route())
+        if (state.command.effect.adapterRoute != route)
+            continue;
+        if (state.status == CommandStatus::Pending &&
+            !capabilities.nativeIdempotency) {
+            const std::string reason = capabilities.readAfterWriteReconciliation
+                ? "host reconciliation required after restart"
+                : "adapter cannot safely retry after restart";
+            indeterminate.push_back(id);
+            statusEvents.push_back(EventData{
+                EventType::CommandStatusChanged,
+                1,
+                event_payload({
+                    {"key", Value{"command:" + std::to_string(id)}},
+                    {"value", Value{status_name(CommandStatus::Indeterminate)}},
+                    {"command_id", Value{id}},
+                    {"status", Value{status_name(CommandStatus::Indeterminate)}},
+                    {"reason", Value{reason}}
+                })
+            });
+        }
+    }
+
+    adapters.emplace(key, adapter);
+    try {
+        store->append_batch(statusEvents, Durability::Durable);
+    } catch (...) {
+        adapters.erase(key);
+        throw;
+    }
+
+    for (auto& [id, state] : commands) {
+        if (state.command.effect.adapterRoute != route)
             continue;
         state.adapter = adapter;
         state.capabilities = capabilities;
-        if (state.status == CommandStatus::Pending &&
-            !capabilities.nativeIdempotency) {
-            transition(
-                state,
-                CommandStatus::Indeterminate,
-                capabilities.readAfterWriteReconciliation
-                    ? "host reconciliation required after restart"
-                    : "adapter cannot safely retry after restart"
-            );
-        }
+        if (std::binary_search(indeterminate.begin(), indeterminate.end(), id))
+            set_status(state, CommandStatus::Indeterminate);
     }
-    store->flush();
 }
 
 void RuntimeEffectsState::record_report(

@@ -131,9 +131,12 @@ private:
         const Value::Object& object,
         std::uint64_t& maximumCommandId
     );
+    void restore_attempt(const Value::Object& object);
     void restore_observed_record(const Value::Object& object);
-    void restore_observed_checkpoint(const Value::Object& states);
-    void restore_observed_values(const Value::Object& states);
+    void restore_observed_checkpoint(
+        const Value::Object& authority,
+        const Value::Object& values
+    );
     void set_status(CommandState& state, CommandStatus status);
     void transition(
         CommandState& state,

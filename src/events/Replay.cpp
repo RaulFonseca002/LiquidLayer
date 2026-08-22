@@ -1,4 +1,5 @@
 #include "liquid/events/Replay.hpp"
+#include "EventInternals.hpp"
 
 #include "liquid/events/EventStore.hpp"
 
@@ -204,6 +205,8 @@ void set_observed_authority(Value::Object& authority,
 }
 
 void restore_checkpoint(SerializedWorldState& state, const EventRecord& record) {
+    events_detail::validate_checkpoint_anchor(
+        record.payload, state.session, record.sequence);
     const Value::Object& checkpoint =
         require_object(record.payload, "checkpoint");
     const auto checkpointSession = checkpoint.find("session");
@@ -304,6 +307,10 @@ SerializedWorldState ReplayProjector::project(
             set_observed_authority(state.observedAuthority, record);
             break;
         case EventType::Checkpoint:
+            if (index != 0 && checkpoint_payload(state) != record.payload) {
+                throw EventStoreError(
+                    "checkpoint does not match projected event history");
+            }
             restore_checkpoint(state, record);
             break;
         case EventType::FrameStarted:
@@ -351,6 +358,8 @@ SerializedWorldState ReplayProjector::project(
         case EventType::ScriptExecuted:
             state.scripts.push_back(record);
             break;
+        default:
+            throw EventStoreError("unknown replay event type");
         }
 
         state.replayPosition = record.sequence;

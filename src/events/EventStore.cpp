@@ -7,7 +7,8 @@
 namespace liquid {
 
 RecordId EventStore::checkpoint(Value serializedProjection, Durability durability) {
-    events_detail::validate_checkpoint_projection(serializedProjection);
+    events_detail::validate_checkpoint_session(
+        serializedProjection, metadata().session);
     return append(EventData{
         EventType::Checkpoint,
         1,
