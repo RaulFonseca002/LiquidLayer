@@ -2,11 +2,20 @@
 
 ## Status
 
-**Audit status:** headless implementation audit complete on 13 August 2026; S6 and remote release gates remain.
+**Audit status:** Complete — 22 August 2026. The final regression-first audit
+and three independent re-reviews found no unresolved critical, high, or medium
+issue.
 
-**Implementation status:** M1-M6 and finalization stages S0-S5 are complete locally. The headless track also contains the approved lifecycle scripting extension: ordered Input/Behavior/Decision phases, revisioned observations, bidirectional effect projection, and transactional Lua lifecycle callbacks. Solid is not final until the full-loop Scope evidence in S6 and the remote S7 release gates close.
+**Implementation status:** Solid v0.1.0 is complete through M1-M6 and
+finalization S0-S7. The release includes ordered Input/Behavior/Decision
+phases, revisioned observations, bidirectional effect projection, atomic Lua
+lifecycle transactions, durable records/replay, effects/feedback, simulation,
+packaging, and the optional Solid Scope instrument.
 
-This document is the accepted Solid completion audit and release gate. On 12 August 2026 the owner approved the full 0.1.0 framework completion contract and the S0-S7 implementation order. M1-M6 remain complete foundations; Stage 2 Liquid work is deferred until S7 closes.
+This document is the accepted and completed Solid v0.1.0 audit. On 12 August
+2026 the owner approved the framework completion contract and S0-S7 order; on
+22 August 2026 the final local Linux release matrix closed those gates. Stage
+2 Liquid is now limited to research and approval of its first milestone.
 
 All implementation follows the single-branch `main` workflow in `AGENTS.md`. Since 17 August 2026 the engine and Solid Scope share `main`; the former `experiment/stage2` track was fast-forwarded into `main` and retired. Engine/tool separation is enforced by the CMake packaging boundary, and the remote CI matrix on `main` is a standing gate.
 
@@ -99,7 +108,7 @@ The following checks passed during this audit:
 | Whitespace/error residue check | Passed |
 
 This table is the historical pre-finalization baseline. It did not prove the
-effect/feedback path or durable replay; the current S0-S5 evidence in
+effect/feedback path or durable replay; the later S0-S7 evidence in
 `docs/TRACEABILITY.md` does.
 
 ## Completion Matrix
@@ -180,14 +189,13 @@ The first two experiment findings are resource/safety defects and should precede
 
 ## Documentation and Operational Polish
 
-The repository documentation contains historical snapshots that are useful but no longer read as historical:
+The initial audit found useful historical snapshots that read as current. Those documentation findings are now closed:
 
-- `CURRENT_STATE_EVALUATION.md` still says M6 is current, reports 12/12 tests, and contains pre-M6 line references. Add a prominent superseded/historical banner pointing here rather than rewriting its dated evidence.
-- `M6_TEST_BASE.md` still says it is under final owner acceptance even though M6 is done.
-- `Liquid_Concepts_and_Architecture.md` says M1-M5 complete and M6 current; it also calls a speculative broad folder tree “current intended” and lists some already-settled decisions as open.
-- `DEVELOPMENT_TRACKING.md` and `AGENTS.md` call Stage 1 complete and Stage 2 planning current, which conflicts with the completion definition in this audit.
-- the minimal repository trees in operational documents omit the current app scenario, trace, visualizer, and focused tests or fail to label themselves as the headless baseline.
-- `ARTICLE_NOTES.md` stops its implemented-stage narrative around early Solid work; it should be labeled historical or extended through M6.
+- `CURRENT_STATE_EVALUATION.md` and `M6_TEST_BASE.md` retain their dated evidence behind prominent historical banners.
+- `Liquid_Concepts_and_Architecture.md` reflects M1-M6 and the S6 lifecycle/effect loop, and labels its broad folder tree as conceptual rather than current inventory.
+- `DEVELOPMENT_TRACKING.md` and `AGENTS.md` agree that S0-S7 is complete and Stage 2 is in research/milestone definition only.
+- operational repository maps include the current scenario, trace, visualizer, and focused regression surfaces at the appropriate directory level.
+- `ARTICLE_NOTES.md` is explicitly labeled as historical research notes rather than implementation guidance.
 
 Documentation authority after owner approval should be:
 
@@ -197,11 +205,15 @@ Documentation authority after owner approval should be:
 4. `Liquid_Concepts_and_Architecture.md` for canonical architecture and future direction;
 5. dated evaluations and article notes as historical/non-normative evidence.
 
-Release-facing polish candidates also remain: a top-level README with supported build/run/test instructions, CI for strict/Release/sanitizer gates, a license if the engine remains intended for reuse, and a milestone-to-test traceability table. Namespace normalization, broad catch cleanup, test-framework migration, and small expiration-overload duplication are lower-priority debt and should not be mixed into the effect contract.
+Release-facing polish is complete: the top-level README, private license
+notice, strict/Release/sanitizer/coverage/fuzz gates, compatibility/support
+contracts, and milestone-to-test traceability all describe v0.1.0. Remaining
+low-priority cleanup is not a release blocker and must not reopen the frozen
+effect contract without a new approved milestone.
 
 ## Decisions Resolved
 
-The approved contract resolves the audit questions: Solid includes the full command/feedback/observed-state loop; queued feedback is applied at the next frame's opening feedback phase; desired, outstanding, reported, and observed state remain distinct; session, command, record, intent, and world identities have explicit non-aliasing sequence rules; component and intent data use bounded canonical `Value` snapshots behind trusted codecs; deterministic retry and reconciliation belong to the core contract; replay includes generic projection and host-assisted re-execution; Solid Scope is Unix-only and requires real-browser coverage; all release-polish items named in S5-S7 are gates.
+The approved contract resolves the audit questions: Solid includes the full command/feedback/observed-state loop; queued feedback is applied at the next frame's opening feedback phase; desired, outstanding, reported, and observed state remain distinct; session, command, record, intent, and world identities have explicit non-aliasing sequence rules; component and intent data use bounded canonical `Value` snapshots behind trusted codecs; deterministic retry and reconciliation belong to the core contract; replay includes generic projection and host-assisted re-execution; and Solid Scope is an optional Unix-only internal instrument. Its dependency-free self-test and bounded bridge are release evidence, while general browser compatibility and a repeat manual browser matrix are explicitly outside v0.1.0 support.
 
 ## Approved Ordered Completion Milestones
 
@@ -233,9 +245,15 @@ Ship static Core/Lua/Simulation targets, vendored Lua 5.4.8, source/install cons
 
 Make Scope exercise the complete lifecycle through the one Solid Runtime: lifecycle script callbacks, automatic intent resolution, simulated adapter commands and feedback, authoritative component projection, and trace v2 lanes. Close the accepted bridge, process, schema, playback, platform-gating, browser, and performance findings without adding a second Runtime or a Playwright/Node dependency.
 
+**Status:** Complete — 22 August 2026, with the internal-instrument browser
+support boundary recorded in `docs/SUPPORT.md`.
+
 ### S7 — Final audit and release candidate
 
 Repeat regression-first closure until no critical, high, or medium findings remain; document or fix lows; complete the traceability matrix and release gates.
+
+**Status:** Complete — 22 August 2026. Evidence is recorded in
+`docs/TRACEABILITY.md`.
 
 ## Final Acceptance Gate
 
@@ -271,4 +289,12 @@ Unless the owner explicitly changes the boundary, the following remain outside t
 
 M1-M6 are internally coherent, comprehensively tested for their stated contracts, and clean under the current strict, Release, and sanitizer gates. Solid Scope correctly observes that core without changing it. No critical defect was found that reopens a completed M1-M6 milestone.
 
-The headless audit found no unresolved critical, high, or medium finding after the S1-S5 regression loop. The canonical implementation is landed on `main` and the supported-platform CI matrix passes there (first full green run 17 August 2026; the Solid Scope Python bridge regressions are Linux-verified by documented boundary). The remaining work is the Unix-only Solid Scope S6 contract without semantic divergence and the final S7 audit. The support boundaries documented for local filesystems, private/no-license use, and optional components remain intentional v0.1 limits.
+The completed audit found no unresolved critical, high, or medium finding after
+the S1-S7 regression loops and three independent final re-reviews. The local
+Linux GCC/Clang, ASan/UBSan, TSan, coverage, fuzz, package-consumer, Scope,
+bridge, and browser-self-test matrix is green; the last full remote
+Linux/macOS/Windows matrix remains the green 17 August 2026 run. By owner
+decision, no additional remote run or cross-browser claim is required for the
+v0.1.0 tag. Solid is complete. The local-filesystem, private/no-license,
+optional-component, and internal Scope browser boundaries remain intentional
+v0.1 limits; Stage 2 begins with research and milestone approval, not code.

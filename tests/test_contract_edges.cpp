@@ -24,13 +24,14 @@ liquid::EventStoreMetadata metadata() {
     return result;
 }
 
-liquid::Value checkpoint_projection() {
-    liquid::Value::Object projection;
-    for (const char* field : {
-             "topology", "components", "intents", "commands", "observed_state"}) {
-        projection.emplace(field, liquid::Value(liquid::Value::Object{}));
-    }
-    return liquid::Value(std::move(projection));
+liquid::Value checkpoint_projection(
+    liquid::RecordId replayPosition = liquid::RecordId{0},
+    liquid::SessionId session = liquid::SessionId{1}
+) {
+    liquid::SerializedWorldState state;
+    state.session = session;
+    state.replayPosition = replayPosition;
+    return liquid::ReplayProjector{}.checkpoint_payload(state);
 }
 
 liquid::EffectReport applied_report() {
@@ -436,18 +437,23 @@ TEST_CASE("feedback and memory store cover empty moved and capacity states") {
     REQUIRE_THROWS_AS(full.append(EventData{
         EventType::FrameCompleted, 1, Value()}), EventStoreError);
 
-    const std::array<const char*, 5> fields{
-        "topology", "components", "intents", "commands", "observed_state"};
-    for (const char* omitted : fields) {
-        Value::Object incomplete;
-        for (const char* field : fields) {
-            if (std::string(field) != omitted)
-                incomplete.emplace(field, Value(Value::Object{}));
-        }
-        REQUIRE_THROWS_AS(store.checkpoint(Value(std::move(incomplete))),
-                          EventStoreError);
+    for (const char* field : {
+             "session", "replay_position", "topology", "components", "intents",
+             "commands", "observed_state", "observed_authority", "configuration",
+             "handle_generations", "session_events", "configuration_events",
+             "frame_events", "resolutions", "command_attempts", "reports",
+             "observations", "failures", "recoveries", "retentions", "scripts"}) {
+        Value::Object incomplete = checkpoint_projection().as_object();
+        incomplete.erase(field);
+        REQUIRE_THROWS_AS(
+            store.checkpoint(Value(std::move(incomplete))), EventStoreError);
     }
     REQUIRE_THROWS_AS(store.checkpoint(Value()), EventStoreError);
+
+    Value::Object wrongSession = checkpoint_projection().as_object();
+    wrongSession.insert_or_assign("session", Value(std::uint64_t{2}));
+    REQUIRE_THROWS_AS(
+        store.checkpoint(Value(std::move(wrongSession))), EventStoreError);
 
     MemoryEventStore retentionFull(metadata(), 1);
     const RecordId only = retentionFull.checkpoint(checkpoint_projection());
@@ -538,6 +544,8 @@ TEST_CASE("replay rejects malformed records and checkpoint fields") {
     EventRecord future = record(1, EventType::SessionStarted, Value());
     future.version = 2;
     expect_project_error({future});
+    expect_project_error({record(
+        1, static_cast<EventType>(999), Value())});
     expect_project_error({
         record(std::numeric_limits<std::uint64_t>::max(),
                EventType::SessionStarted, Value()),
@@ -584,21 +592,21 @@ TEST_CASE("replay rejects malformed records and checkpoint fields") {
     for (const char* field : {
              "observed_authority", "configuration", "handle_generations"}) {
         Value::Object checkpoint = checkpoint_projection().as_object();
-        checkpoint.emplace(field, Value("not-object"));
+        checkpoint.insert_or_assign(field, Value("not-object"));
         expect_project_error({record(1, EventType::Checkpoint,
                                      Value(std::move(checkpoint))) });
     }
 
     Value::Object wrongSession = checkpoint_projection().as_object();
-    wrongSession.emplace("session", Value(std::uint64_t{2}));
+    wrongSession.insert_or_assign("session", Value(std::uint64_t{2}));
     expect_project_error({record(1, EventType::Checkpoint,
                                  Value(std::move(wrongSession))) });
     Value::Object typedSession = checkpoint_projection().as_object();
-    typedSession.emplace("session", Value("wrong-type"));
+    typedSession.insert_or_assign("session", Value("wrong-type"));
     expect_project_error({record(1, EventType::Checkpoint,
                                  Value(std::move(typedSession))) });
     Value::Object typedPosition = checkpoint_projection().as_object();
-    typedPosition.emplace("replay_position", Value("wrong-type"));
+    typedPosition.insert_or_assign("replay_position", Value("wrong-type"));
     expect_project_error({record(1, EventType::Checkpoint,
                                  Value(std::move(typedPosition))) });
 
@@ -607,15 +615,15 @@ TEST_CASE("replay rejects malformed records and checkpoint fields") {
              "resolutions", "command_attempts", "reports", "failures",
              "recoveries", "retentions", "scripts"}) {
         Value::Object checkpoint = checkpoint_projection().as_object();
-        checkpoint.emplace(field, Value("not-array"));
+        checkpoint.insert_or_assign(field, Value("not-array"));
         expect_project_error({record(1, EventType::Checkpoint,
                                      Value(std::move(checkpoint))) });
     }
 
     const auto expect_checkpoint_event_error = [&](Value encodedEvent) {
         Value::Object checkpoint = checkpoint_projection().as_object();
-        checkpoint.emplace("frame_events",
-                           Value(Value::Array{std::move(encodedEvent)}));
+        checkpoint.insert_or_assign(
+            "frame_events", Value(Value::Array{std::move(encodedEvent)}));
         expect_project_error({record(1, EventType::Checkpoint,
                                      Value(std::move(checkpoint))) });
     };

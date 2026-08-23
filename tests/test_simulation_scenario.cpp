@@ -1,6 +1,10 @@
 #include "SimulationScenario.hpp"
 
 #include <cassert>
+
+#ifdef NDEBUG
+#error "test_simulation_scenario requires active assertions"
+#endif
 #include <cstdint>
 #include <optional>
 #include <stdexcept>

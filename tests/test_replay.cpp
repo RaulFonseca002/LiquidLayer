@@ -50,10 +50,12 @@ TEST_CASE("test_replay") {
         1,
         entry("intent:1", Value(std::uint64_t{70}))
     });
+    Value::Object commandSnapshot;
+    commandSnapshot.emplace("status", Value("pending"));
     store.append(EventData{
         EventType::CommandIssued,
         1,
-        entry("command:1", Value("pending"))
+        entry("command:1", Value(std::move(commandSnapshot)))
     });
     store.append(EventData{
         EventType::ObservedStateChanged,
@@ -120,20 +122,28 @@ TEST_CASE("test_replay") {
         1,
         entry("frame:3", Value("completed"))
     });
+    Value::Object handleGenerations;
+    handleGenerations.emplace("behavior:4", Value(std::uint64_t{9}));
+    store.append(EventData{
+        EventType::ConfigurationChanged,
+        1,
+        entry("handle_generations", Value(std::move(handleGenerations)))
+    });
 
     ReplayProjector projector;
     SerializedWorldState projected = projector.project(
         store.metadata(), store.read_all());
     REQUIRE(projected.session == store.metadata().session);
-    REQUIRE(projected.replayPosition == RecordId{17});
+    REQUIRE(projected.replayPosition == RecordId{18});
     REQUIRE(projected.topology.at("Light:office").as_string() == "registered");
     REQUIRE(projected.components.at("Light:office").as_unsigned_integer() == 70);
     REQUIRE(projected.intents.empty());
-    REQUIRE(projected.commands.at("command:1").as_string() == "pending");
+    REQUIRE(projected.commands.at("command:1").as_object().at("status").as_string() ==
+            "pending");
     REQUIRE(projected.observedState.at("Light:office").as_unsigned_integer() == 70);
     REQUIRE(projected.configuration.at("feedback_mode").as_string() == "deferred");
     REQUIRE(projected.sessionEvents.size() == 1);
-    REQUIRE(projected.configurationEvents.size() == 1);
+    REQUIRE(projected.configurationEvents.size() == 2);
     REQUIRE(projected.frameEvents.size() == 3);
     REQUIRE(projected.resolutions.size() == 1);
     REQUIRE(projected.commandAttempts.size() == 1);
@@ -142,9 +152,6 @@ TEST_CASE("test_replay") {
     REQUIRE(projected.recoveries.size() == 1);
     REQUIRE(projected.retentions.size() == 1);
     REQUIRE(projected.scripts.size() == 1);
-    projected.handleGenerations.emplace(
-        "behavior:4", Value(std::uint64_t{9}));
-
     const RecordId checkpointSequence =
         store.checkpoint(projector.checkpoint_payload(projected));
     store.retain_from_checkpoint(checkpointSequence);

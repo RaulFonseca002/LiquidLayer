@@ -6,6 +6,11 @@ The normative rules are in [ADAPTER_CONTRACT.md](ADAPTER_CONTRACT.md). This guid
 
 Give every route a stable identity and declare whether the destination provides native idempotency and read-after-write reconciliation. Keep transport credentials and protocol clients inside the adapter; never pass `World`, registries, component slots, or component pointers across this boundary.
 
+Registration becomes visible only after Runtime durably appends the route's
+complete status batch. Capability discovery or durable append failure leaves
+the route absent and retryable; it must not partially alter reconciliation
+state or disturb an already registered route.
+
 ## Dispatch safely
 
 1. Accept the immutable `EffectCommand` selected by Runtime.

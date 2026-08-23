@@ -224,6 +224,18 @@ public:
     );
 
     template <typename Component>
+    IntentId create_intent(
+        IntentRegistry::Transaction& transaction,
+        BehaviorId owner,
+        ComponentType<Component> type,
+        ComponentSlotId slot,
+        IntentLifetime lifetime,
+        Component value,
+        IntentPriority priority = IntentPriority::Medium,
+        IntentName name = {}
+    );
+
+    template <typename Component>
     const ComponentIntent<Component>& typed_intent(ComponentType<Component> type, IntentId id) const;
 
     template <typename Component>
@@ -459,6 +471,40 @@ IntentId Coordinator::create_intent(BehaviorId owner, ComponentType<Component> t
         std::move(encodedValue),
         std::move(name)
     );
+}
+
+template <typename Component>
+IntentId Coordinator::create_intent(
+    IntentRegistry::Transaction& transaction,
+    BehaviorId owner,
+    ComponentType<Component> type,
+    ComponentSlotId slot,
+    IntentLifetime lifetime,
+    Component value,
+    IntentPriority priority,
+    IntentName name
+) {
+    if (!state.behaviors.exists(owner))
+        throw std::runtime_error("behavior id not found");
+
+    (void)component_type(type);
+    if (!state.components.resolve_component(type, slot))
+        throw std::runtime_error("component slot not found");
+    if (!state.components.can_write(type, owner, slot))
+        throw std::runtime_error("component write access denied");
+
+    liquid::Value encodedValue;
+    if (state.components.has_component_codec(type)) {
+        encodedValue = state.components.encode_component(type, value);
+    } else {
+#ifndef LIQUID_ENABLE_LEGACY_INTERNAL_COMPONENT_REGISTRATION
+        throw std::logic_error("component codec is required for intents");
+#endif
+    }
+
+    return state.intents.create(
+        transaction, owner, type, slot, lifetime, std::move(value), priority,
+        std::move(encodedValue), std::move(name));
 }
 
 template <typename Component>

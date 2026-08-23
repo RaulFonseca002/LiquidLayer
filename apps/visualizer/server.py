@@ -178,14 +178,26 @@ class SolidScopeServer(ThreadingHTTPServer):
         self.csrf_token = secrets.token_urlsafe(32)
         self._children: set[subprocess.Popen[bytes]] = set()
         self._children_lock = threading.Lock()
+        self._closing = False
         self.run_slots = threading.BoundedSemaphore(MAX_CONCURRENT_RUNS)
         if ":" in address[0]:
             self.address_family = socket.AF_INET6
         super().__init__(address, SolidScopeHandler)
 
-    def register_child(self, child: subprocess.Popen[bytes]) -> None:
+    def start_child(self, arguments: list[str]) -> subprocess.Popen[bytes] | None:
         with self._children_lock:
+            if self._closing:
+                return None
+            child = subprocess.Popen(
+                arguments,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+                start_new_session=True,
+            )
             self._children.add(child)
+            return child
 
     def unregister_child(self, child: subprocess.Popen[bytes]) -> None:
         with self._children_lock:
@@ -193,6 +205,7 @@ class SolidScopeServer(ThreadingHTTPServer):
 
     def terminate_children(self) -> None:
         with self._children_lock:
+            self._closing = True
             children = tuple(self._children)
         for child in children:
             _terminate_and_reap(child)
@@ -272,7 +285,10 @@ class SolidScopeHandler(BaseHTTPRequestHandler):
         values = self.headers.get_all("Origin", failobj=[])
         if len(values) != 1:
             raise RequestProblem(403, "a same-origin Origin header is required")
-        parsed = urlsplit(values[0])
+        try:
+            parsed = urlsplit(values[0])
+        except ValueError as error:
+            raise RequestProblem(403, "invalid Origin header") from error
         if (
             parsed.scheme != "http"
             or parsed.path not in ("", "/")
@@ -296,7 +312,10 @@ class SolidScopeHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         try:
             self._require_host()
-            parsed = urlsplit(self.path)
+            try:
+                parsed = urlsplit(self.path)
+            except ValueError as error:
+                raise RequestProblem(400, "invalid request target") from error
             selftest_query = (
                 parsed.path in {"/", "/index.html"} and parsed.query == "selftest=1"
             )
@@ -348,7 +367,11 @@ class SolidScopeHandler(BaseHTTPRequestHandler):
             lengths = self.headers.get_all("Content-Length", failobj=[])
             if len(lengths) != 1:
                 raise RequestProblem(411, "one Content-Length header is required")
-            if not lengths[0].isascii() or not lengths[0].isdigit():
+            if (
+                not lengths[0].isascii()
+                or not lengths[0].isdigit()
+                or len(lengths[0]) > len(str(MAX_BODY_BYTES))
+            ):
                 raise RequestProblem(400, "invalid Content-Length")
             content_length = int(lengths[0], 10)
             if content_length > MAX_BODY_BYTES:
@@ -419,18 +442,13 @@ class SolidScopeHandler(BaseHTTPRequestHandler):
             child: subprocess.Popen[bytes] | None = None
             try:
                 try:
-                    child = subprocess.Popen(
-                        arguments,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        shell=False,
-                        start_new_session=True,
-                    )
+                    child = self.server.start_child(arguments)
                 except OSError as error:
                     self._write_transport_failure(0, f"could not start trace process: {error}")
                     return
-                self.server.register_child(child)
+                if child is None:
+                    self._write_transport_failure(0, "trace server is shutting down")
+                    return
                 self._stream_child(child)
             finally:
                 if child is not None:
@@ -645,27 +663,54 @@ class SolidScopeHandler(BaseHTTPRequestHandler):
         return sequence, name in TERMINAL_EVENTS, event
 
 
+def _process_group_exists(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _signal_process_group(child: subprocess.Popen[bytes], requested: signal.Signals) -> None:
+    try:
+        os.killpg(child.pid, requested)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        if child.poll() is None:
+            child.send_signal(requested)
+
+
+def _wait_for_process_group(child: subprocess.Popen[bytes], timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while _process_group_exists(child.pid) and time.monotonic() < deadline:
+        if child.poll() is None:
+            try:
+                child.wait(timeout=min(0.05, max(0.0, deadline - time.monotonic())))
+            except subprocess.TimeoutExpired:
+                pass
+        else:
+            time.sleep(0.01)
+    return not _process_group_exists(child.pid)
+
+
 def _terminate_and_reap(child: subprocess.Popen[bytes]) -> None:
-    if child.poll() is not None:
+    _signal_process_group(child, signal.SIGTERM)
+    if not _wait_for_process_group(child, 0.5):
+        _signal_process_group(child, signal.SIGKILL)
+        _wait_for_process_group(child, 1.0)
+    if child.poll() is None:
         try:
-            child.wait(timeout=0)
-        except subprocess.TimeoutExpired:
+            child.kill()
+        except ProcessLookupError:
             pass
-        return
     try:
-        os.killpg(child.pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        child.terminate()
-    try:
-        child.wait(timeout=0.5)
-        return
+        child.wait(timeout=1.0)
     except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(child.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
         child.kill()
-    child.wait(timeout=1.0)
+        child.wait(timeout=1.0)
 
 
 def make_server(
@@ -708,12 +753,21 @@ def main(arguments: list[str] | None = None) -> int:
     address = server.server_address
     display_host = f"[{address[0]}]" if ":" in address[0] else address[0]
     print(f"Solid Scope: http://{display_host}:{address[1]}/", flush=True)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def request_shutdown(_signum: int, _frame: object) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, request_shutdown)
     try:
         server.serve_forever(poll_interval=0.1)
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        try:
+            server.server_close()
+        finally:
+            signal.signal(signal.SIGTERM, previous_sigterm)
     return 0
 
 

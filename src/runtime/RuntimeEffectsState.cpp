@@ -1,4 +1,5 @@
 #include "RuntimeInternals.hpp"
+#include "liquid/events/Replay.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -62,6 +63,98 @@ RuntimeEffectsState::RuntimeEffectsState(RuntimeOptions options)
     } else {
         restore(existing);
     }
+}
+
+SessionId RuntimeEffectsState::session_id() const {
+    return session;
+}
+
+FeedbackSender RuntimeEffectsState::feedback_sender() const {
+    return feedback.sender;
+}
+
+std::optional<Value> RuntimeEffectsState::observed_state(
+    const AdapterRoute& route,
+    const EffectTarget& target
+) const {
+    const auto found = observed.find(target_key(route, target));
+    if (found == observed.end())
+        return std::nullopt;
+    return found->second;
+}
+
+std::optional<CommandStatus> RuntimeEffectsState::command_status(
+    CommandId commandId
+) const {
+    const auto found = commands.find(commandId.value);
+    if (found == commands.end())
+        return std::nullopt;
+    return found->second.status;
+}
+
+void RuntimeEffectsState::reconcile_indeterminate(
+    const AdapterRoute& route,
+    const EffectTarget& target,
+    Value observedValue
+) {
+    observedValue.validate();
+    const auto key = target_key(route, target);
+    const auto latest = latestByTarget.find(key);
+    if (latest == latestByTarget.end() ||
+        commands.at(latest->second).status != CommandStatus::Indeterminate) {
+        throw std::logic_error("target has no indeterminate command to reconcile");
+    }
+
+    auto& state = commands.at(latest->second);
+    const CommandStatus reconciledStatus =
+        state.command.effect.desiredValue == observedValue
+        ? CommandStatus::Applied
+        : CommandStatus::Failed;
+    const Value reconciledObserved = observedValue;
+    std::uint64_t revisionValue = state.command.commandId.value;
+    const auto priorRevision = observedRevisions.find(key);
+    if (priorRevision != observedRevisions.end()) {
+        if (priorRevision->second.value == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("state revision exhausted");
+        revisionValue = priorRevision->second.value + 1;
+    }
+    const StateRevision revision{revisionValue};
+    EffectReport terminalReport{
+        session,
+        state.command.commandId,
+        route,
+        target,
+        reconciledStatus,
+        reconciledStatus == CommandStatus::Applied
+            ? std::optional<Value>{observedValue}
+            : std::nullopt,
+        "host reconciliation",
+        state.command.issuedAtMs,
+        revision
+    };
+    transition(state, reconciledStatus, "host reconciliation");
+    commit_authoritative(
+        route,
+        target,
+        reconciledObserved,
+        revision,
+        state.command.commandId.value);
+    state.terminalReport = std::move(terminalReport);
+    flush();
+}
+
+RecordId RuntimeEffectsState::checkpoint() {
+    ReplayProjector projector;
+    const auto records = store->read_all();
+    const SerializedWorldState state = projector.project(store->metadata(), records);
+    const RecordId checkpointId = store->checkpoint(
+        projector.checkpoint_payload(state), Durability::Durable);
+    flush();
+    return checkpointId;
+}
+
+void RuntimeEffectsState::flush() {
+    store->flush();
 }
 
 void RuntimeEffectsState::prune_terminal_history(bool reserveCommandSlot) {
@@ -133,28 +226,56 @@ void RuntimeEffectsState::record_status(const CommandState& state, const std::st
 void RuntimeEffectsState::register_adapter(std::shared_ptr<EffectAdapter> adapter) {
     if (!adapter)
         throw std::invalid_argument("adapter ownership must not be null");
-    const auto key = adapter->route().value();
-    if (!adapters.emplace(key, adapter).second)
-        throw std::invalid_argument("adapter route is already registered");
+    const AdapterRoute route = adapter->route();
     const AdapterCapabilities capabilities = adapter->capabilities();
-    for (auto& [id, state] : commands) {
+    const auto key = route.value();
+    if (adapters.contains(key))
+        throw std::invalid_argument("adapter route is already registered");
+
+    std::vector<std::uint64_t> indeterminate;
+    std::vector<EventData> statusEvents;
+    indeterminate.reserve(commands.size());
+    statusEvents.reserve(commands.size());
+    for (const auto& [id, state] : commands) {
         static_cast<void>(id);
-        if (state.command.effect.adapterRoute != adapter->route())
+        if (state.command.effect.adapterRoute != route)
+            continue;
+        if (state.status == CommandStatus::Pending &&
+            !capabilities.nativeIdempotency) {
+            const std::string reason = capabilities.readAfterWriteReconciliation
+                ? "host reconciliation required after restart"
+                : "adapter cannot safely retry after restart";
+            indeterminate.push_back(id);
+            statusEvents.push_back(EventData{
+                EventType::CommandStatusChanged,
+                1,
+                event_payload({
+                    {"key", Value{"command:" + std::to_string(id)}},
+                    {"value", Value{status_name(CommandStatus::Indeterminate)}},
+                    {"command_id", Value{id}},
+                    {"status", Value{status_name(CommandStatus::Indeterminate)}},
+                    {"reason", Value{reason}}
+                })
+            });
+        }
+    }
+
+    adapters.emplace(key, adapter);
+    try {
+        store->append_batch(statusEvents, Durability::Durable);
+    } catch (...) {
+        adapters.erase(key);
+        throw;
+    }
+
+    for (auto& [id, state] : commands) {
+        if (state.command.effect.adapterRoute != route)
             continue;
         state.adapter = adapter;
         state.capabilities = capabilities;
-        if (state.status == CommandStatus::Pending &&
-            !capabilities.nativeIdempotency) {
-            transition(
-                state,
-                CommandStatus::Indeterminate,
-                capabilities.readAfterWriteReconciliation
-                    ? "host reconciliation required after restart"
-                    : "adapter cannot safely retry after restart"
-            );
-        }
+        if (std::binary_search(indeterminate.begin(), indeterminate.end(), id))
+            set_status(state, CommandStatus::Indeterminate);
     }
-    store->flush();
 }
 
 void RuntimeEffectsState::record_report(

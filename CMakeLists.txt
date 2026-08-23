@@ -46,7 +46,7 @@ endif()
 set(lua_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lua-5.4.8")
 
 if(LIQUID_BUILD_LUA)
-add_library(liquid_lua STATIC
+add_library(liquid_lua OBJECT
     ${lua_SOURCE_DIR}/src/lapi.c
     ${lua_SOURCE_DIR}/src/lauxlib.c
     ${lua_SOURCE_DIR}/src/lbaselib.c
@@ -93,9 +93,6 @@ elseif(UNIX)
     target_compile_definitions(liquid_lua PRIVATE LUA_USE_LINUX)
 endif()
 
-if(UNIX)
-    target_link_libraries(liquid_lua PUBLIC ${CMAKE_DL_LIBS} m)
-endif()
 endif()
 
 add_library(liquid
@@ -134,7 +131,11 @@ add_library(liquid_lua_component STATIC
 )
 target_compile_features(liquid_lua_component PUBLIC cxx_std_20)
 target_include_directories(liquid_lua_component PRIVATE ${lua_SOURCE_DIR}/src)
-target_link_libraries(liquid_lua_component PUBLIC liquid PRIVATE liquid_lua)
+target_sources(liquid_lua_component PRIVATE $<TARGET_OBJECTS:liquid_lua>)
+target_link_libraries(liquid_lua_component PUBLIC liquid)
+if(UNIX)
+    target_link_libraries(liquid_lua_component PRIVATE ${CMAKE_DL_LIBS} m)
+endif()
 add_library(Liquid::Lua ALIAS liquid_lua_component)
 endif()
 
@@ -365,7 +366,7 @@ endif()
 set(Liquid_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/Liquid")
 install(TARGETS liquid EXPORT LiquidCoreTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 if(LIQUID_BUILD_LUA)
-install(TARGETS liquid_lua_component liquid_lua EXPORT LiquidLuaTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(TARGETS liquid_lua_component EXPORT LiquidLuaTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(DIRECTORY include/liquid/scripting
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/liquid)
 install(FILES third_party/lua-5.4.8/LICENSE
@@ -527,6 +528,11 @@ if(BUILD_TESTING)
                 liquid_scope_scenario Catch2::Catch2WithMain)
             target_compile_definitions(${scope_test} PRIVATE
                 LIQUID_ENABLE_LEGACY_INTERNAL_COMPONENT_REGISTRATION)
+            if(MSVC)
+                target_compile_options(${scope_test} PRIVATE /UNDEBUG)
+            else()
+                target_compile_options(${scope_test} PRIVATE -UNDEBUG)
+            endif()
             liquid_apply_sanitizers(${scope_test})
             liquid_apply_thread_sanitizer(${scope_test})
             liquid_apply_warnings(${scope_test})
@@ -575,8 +581,10 @@ if(BUILD_TESTING)
                     --output-on-failure
                 COMMAND "${LIQUID_GCOVR_EXECUTABLE}"
                     --root "${CMAKE_CURRENT_SOURCE_DIR}"
+                    --object-directory "${CMAKE_CURRENT_BINARY_DIR}"
                     --filter "${CMAKE_CURRENT_SOURCE_DIR}/include/liquid"
                     --filter "${CMAKE_CURRENT_SOURCE_DIR}/src"
+                    --merge-mode-functions separate
                     --exclude-unreachable-branches
                     --exclude-throw-branches
                     --gcov-ignore-parse-errors negative_hits.warn_once_per_file

@@ -58,4 +58,4 @@ if prior then
 end
 ```
 
-The runtime validates the complete callback bundle before applying its cancellations and proposals. Duplicate live names and duplicate names inside one bundle are rejected deterministically.
+The runtime validates the complete callback bundle before applying its cancellations and proposals. Commit is one transaction: cancellation, replacement, and every new typed intent either all become visible or the exact prior intent records, indexes, sequences, and pool capacity are restored. Codec errors, capacity exhaustion, and forbidden structural topology changes during commit therefore cannot leave a partial bundle. Duplicate live names and duplicate names inside one bundle are rejected deterministically.

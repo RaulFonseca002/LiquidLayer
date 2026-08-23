@@ -2,6 +2,10 @@
 #include "SimulationTrace.hpp"
 
 #include <cassert>
+
+#ifdef NDEBUG
+#error "test_simulation_trace requires active assertions"
+#endif
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -127,6 +131,43 @@ int main() {
     assert(traceLines[33].find("\"final_brightness\":30") != std::string::npos);
     assert(traceLines[33].find("\"commands_issued\":2") != std::string::npos);
     assert(traceLines[33].find("\"reports_applied\":2") != std::string::npos);
+
+    const std::filesystem::path retryScript = directory / "retry.lua";
+    {
+        std::ofstream output(retryScript, std::ios::binary);
+        output << "function on_start(frame)\n"
+                  "    access.Light.officeLight.propose({ name = 'stable', value = { brightness = 70 }, lifetime = 'persistent' })\n"
+                  "end\n";
+        assert(output);
+    }
+    Invocation silent = invoke({
+        "--initial-brightness", "10", "--script", retryScript.string(),
+        "--silent", "true",
+        "--frame-time", "0", "--frame-time", "250", "--frame-time", "500",
+        "--frame-time", "1000", "--frame-time", "2000", "--frame-time", "4000",
+        "--frame-time", "30000"
+    });
+    assert(silent.status == static_cast<int>(ExitCode::Success));
+    std::size_t attempts = 0;
+    std::size_t retries = 0;
+    std::size_t timeouts = 0;
+    for (const std::string& line : lines(silent.output)) {
+        if (line.find("\"event\":\"command_attempt\"") != std::string::npos) {
+            ++attempts;
+            assert(line.find("\"command_id\":1") != std::string::npos);
+        } else if (line.find("\"event\":\"command_retry\"") !=
+                   std::string::npos) {
+            ++retries;
+            assert(line.find("\"command_id\":1") != std::string::npos);
+        } else if (line.find("\"event\":\"command_timeout\"") !=
+                   std::string::npos) {
+            ++timeouts;
+            assert(line.find("\"command_id\":1") != std::string::npos);
+        }
+    }
+    assert(attempts == 6);
+    assert(retries == 5);
+    assert(timeouts == 1);
 
     const std::filesystem::path failureScript = directory / "failure.lua";
     {

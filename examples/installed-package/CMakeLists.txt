@@ -22,6 +22,11 @@ endif()
 find_package(Liquid 0.1 CONFIG REQUIRED
     COMPONENTS ${liquid_consumer_components})
 
+if(TARGET Liquid::liquid_lua)
+    message(FATAL_ERROR
+        "Liquid package exposed the private vendored Lua target")
+endif()
+
 get_target_property(liquid_core_include_dirs
     Liquid::Core INTERFACE_INCLUDE_DIRECTORIES)
 foreach(liquid_core_include_dir IN LISTS liquid_core_include_dirs)

@@ -62,6 +62,43 @@ inline bool active(CommandStatus status) {
 
 class RuntimeEffectsState {
 public:
+    explicit RuntimeEffectsState(RuntimeOptions options);
+
+    SessionId session_id() const;
+    FeedbackSender feedback_sender() const;
+    std::optional<Value> observed_state(
+        const AdapterRoute& route,
+        const EffectTarget& target
+    ) const;
+    std::optional<CommandStatus> command_status(CommandId commandId) const;
+    void reconcile_indeterminate(
+        const AdapterRoute& route,
+        const EffectTarget& target,
+        Value observedValue
+    );
+    RecordId checkpoint();
+    void flush();
+    void prune_terminal_history(bool reserveCommandSlot = false);
+    void append(EventType type, Value payload,
+                Durability durability = Durability::Buffered);
+    void register_adapter(std::shared_ptr<EffectAdapter> adapter);
+    void validate_effects(std::span<const ResolvedEffect> effects) const;
+    void process_feedback(
+        std::vector<EffectReport>& accepted,
+        std::vector<ExternalObservation>& observations
+    );
+    bool report_is_authoritative(const EffectReport& report) const;
+    bool observation_is_authoritative(
+        const ExternalObservation& observation
+    ) const;
+
+    void retry_due(std::uint64_t now, std::vector<EffectReport>& accepted);
+    std::optional<EffectCommand> issue(const ResolvedEffect& effect,
+                                       std::uint64_t now,
+                                       std::vector<EffectReport>& accepted);
+    void clear_desire(const AdapterRoute& route, const EffectTarget& target);
+
+private:
     struct CommandState {
         EffectCommand command;
         std::shared_ptr<EffectAdapter> adapter;
@@ -89,34 +126,28 @@ public:
     std::size_t maximumDeferredReports;
     std::uint64_t nextCommand = 1;
 
-    explicit RuntimeEffectsState(RuntimeOptions options);
-
     void restore(std::span<const EventRecord> records);
     void restore_command(
         const Value::Object& object,
         std::uint64_t& maximumCommandId
     );
+    void restore_attempt(const Value::Object& object);
     void restore_observed_record(const Value::Object& object);
-    void restore_observed_checkpoint(const Value::Object& states);
-    void restore_observed_values(const Value::Object& states);
-
-    void prune_terminal_history(bool reserveCommandSlot = false);
+    void restore_observed_checkpoint(
+        const Value::Object& authority,
+        const Value::Object& values
+    );
     void set_status(CommandState& state, CommandStatus status);
     void transition(
         CommandState& state,
         CommandStatus status,
         const std::string& reason = {}
     );
-    void append(EventType type, Value payload,
-                Durability durability = Durability::Buffered);
     void record_status(const CommandState& state, const std::string& reason = {});
-    void register_adapter(std::shared_ptr<EffectAdapter> adapter);
     void record_report(
         const EffectReport& report,
         const char* disposition
     );
-    void validate_effects(std::span<const ResolvedEffect> effects) const;
-
     void commit_authoritative(
         const AdapterRoute& route,
         const EffectTarget& target,
@@ -129,22 +160,8 @@ public:
         const ExternalObservation& observation,
         std::vector<ExternalObservation>& accepted
     );
-    void process_feedback(
-        std::vector<EffectReport>& accepted,
-        std::vector<ExternalObservation>& observations
-    );
-    bool report_is_authoritative(const EffectReport& report) const;
-    bool observation_is_authoritative(
-        const ExternalObservation& observation
-    ) const;
-
     void dispatch(CommandState& state, std::uint64_t now,
                   std::vector<EffectReport>& accepted);
-    void retry_due(std::uint64_t now, std::vector<EffectReport>& accepted);
-    std::optional<EffectCommand> issue(const ResolvedEffect& effect,
-                                       std::uint64_t now,
-                                       std::vector<EffectReport>& accepted);
-    void clear_desire(const AdapterRoute& route, const EffectTarget& target);
 };
 
 }

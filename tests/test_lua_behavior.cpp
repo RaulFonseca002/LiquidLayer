@@ -47,6 +47,119 @@ LuaComponentCodec<Light> light_codec() {
     };
 }
 
+TEST_CASE("Lua intent commit blocks reentrant intent mutation from host codecs") {
+    World world;
+    IntentId keep;
+    bool reenter = false;
+    ComponentCodec<Light> codec{
+        [&](const Light& light) {
+            if (reenter) {
+                world.destroy_intent(keep);
+                throw std::runtime_error("codec failed after reentrant mutation");
+            }
+            return Value(Value::Object{
+                {"brightness", Value(std::int64_t{light.brightness})}
+            });
+        },
+        [](const Value& value) {
+            return Light{static_cast<int>(
+                value.as_object().at("brightness").as_signed_integer())};
+        }
+    };
+    const auto lightType = world.register_component<Light>(
+        "tests.ReentrantLight", 1, std::move(codec));
+    world.add_component(lightType, "officeLight", Light{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        lightType, behavior, "officeLight", ComponentAccessMode::Write);
+    const ComponentSlotId slot =
+        world.get_components(lightType, behavior).at("officeLight");
+    keep = world.create_intent(
+        behavior,
+        lightType,
+        slot,
+        IntentLifetime::persistent(),
+        Light{10},
+        IntentPriority::Low,
+        "keep");
+
+    LuaBehaviorRunner runner;
+    runner.expose_component(lightType, "Light", light_codec());
+    reenter = true;
+    const LuaExecutionResult result = runner.execute(world, behavior, 0, R"(
+        access.Light.officeLight.propose({
+            name = "replacement",
+            value = { brightness = 20 }
+        })
+    )");
+
+    REQUIRE(result.status == LuaExecutionStatus::CommitFailed);
+    REQUIRE(!result.succeeded());
+    REQUIRE(world.intent_exists(keep));
+    REQUIRE(world.intent_named(behavior, "keep") == keep);
+    REQUIRE(world.typed_intent(lightType, keep).value.brightness == 10);
+}
+
+TEST_CASE("Lua intent commit blocks reentrant world topology mutation") {
+    World world;
+    BehaviorId victim;
+    bool reenter = false;
+    ComponentCodec<Light> codec{
+        [&](const Light& light) {
+            if (reenter) {
+                world.destroy_behavior(victim);
+                throw std::runtime_error("codec failed after topology mutation");
+            }
+            return Value(Value::Object{
+                {"brightness", Value(std::int64_t{light.brightness})}
+            });
+        },
+        [](const Value& value) {
+            return Light{static_cast<int>(
+                value.as_object().at("brightness").as_signed_integer())};
+        }
+    };
+    const auto lightType = world.register_component<Light>(
+        "tests.ReentrantTopologyLight", 1, std::move(codec));
+    world.add_component(lightType, "officeLight", Light{10});
+    world.add_component(lightType, "victimLight", Light{30});
+
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        lightType, behavior, "officeLight", ComponentAccessMode::Write);
+    victim = world.create_behavior();
+    world.grant_component_access(
+        lightType, victim, "victimLight", ComponentAccessMode::ReadWrite);
+    const BehaviorAccessRevision victimRevision =
+        world.behavior_access_revision(victim);
+    const ComponentSlotId victimSlot =
+        world.get_components(lightType, victim).at("victimLight");
+    const IntentId keep = world.create_intent(
+        victim,
+        lightType,
+        victimSlot,
+        IntentLifetime::persistent(),
+        Light{30},
+        IntentPriority::Low,
+        "victim-keep");
+
+    LuaBehaviorRunner runner;
+    runner.expose_component(lightType, "Light", light_codec());
+    reenter = true;
+    const LuaExecutionResult result = runner.execute(world, behavior, 0, R"(
+        access.Light.officeLight.propose({ value = { brightness = 20 } })
+    )");
+
+    REQUIRE(result.status == LuaExecutionStatus::CommitFailed);
+    REQUIRE(world.behavior_exists(victim));
+    REQUIRE(world.behavior_access_revision(victim) == victimRevision);
+    REQUIRE(world.behavior_signature(victim).test(lightType.id));
+    REQUIRE(world.can_write_component(lightType, victim, "victimLight"));
+    REQUIRE(world.intent_exists(keep));
+    REQUIRE(world.intent_named(victim, "victim-keep") == keep);
+    REQUIRE(world.typed_intent(lightType, keep).value.brightness == 30);
+}
+
 TEST_CASE("Lua execution evidence records source by default and supports hash-only mode") {
     const auto execute = [](bool fullSource) {
         EventStoreMetadata metadata;
@@ -627,6 +740,60 @@ TEST_CASE("test_lua_behavior") {
         assert_status(result, LuaExecutionStatus::CommitFailed);
         REQUIRE(result.createdIntents.empty());
         REQUIRE(world.intent_count(behavior) == MaxIntents - 1);
+    }
+
+    {
+        World world;
+        auto lightType = world.register_component<Light>("Light");
+        world.add_component(lightType, "officeLight", Light{10});
+        BehaviorId behavior = world.create_behavior();
+        world.grant_component_access(
+            lightType, behavior, "officeLight", ComponentAccessMode::Write);
+        ComponentSlotId slot =
+            world.get_components(lightType, behavior).at("officeLight");
+        const IntentId keep = world.create_intent(
+            behavior,
+            lightType,
+            slot,
+            IntentLifetime::persistent(),
+            Light{10},
+            IntentPriority::Low,
+            "keep"
+        );
+        for (std::size_t i = 1; i < MaxIntents; ++i) {
+            world.create_intent(
+                behavior,
+                lightType,
+                slot,
+                IntentLifetime::persistent(),
+                Light{static_cast<int>(i % 101)},
+                IntentPriority::Low
+            );
+        }
+
+        LuaBehaviorRunner runner;
+        runner.expose_component(lightType, "Light", light_codec());
+        LuaExecutionResult result = runner.execute_lifecycle(
+            world, behavior, 0, 0, 0, true, {}, R"(
+                function on_start(frame)
+                    solid.cancel(solid.owned_intents.keep)
+                    access.Light.officeLight.propose{
+                        name = "replacement_one",
+                        value = {brightness = 90}
+                    }
+                    access.Light.officeLight.propose{
+                        name = "replacement_two",
+                        value = {brightness = 80}
+                    }
+                end
+            )"
+        );
+
+        assert_status(result, LuaExecutionStatus::CommitFailed);
+        REQUIRE(result.createdIntents.empty());
+        REQUIRE(world.intent_count(behavior) == MaxIntents);
+        REQUIRE(world.intent_exists(keep));
+        REQUIRE(world.intent_named(behavior, "keep") == keep);
     }
 
     {

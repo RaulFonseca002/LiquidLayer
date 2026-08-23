@@ -4,7 +4,9 @@ All notable framework changes will be recorded here. Dates are release dates, no
 
 ## Unreleased
 
-### Planned for 0.1.0
+No changes yet.
+
+## 0.1.0 — 2026-08-22
 
 - Private C++20 static framework components `Liquid::Core`, `Liquid::Lua`, and `Liquid::Simulation`.
 - World-bound generational handles, bounded canonical values, codec-backed components, and immutable encoded intents.
@@ -28,5 +30,12 @@ All notable framework changes will be recorded here. Dates are release dates, no
 - Maintainability decomposition of the runtime and file event store into
   cohesive translation units under `src/runtime/` and `src/events/`, with
   no public API or behavior change.
-
-The 0.1.0 entry will be dated only after the traceability matrix and release gates are complete.
+- Atomic lifecycle-script cancellation/proposal bundles, including rollback
+  under capacity, codec, and topology-reentry failures.
+- Strict whole-stream checkpoint, retention, and restore validation, including
+  retained command-attempt progress and retry-safe store replacement.
+- Retry-safe adapter registration: routes become visible only after their
+  complete registration evidence is durably appended.
+- Hardened Scope loopback request validation and Unix process-group cleanup,
+  plus release-build assertion guards and a package export limited to the
+  documented `Core`, `Lua`, and `Simulation` targets.

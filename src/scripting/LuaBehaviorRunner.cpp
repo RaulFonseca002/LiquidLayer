@@ -1339,6 +1339,7 @@ struct LuaBehaviorRunner::Impl {
 
         std::vector<IntentId> created;
         std::vector<IntentId> cancelled;
+        std::unique_ptr<detail::IntentRegistry::Transaction> transaction;
         try {
             std::set<IntentName> pendingNames;
             for (const auto& pending : context.pending) {
@@ -1357,26 +1358,25 @@ struct LuaBehaviorRunner::Impl {
                     throw std::runtime_error("owned intent changed before Lua transaction commit");
             }
 
+            transaction = world.begin_intent_transaction(
+                context.pendingCancellations.size());
             cancelled.reserve(context.pendingCancellations.size());
             for (IntentId id : context.pendingCancellations) {
-                world.destroy_intent(id);
+                world.cancel_intent_transaction(*transaction, id);
                 cancelled.push_back(id);
             }
             created.reserve(context.pending.size());
             for (const auto& pending : context.pending)
-                created.push_back(pending->commit(world, owner));
+                created.push_back(pending->commit(world, owner, *transaction));
+            world.commit_intent_transaction(*transaction);
         } catch (const std::exception& exception) {
-            for (auto id = created.rbegin(); id != created.rend(); ++id) {
-                if (world.intent_exists(*id))
-                    world.destroy_intent(*id);
-            }
+            if (transaction)
+                world.rollback_intent_transaction(*transaction);
 
             return failure_result(LuaExecutionStatus::CommitFailed, exception.what());
         } catch (...) {
-            for (auto id = created.rbegin(); id != created.rend(); ++id) {
-                if (world.intent_exists(*id))
-                    world.destroy_intent(*id);
-            }
+            if (transaction)
+                world.rollback_intent_transaction(*transaction);
 
             return failure_result(LuaExecutionStatus::CommitFailed, "unknown intent commit error");
         }

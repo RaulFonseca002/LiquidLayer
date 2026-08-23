@@ -267,8 +267,11 @@ std::size_t World::run_systems(
 
 void World::ensure_structural_mutation_allowed() const {
     ensure_owner_thread();
-    if (systemsRunning || coordinator.system_membership_dispatching())
-        throw std::logic_error("world topology cannot change during system dispatch");
+    if (systemsRunning || coordinator.system_membership_dispatching() ||
+        intentTransactionActive) {
+        throw std::logic_error(
+            "world topology cannot change during dispatch or intent commit");
+    }
 }
 
 void World::ensure_owner_thread() const {
@@ -324,6 +327,37 @@ void World::record_script_execution(ScriptExecutionEvidence evidence) {
     if (scriptExecutions.size() >= maximumBufferedScriptExecutions)
         throw std::length_error("script execution evidence capacity exceeded");
     scriptExecutions.push_back(std::move(evidence));
+}
+
+std::unique_ptr<detail::IntentRegistry::Transaction>
+World::begin_intent_transaction(std::size_t cancellationCount) {
+    ensure_owner_thread();
+    auto transaction = state.intents.begin_transaction(cancellationCount);
+    intentTransactionActive = true;
+    return transaction;
+}
+
+void World::cancel_intent_transaction(
+    detail::IntentRegistry::Transaction& transaction,
+    IntentId id
+) {
+    ensure_owner_thread();
+    state.intents.cancel(transaction, id);
+}
+
+void World::commit_intent_transaction(
+    detail::IntentRegistry::Transaction& transaction
+) {
+    ensure_owner_thread();
+    state.intents.commit(transaction);
+    intentTransactionActive = false;
+}
+
+void World::rollback_intent_transaction(
+    detail::IntentRegistry::Transaction& transaction
+) noexcept {
+    state.intents.rollback(transaction);
+    intentTransactionActive = false;
 }
 
 const std::vector<TopologyMutation>& World::topology_mutations() const {
