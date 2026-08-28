@@ -2,7 +2,12 @@
 
 This file is the working context for Codex or other coding agents inside the `liquid` repository.
 
-Keep this file short and operational. Do not turn it into a full design document. `docs/LIQUID_STAGE2_PLAN.md` contains the Stage 2 architecture and roadmap.
+Keep this file short and operational. Do not turn it into a full design document.
+
+Read these Stage 2 references when working on L0:
+
+- `docs/LIQUID_STAGE2_PLAN.md` — architecture, roadmap, research, deferred decisions;
+- `docs/LIQUID_L0_IMPLEMENTATION_SPEC.md` — implementation-level L0 semantics and test expectations.
 
 ---
 
@@ -37,32 +42,35 @@ L0 extends the existing `Liquid::Lua` authoring boundary. It does not introduce 
 Required concepts:
 
 - a bounded `LuaValueSchema` matching the current `LuaValue` vocabulary;
-- optional short bounded trusted descriptions for component/field meaning or units, without creating a domain ontology;
-- trusted model-facing schema metadata registered beside `LuaComponentCodec<T>` bindings;
-- an immutable `LuaCapabilityManifest` built from trusted binding metadata, the target behavior's current permissions, exact host-generated Lua access paths, copied readable values, current monotonic `now_ms`, and a stable Lua authoring-contract/version marker;
+- distinct trusted `readSchema` and `writeSchema` metadata for model-visible `LuaComponentCodec<T>` bindings because `encode` and `decode` are independent executable directions;
+- a convenience symmetric metadata path for ordinary codecs whose read/write shapes are the same;
+- optional short bounded trusted descriptions for binding/field meaning or units, without creating a domain ontology;
+- an immutable `LuaCapabilityManifest` built through the existing `LuaBehaviorRunner` binding boundary from trusted metadata, the target behavior's current permissions, exact host-generated Lua access paths, copied readable values, current monotonic `now_ms`, and a stable Lua authoring-contract/version marker;
 - deterministic schema/manifest validation and bounded diagnostics;
 - current `World` permission, host-bound Lua closures, and the real codec decode remain final authority.
 
-V1 schema vocabulary stays intentionally small:
+V1 schema vocabulary stays intentionally small and maps to exact `LuaValue` storage kinds:
 
-- Boolean;
-- signed Integer with optional bounds;
-- finite Number with optional bounds;
-- String with explicit bounds and optional finite enum;
-- Array with one item schema and count bounds;
-- Object with named required/optional fields and unknown fields rejected by default.
+- Boolean -> `bool`;
+- Integer -> `std::int64_t`;
+- Number -> finite `double` (no implicit Integer/Number coercion in L0);
+- String -> `std::string` with explicit bounds and optional finite enum;
+- Array -> `LuaValue::Array` with one item schema and count bounds;
+- Object -> `LuaValue::Table` with named required/optional fields and unknown fields rejected by default.
 
-Do not add null, bytes, unions, `$ref`, regex constraints, arbitrary JSON Schema, or provider-specific schema keywords unless a real current Lua codec proves they are required.
+Do not add null, bytes, numeric coercion, unions, `$ref`, regex constraints, arbitrary JSON Schema, or provider-specific schema keywords unless a real current Lua codec proves they are required.
 
-Permission projection must be exact:
+Permission projection for a fully model-described binding must be exact:
 
-| Permission | readable snapshot | writable schema |
-|---|---:|---:|
-| Read | yes | no |
-| Write | no | yes |
-| ReadWrite | yes | yes |
+| `World` permission | Manifest read side | Manifest write side |
+|---|---|---|
+| Read | `readSchema` + copied value | absent |
+| Write | absent | `writeSchema` |
+| ReadWrite | `readSchema` + copied value | `writeSchema` |
 
 A snapshot is data, never authority. The host generates the exact Lua path expression; models must not reconstruct/escape component paths.
+
+The current empty-array rule is part of the authoring contract: host-provided empty arrays keep their private Array marker, while literal `{}` is an empty Object. Do not invent an empty-array helper in L0 without a real codec requirement.
 
 Trusted registration descriptions are bounded metadata. Dynamic runtime/user/device strings remain data and must not be promoted into trusted instructions by future renderers.
 
@@ -90,6 +98,7 @@ DEVELOPMENT_TRACKING.md
 Liquid_Concepts_and_Architecture.md
 README.md
 docs/LIQUID_STAGE2_PLAN.md
+docs/LIQUID_L0_IMPLEMENTATION_SPEC.md
 docs/LIFECYCLE_SCRIPTING.md   # only if the public Lua contract changes
 ```
 
@@ -99,16 +108,20 @@ Small filename/API adjustments inside this existing `scripting/` boundary are al
 
 At minimum test:
 
-- valid and invalid schemas for every V1 kind;
+- valid and invalid schemas for every exact V1 kind;
+- Integer/Number non-coercion;
 - range, required-field, unknown-field, nesting, collection, string, enum, node, and description bounds;
-- a real `Light{brightness}` Lua codec with declared `0..100` shape;
-- every emitted readable snapshot validates against its registered schema;
+- a symmetric `Light{brightness}` Lua codec with declared `0..100` read/write shape;
+- an intentionally asymmetric test codec proving `encode`/read and `decode`/write schemas are not conflated;
+- every emitted readable snapshot validates against its `readSchema`;
+- representative write-schema values are exercised against the real codec decoder;
 - Read/Write/ReadWrite manifest projection matches current `World` permission exactly;
 - access revocation/removal is reflected by a rebuilt manifest;
-- unusual names receive exact safe host-generated Lua path expressions;
+- unusual names receive exact safe host-generated Lua path expressions and resolve in the real sandbox;
 - manifest captures `now_ms` and the authoring-contract/version marker deterministically;
+- current empty-array semantics remain accurately documented/tested;
 - manifest data contains copies, never raw slots/pointers/registries;
-- the existing schema-less `expose_component(...)` path remains source-compatible;
+- the existing schema-less `expose_component(...)` path remains source-compatible and executable but absent from model discovery;
 - model schema/description metadata cannot enlarge actual Lua/World authority;
 - strict full suite remains green.
 
@@ -147,7 +160,7 @@ Important consequences:
 - An external model may be stateless between calls, but current runtime truth must be reconstructed from Liquid/Solid rather than trusted from agent memory.
 - Provider-side structured/constrained output is useful generation assistance, never an authority boundary; Liquid/Solid validate locally.
 
-See `docs/LIQUID_STAGE2_PLAN.md` for the rationale, acceptance scenarios, rejected alternatives, research, and provisional L1+ ladder.
+See `docs/LIQUID_STAGE2_PLAN.md` for the rationale and provisional roadmap. For L0 implementation details, `docs/LIQUID_L0_IMPLEMENTATION_SPEC.md` wins over older brainstorm wording.
 
 ---
 
@@ -252,7 +265,8 @@ The project owner implements substantive core `.cpp` logic unless explicitly ask
 - Lua never receives `World`, registries, storage, raw slots/pointers, or arbitrary owner selection.
 - Named proposals, cancellations, and watches validate/commit transactionally; failed bundles leave no partial mutation.
 - `solid.owned_intents` exposes only opaque snapshots of the executing behavior's own named live intents.
-- The executable authoring contract is in `docs/LIFECYCLE_SCRIPTING.md` and the current scripting headers. Stage 2 model-facing metadata/roadmap is in `docs/LIQUID_STAGE2_PLAN.md`.
+- `LuaComponentCodec<T>::encode` and `decode` are separate executable directions; do not assume symmetric model-facing shapes.
+- The executable authoring contract is in `docs/LIFECYCLE_SCRIPTING.md` and current scripting headers. Stage 2 model-facing metadata/roadmap is in the two Liquid Stage 2 docs above.
 
 ### Evidence
 
