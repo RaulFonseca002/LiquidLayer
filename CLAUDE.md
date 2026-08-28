@@ -1,19 +1,25 @@
 # CLAUDE.md — Liquid Development Context (Claude Code)
 
-**Read `AGENTS.md` in this folder first and follow it exactly.** It is the single authoritative operational context for all coding agents in this repository (project snapshot, current milestone, branch workflow, Solid core rules, coding role, development style). It is deliberately kept as one source of truth and is updated at every milestone transition — do not duplicate its content here, and if this file and `AGENTS.md` ever disagree, `AGENTS.md` wins.
+**Read `AGENTS.md` in this folder first and follow it exactly.** It is the authoritative operational context for coding agents in this repository. Do not duplicate the active milestone here; if this file and `AGENTS.md` disagree, `AGENTS.md` wins.
 
-Documentation authority order (from the accepted completion audit):
+Documentation authority order:
 
-1. `AGENTS.md` — operational scope and branch ownership
-2. `DEVELOPMENT_TRACKING.md` — approved milestone status and order
-3. `COMPLETE_SOLID.md` — accepted Solid completion audit and gates
-4. `Liquid_Concepts_and_Architecture.md` — canonical architecture; section 13 is the canonical Lua script-authoring contract
-5. `CURRENT_STATE_EVALUATION.md`, `M6_TEST_BASE.md`, `ARTICLE_NOTES.md` — historical / non-normative evidence
+1. `AGENTS.md` — active milestone, allowed scope, branch/coding-agent rules
+2. `DEVELOPMENT_TRACKING.md` — approved milestone status, order, and evidence
+3. `docs/LIQUID_STAGE2_PLAN.md` — detailed Stage 2 architecture, L0 contract, provisional roadmap, research, and rejected alternatives
+4. `COMPLETE_SOLID.md` — accepted Solid v0.1 completion audit and gates
+5. focused `docs/*.md` contracts — public API, lifecycle scripting, threading, effects, events, replay, security/support
+6. `Liquid_Concepts_and_Architecture.md` — conceptual Solid/Liquid/Liquid Layer architecture and vocabulary
+7. dated evaluations/article/test-base notes — historical/non-normative evidence
+
+The executable Lua lifecycle contract is `docs/LIFECYCLE_SCRIPTING.md` plus the current public scripting headers. Do not rely on an old section number from `Liquid_Concepts_and_Architecture.md`.
 
 Claude-specific reminders:
 
-- The project owner implements core `.cpp` logic unless they explicitly ask otherwise. Default to generating headers, tests, CMake, boilerplate, compile fixes, and documentation updates. Never silently implement large runtime behavior.
-- Before changing code, run `git branch --show-current` and follow the single-branch workflow in `AGENTS.md`: all work starts on a short-lived branch from `origin/main` and lands on `main` with the strict suite and the remote CI matrix green. `experiment/stage2` is retired; engine/tool separation is the CMake packaging boundary, not a branch.
-- Baby steps: small failing test first, smallest complete change, then the strict full suite (`-DLIQUID_ENABLE_STRICT_WARNINGS=ON -DLIQUID_WARNINGS_AS_ERRORS=ON`, `ctest --output-on-failure`).
-- Do not add dependencies (no Playwright, Node, frameworks). The visualizer is a dev instrument tested manually and with dependency-free Python/JS tests.
-- Do not push, open PRs, or merge shared branches without the owner's explicit approval.
+- Current milestone is L0 — Model-Facing Lua Capability Contract. Do not implement provisional L1-L6 work unless `AGENTS.md` is updated to approve it.
+- The project owner implements substantive core `.cpp` logic unless they explicitly ask otherwise. Default to headers, tests, CMake, small boilerplate, compile fixes, and documentation. Never silently implement large runtime behavior.
+- Before changing implementation code, run `git branch --show-current` and follow the workflow in `AGENTS.md`: short-lived branch from current `origin/main`, smallest complete change, strict suite before merge.
+- Baby steps: tests first, minimal public shape, then implementation. Prefer existing Solid primitives over new abstractions.
+- Do not add model/provider, Hermes, MCP, HTTP, prompt-orchestration, hardware, or other dependencies in L0.
+- Generated/model-facing data never gets direct `World`, registry, slot, pointer, or cross-thread Runtime authority.
+- Do not push, open PRs, or merge shared branches without the owner's explicit approval for that action.
