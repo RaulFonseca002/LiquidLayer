@@ -12,7 +12,7 @@
 ![Liquid runtime flow: intent proposals are resolved, dispatched through bounded adapters, and committed only after validated feedback.](docs/liquid-runtime-flow.svg)
 
 > [!IMPORTANT]
-> **Current status:** Solid v0.1.0 is complete. All S0-S7 finalization gates closed on 22 August 2026. Stage 2 **Liquid** is now active with **L0 — Model-Facing Lua Capability Contract** as the first implementation milestone. L0 adds machine-readable schema/capability discovery to the existing Lua boundary; it does not add a model provider, MCP server, or application-specific adaptive policy.
+> **Current status:** Solid v0.1.0 is complete. All S0-S7 finalization gates closed on 22 August 2026. Stage 2 **Liquid** is now active with **L0 — Model-Facing Lua Capability Contract** as the first implementation milestone. L0 will add machine-readable schema/capability discovery to the existing Lua boundary; it does not add a model provider, MCP server, or application-specific adaptive policy.
 
 | Deterministic core | Model-facing boundary | Evidence-first effects |
 | --- | --- | --- |
@@ -84,7 +84,7 @@ The target relationship is:
                     deterministic authority
 ```
 
-Current L0 remains inside the existing `Liquid::Lua` boundary. It adds a bounded model-visible `LuaValueSchema` and immutable capability manifest built from trusted Lua bindings, current behavior permissions, exact host-generated access paths, and copied readable snapshots.
+Current L0 remains inside the existing `Liquid::Lua` boundary. The approved milestone will add a bounded model-visible `LuaValueSchema` and immutable capability manifest built from trusted Lua bindings, current behavior permissions, exact host-generated access paths, copied readable snapshots, current monotonic time, and a stable authoring-contract marker.
 
 No L0 code calls an LLM. No new provider/agent/MCP dependency is introduced. See [the Stage 2 implementation plan](docs/LIQUID_STAGE2_PLAN.md) for milestones, acceptance scenarios, rejected alternatives, and current external research.
 
@@ -119,10 +119,10 @@ The checkout vendors the official Catch2 v3.8.1 amalgamation and Lua 5.4.8, so t
 
 Solid v0.1 is packaged through three static targets so consumers pay only for the boundary they need:
 
-| Component | CMake target | Use it for |
+| Component | CMake target | Current use |
 | --- | --- | --- |
 | Core | `Liquid::Core` | Values, world/runtime APIs, effects, event stores, and replay |
-| Lua | `Liquid::Lua` | Capability-bounded Lua behavior execution and Stage 2 Lua authoring metadata |
+| Lua | `Liquid::Lua` | Capability-bounded Lua behavior execution; L0 is planned to extend this same target with model-facing authoring metadata |
 | Simulation | `Liquid::Simulation` | In-memory adapters and deterministic scenarios |
 
 L0 intentionally extends `Liquid::Lua` rather than creating a speculative new exported target.
@@ -184,7 +184,7 @@ The Core coverage target enforces at least **90% line** and **80% branch** cover
 | `EventStore` | Durable or in-memory runtime records |
 | Replay | Projection and host-assisted verification from recorded evidence |
 | Lua | Fresh sandbox snapshots and allowlisted proposal capabilities |
-| Liquid model-facing API | Bounded copied capability/runtime views and later proposal/evaluation operations |
+| Liquid model-facing API | Stage 2 bounded copied capability/runtime views and later proposal/evaluation operations |
 | MCP (future) | Transport adapter over the Liquid semantic API; not the domain model |
 
 Runtime state is confined to its owner thread. Only the bounded feedback sender is intended for concurrent producers. Future model/network surfaces must cross this boundary through immutable copies and owner-controlled mutation requests rather than calling `World`/`Runtime` from arbitrary threads.
