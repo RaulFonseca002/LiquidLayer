@@ -1,846 +1,611 @@
-# Liquid Concepts and Architecture v0.3
+# Liquid Concepts and Architecture v0.4
 
-**Status:** Living baseline after Solid v0.1.0 completion
-**Scope:** Conceptual architecture, vocabulary, and accepted design direction  
-**Project:** Liquid Layer  
-**Engine / framework:** Liquid  
-**Current development stage:** Stage 2 Liquid research and milestone definition
-**Date:** August 2026
+**Status:** Accepted Stage 2 architecture baseline  
+**Date:** 28 August 2026  
+**Foundation:** Solid v0.1.0  
+**Current implementation milestone:** L0 — Model-Facing Lua Capability Contract
 
 ---
 
 ## 1. Purpose
 
-This document defines the conceptual baseline for the Liquid project as implementation progresses. It captures the current architectural direction, vocabulary, stage names, and design boundaries agreed so far.
+This document defines the conceptual architecture and vocabulary of the Liquid project after completion of Solid v0.1.0 and the Stage 2 design discussion.
 
-This is not the coding guide. The coding guide will define C++ conventions, header structure, file responsibilities, call order, tests, and implementation-level contracts.
+It answers three questions:
+
+1. what Solid already owns and must continue to own;
+2. what Liquid adds on top of Solid;
+3. what remains application policy in Liquid Layer.
+
+Implementation order, allowed files, milestone evidence, rejected alternatives, and current external research are tracked in `docs/LIQUID_STAGE2_PLAN.md`. Operational coding-agent scope is in `AGENTS.md`.
 
 ---
 
-## 2. Naming and Stages
+## 2. Project Layers
 
-The project is divided into three conceptual layers.
+### Solid
 
-| Name | Meaning | Current status |
-|---|---|---|
-| **Liquid Layer** | Final application/research project focused on adaptive smart environments for neurodivergent people. | Future project layer |
-| **Liquid** | Standalone engine/framework/runtime used by Liquid Layer and by simulation/data-collection tools. | Engine repo |
-| **Solid** | First implementation stage of Liquid: deterministic ECS-inspired runtime. | v0.1.0 complete through M1-M6 and S0-S7 |
-| **Liquid stage** | Later implementation stage: adaptive/LLM layer that creates, modifies, and explains Solid blocks. | Current research; first implementation milestone not yet approved |
+Solid is the completed deterministic execution foundation.
 
-The internal code should not overuse metaphorical names. Folder and file names should describe responsibility: `vocabulary`, `core`, `runtime`, `events`, `behaviors`, `intents`, `systems`, and `adapters`.
+It owns runtime truth: behaviors, component access, immutable intents, intent lifetime, deterministic conflict resolution, frame execution, effects, feedback, authoritative observations, durable evidence/replay, bounded Lua lifecycle execution, and simulation.
+
+Solid v0.1.0 is complete through M1-M6 and finalization S0-S7.
+
+### Liquid
+
+Liquid is the reusable **model-facing control and authoring layer over Solid**.
+
+Its purpose is to make Solid safely understandable and operable by external models or agent runtimes without making those models part of the deterministic Runtime.
+
+Liquid provides the semantic surface needed to:
+
+- discover bounded behavior capabilities;
+- author deterministic Lua behavior proposals;
+- validate and evaluate proposals;
+- inspect current runtime truth;
+- eventually perform explicitly bounded operations;
+- expose structured causal evidence;
+- later render the same surface through transports such as MCP.
+
+Liquid does **not** choose the model/provider, own a conversation loop, decide when inference should occur, or define neurodivergent-support policy.
+
+### Liquid Layer
+
+Liquid Layer is the final adaptive smart-environment application/research system.
+
+It owns meaning and application policy:
+
+- user goals and preferences;
+- sensors and environment context;
+- deciding when a model/agent should be invoked;
+- choosing local versus hosted inference;
+- choosing direct model calls versus an agent runtime;
+- conversation and user-memory policy;
+- neurodivergent-support scenarios;
+- real smart-home/device integration;
+- consent/privacy/user-facing control.
+
+Liquid Layer uses Liquid in the same way Liquid uses Solid: as a reusable lower-level tool with explicit boundaries.
 
 ---
 
 ## 3. Architectural Thesis
 
-Liquid separates adaptive reasoning from deterministic execution.
+> Liquid lets probabilistic systems understand, synthesize, inspect, and negotiate behavior while Solid remains the deterministic authority that executes, constrains, resolves, audits, and reproduces it.
 
-> Liquid uses probabilistic models to discover, negotiate, and synthesize behavior, but uses a deterministic ECS-inspired runtime to execute, constrain, audit, and reproduce behavior.
+The intended direction is:
 
-The key metaphor is:
+```text
+                           LIQUID LAYER
+          application policy / user & environment context
+           AI routing / sensors / memory / conversation
+              ┌───────────┼────────────┐
+              │           │            │
+         local model   hosted call   agent runtime
+              │           │            │
+              │           │           MCP
+              └───────────┴──────┬─────┘
+                                 ▼
+                              LIQUID
+                model-facing semantic capabilities
+                  discover / author / observe
+                  validate / evaluate / operate
+                                 │
+                                 ▼
+                               SOLID
+                deterministic execution and evidence
+```
 
-- **Solid:** behavior blocks that are explicit, deterministic, inspectable, testable, and replayable.
-- **Liquid:** adaptive reasoning that molds those blocks around the user's context, preferences, and routines.
-- **Liquid Layer:** the user-facing system where the liquid layer shapes solid behavior to reduce cognitive friction.
-
-The LLM should not be the authority that directly controls the environment every frame. It should help infer context, propose behavior, generate scripts, explain decisions, and adapt preferences. Once behavior becomes active, it should be represented as Solid runtime data and handled by deterministic systems.
-
----
-
-## 4. Why This Architecture Exists
-
-Liquid is motivated by two problems that pull in opposite directions.
-
-First, smart environments need reliability. Physical actions close to the user must be predictable, auditable, and constrained. Background behaviors should not unexpectedly override explicit user intent, and actions should be traceable to their source.
-
-Second, neurodivergent support often depends on ambiguous personal context. Difficulty starting tasks, hyperfocus, transition friction, sensory sensitivity, sleep irregularity, and routine instability are not solved well by fixed generic rules. The system needs adaptive interpretation and personalization.
-
-The architecture therefore uses a rigid deterministic runtime underneath and a flexible adaptive layer above it.
-
----
-
-## 5. Stage 1: Solid
-
-Solid is the first implementation stage. Its goal is to build the standalone deterministic engine that later systems will use.
-
-Solid includes:
-
-- a minimal custom ECS-inspired core;
-- behaviors as the main domain object instead of generic entities;
-- components as plain data;
-- systems as logic over component sets;
-- intents as first-class runtime objects;
-- intent lifetime modeled through intent data and factories;
-- deterministic frame execution;
-- event input and resolved effect output;
-- logs and replay support from the beginning;
-- simulation-friendly adapters.
-
-Solid excludes for now:
-
-- LLM behavior generation;
-- voice input;
-- custom wake words;
-- neurodivergence-specific application routines;
-- production smart-home hardware integration;
-- fine-tuning.
-
-Solid should be usable as a standalone framework for simulation and testing before Liquid Layer exists.
+A generated or approved behavior must continue to execute correctly if every LLM and agent is unavailable.
 
 ---
 
-## 6. Stage 2: Liquid
+## 4. Solid Authority Is Not Duplicated
 
-Liquid is the adaptive layer added on top of Solid.
+Liquid must compose model-facing views from Solid's existing sources of truth. It must not maintain a second runtime or a competing shadow state.
 
-Liquid may include:
+The following distinctions are fundamental:
 
-- agents that interpret user requests;
-- generation of behavior proposals;
-- translation of natural language into Solid runtime objects;
-- adaptation of preferences and thresholds;
-- explanation of why behaviors were created or resolved;
-- optional async script/LLM checks;
-- future data-driven personalization.
+```text
+live intent / desire
+    ≠ selected intent
+    ≠ dispatched command
+    ≠ adapter report
+    ≠ authoritative observed state
+```
 
-Liquid must respect Solid's constraints:
+A selected desire does not prove that an external device changed. Externally controlled component state changes only after correlated, validated authoritative feedback or a revisioned external observation.
 
-- agents do not mutate world state directly;
-- agents propose intents or behavior proposals;
-- generated behavior must be validated before activation;
-- long-running model calls are asynchronous;
-- deterministic runtime remains the final authority for execution and conflict resolution.
+Similarly:
 
----
+```text
+intent alive
+    ≠ intent currently selected
+```
 
-## 7. Stage 3: Liquid Layer
+A persistent intent that loses a conflict remains alive. If the winning competitor later disappears, the older live intent may become selected again without being recreated and without invoking a model.
 
-Liquid Layer is the final application/research system focused on neurodivergent support.
-
-Its goal is to reduce cognitive friction by preparing environments, lowering initiation cost, supporting transitions, and adapting to individual routines. Examples include:
-
-- preparing a study environment;
-- soft interruption during hyperfocus;
-- sensory-aware lighting and sound changes;
-- sleep and routine support;
-- task-start support;
-- gentle reminders that account for context.
-
-Liquid Layer should be built on top of Liquid, not mixed into the engine. The engine should remain generic enough to run simulations, games, data-collection tools, and real smart-environment adapters.
+This property is important for adaptive applications because models do not need to continuously reconstruct preferences that Solid already preserves correctly.
 
 ---
 
-## 8. Core Concepts
+## 5. Behaviors, Lua, and Intents
 
 ### Behavior
 
-A behavior is a runtime object that represents something the system may do over time. Behaviors replace the generic ECS word "entity" in the project vocabulary.
+A behavior is Solid's main runtime identity and owns the intents created on its behalf.
 
-A behavior may be persistent, temporary, scheduled, manually triggered, or generated later by an agent. Behaviors do not directly mutate external devices. They hold component state and are the owner/source for intents.
+Liquid may create, inspect, evaluate, revise, or later operate behaviors through approved boundaries, but does not replace Solid's behavior identity model.
 
-### Agent
+Do not assume an external adaptive agent itself must be a Solid behavior or carry an `Agent` component. An agent runtime may live entirely outside Solid and consume the Liquid API.
 
-An agent is a behavior-like actor driven by adaptive reasoning. Agents live conceptually beside behaviors, but they follow stricter boundaries. They may propose intents, propose new behaviors, or ask for confirmation. They do not directly mutate components or bypass registry-owned intent resolution.
+### Lua behavior source
 
-### Component
+`LuaBehaviorScript` remains the first generated executable behavior representation.
 
-A component is plain engine-side data. Components may contain physical adapter references such as a device string, but they should not contain behavior logic, virtual methods, or hidden ownership rules. Logic belongs in systems.
+This is deliberate, not temporary glue. Solid's Lua boundary was built for generated behavior:
 
-The component type is the signature that systems query for. A user/device-facing component name identifies a concrete shared component instance inside that component type.
+- the host fixes the executing behavior owner;
+- the host fixes monotonic runtime time;
+- each execution receives a fresh Lua VM;
+- persistent script state must live in ordinary codec-backed components;
+- Lua sees copied snapshots only;
+- access is typed, named, and allowlisted;
+- writable capabilities expose proposal closures rather than mutation authority;
+- lifecycle proposals/cancellations/watches commit transactionally;
+- instruction, memory, source, value, table, string, intent, cancellation, watch, and diagnostic budgets are bounded;
+- `World`, `Coordinator`, registries, storage, raw slots/pointers, OS/I/O/package/debug authority, arbitrary native execution, and owner selection are not exposed.
 
-Behaviors do not own components exclusively. Multiple behaviors may have read/write access to the same named component through access records.
+The detailed executable contract is normative in `docs/LIFECYCLE_SCRIPTING.md` and the current public scripting headers.
 
-### System
-
-A system is logic that processes matching component sets during a frame. Systems are responsible for updating lifetimes, resolving intents, advancing behavior runs, applying events, cleanup, and producing effects.
-
-The implemented Lua lifecycle system processes behaviors with `LuaBehaviorScript` components and creates or cancels intents for those behavior owners through transactional callback bundles.
+A separate declarative behavior IR is deferred until real model-generation/evaluation evidence demonstrates a problem Lua cannot solve cleanly.
 
 ### Intent
 
-An intent is a proposed component-state change or external effect. It is not immediately applied. Intents are produced by behaviors, agents, systems, events, or schedules; `IntentRegistry` resolves selected intent handles for component targets.
+An intent is an immutable proposed state/effect owned by a behavior.
 
-Intents are not components. They are immutable records with owner/source, target, value or operation, priority, lifetime metadata, and merge/conflict policy data.
+Current lifetime policies are:
 
-Examples:
+- `Persistent`;
+- `UntilTime` using monotonic session-relative `IntentTime`.
 
-- set a light brightness;
-- send a notification;
-- reserve an audio output;
-- request a simulated user prompt;
-- create a future behavior proposal.
+Explicit cancellation destroys the intent.
 
-### Lifetime
-
-Intent lifetime is modeled as intent data, not as component storage.
-
-M2 implements persistent and until-time lifetimes. Until-frame, future cancellation events, and script-based lifetime data remain future policies. M3 resolution-time cleanup happens inside `IntentRegistry::resolve(...)` because it deletes registry-owned records and updates registry-owned indexes.
-
-Normal code should use factories/bundles to create valid intent records and avoid missing required fields.
-
-### Resolved Effect
-
-A resolved effect is the typed result of applying a selected intent to its registered component codec and control policy. The current runtime turns selected encoded values into evidence-only selections, transactional internal-state changes, or adapter-facing external effects. External component state changes only after an authoritative report or revisioned observation.
-
-### Command / Adapter Action
-
-A command is the adapter-facing operation produced from a resolved effect. The adapter translates this command into an external action such as MQTT publish, CLI output, simulation state update, or future UI/voice behavior.
-
-### Frame
-
-A frame is one deterministic execution step of the runtime. The current Solid core applies queued feedback, begins the frame, expires old intents, runs Input, Behavior, and Decision systems in order, resolves every live intent target, derives and dispatches effects, records completion, and advances the frame number. These phases remain owned by the one `Runtime`; applications and tools do not reproduce the loop.
+Intent lifetime belongs to intents, not scripts. A persistent Lua behavior can create persistent or until-time intents and can replace/cancel its named intents through the existing lifecycle transaction.
 
 ---
 
-## 9. Intent Resolution Model
+## 6. Approved Scripts Are Not Silently Rewritten
 
-The current conceptual flow is:
+A change in environment context is not itself permission to mutate an approved `LuaBehaviorScript`.
+
+The system distinguishes:
 
 ```text
-Behavior / Agent components
-    -> processed by systems, events, or schedules
-    -> creates an Intent owned by a behavior or agent
-    -> Intent exists as immutable runtime data
-    -> IntentRegistry removes expired intents during resolution
-    -> IntentRegistry resolves active intents by component name and target slot
-    -> Accepted intents change component state or produce effects
-    -> ResolvedEffect is produced
-    -> Adapter turns effect into external command/action
+runtime context changed
+    -> existing approved behavior reacts through its existing code/intents
+
+behavior source should change
+    -> explicit behavior revision workflow
 ```
 
-Important rules:
+For example, a focus behavior may encode a deterministic grace period using an `UntilTime` intent or named intent replacement. The model that designed the policy does not need to supervise the timer.
 
-- Intent resolution does not ask each behavior what it wants every frame.
-- Systems, events, schedules, or agents add intents to the world, usually on behalf of a behavior or agent owner.
-- Active intents remain until lifetime metadata marks them expired or cleanup removes them.
-- Intent queues may be organized by target key, with priority per target so conflict and merge checks stay local to the affected component or effect.
-- Explicit user intent should normally outrank background behaviors.
-- LLM-based arbitration is not a default conflict policy.
-- If an LLM or script check is slow, it should run asynchronously and report back through events.
+If future evidence shows that the behavior itself should be rewritten, that is a deliberate revision that must be revalidated/evaluated and eventually reapproved.
+
+A later revision milestone must explicitly define what happens to persistent intents owned by the previous approved revision; merely replacing Lua source is not enough to prove safe lifecycle semantics.
 
 ---
 
-## 10. Component and Intent Data Design
+## 7. What Liquid Must Eventually Expose
 
-Accepted baseline:
+Liquid's target semantic surface is grouped by responsibility rather than protocol.
 
-- no C++ inheritance between components;
-- components remain plain data;
-- component storage is only a typed slot pool for one component type;
-- `ComponentRegistry` maps template component types plus global component names to storage slots;
-- behavior queries start from a component type, so storage itself does not need to know its component type;
-- behavior state, capabilities, access, and system eligibility are represented through ordinary shared named component instances plus access records;
-- access relationships connect a behavior to a named component with read/write permissions;
-- behavior-facing queries expose `name -> ComponentSlotId`, where the name is the user/device-facing key and the slot is the typed storage handle;
-- `World` is the public state boundary and owns the world-local state;
-- `Coordinator` contains the internal cross-manager behavior permission, cleanup, and signature logic;
-- trusted component resolution uses the registered component type handle plus the slot after coordinator validation;
-- intents are immutable proposal records, not component rows;
-- intent target keys should identify the component instance or external effect being changed;
-- intent queues can use per-target priority so registry resolution can inspect the strongest candidate and future merge logic can combine compatible proposals;
-- use factories or bundles so required component sets and intent fields are readable and hard to misuse;
-- use validation systems to detect invalid behavior component combinations and invalid intent records.
+### Discover
 
-Example conceptual composition:
+A caller should be able to learn, within an explicitly selected scope:
+
+- what capabilities are available;
+- exact Lua access paths;
+- current read/write permission;
+- exact model-visible value shape;
+- copied readable values;
+- relevant Lua authoring contract/version and limits.
+
+A snapshot is data, never authority.
+
+### Author
+
+A caller should be able to submit an exact Lua behavior proposal without receiving direct world mutation authority.
+
+The proposal path eventually needs:
+
+- exact source preservation;
+- prospective capability scope chosen by trusted host/application policy;
+- structural/host validation;
+- stale-scope detection;
+- explicit distinction between new behavior and revision.
+
+### Observe
+
+A caller should be able to reconstruct relevant current truth without reading registries or raw event files.
+
+A model-friendly view should eventually answer questions such as:
+
+- what behaviors are relevant/currently present;
+- which live intents a behavior owns;
+- intent target/value/name/priority/lifetime;
+- whether each intent is selected;
+- what competing intent currently wins a target;
+- what behavior owns that winner;
+- what external state is authoritatively observed;
+- what relevant command/report/evidence led to that state.
+
+The caller should not need conversational memory to know current runtime truth.
+
+### Validate and evaluate
+
+Generated behavior must be checked through trusted code.
+
+The long-term path is:
 
 ```text
-Shared component instances:
-  LightState "officeLight"
-    physicalDevice: "zigbee://office-light"
-    brightness: 40
-
-Behavior access:
-  lightTracking -> "officeLight", LightState, ReadWrite
-  focusActive -> "officeLight", LightState, Read
-
-Intent record:
-  owner BehaviorId
-  target key
-  operation/value
-  priority
-  lifetime metadata
-  merge/conflict policy
+candidate Lua
+    -> bounded schema/capability checks
+    -> real Lua sandbox validation
+    -> deterministic isolated Solid simulation/evaluation
+    -> structured evaluation evidence
 ```
 
-The scheduler/runtime does not need to know every intent policy detail. `IntentRegistry` owns resolution-time cleanup and selected-handle resolution; `Runtime` consumes those selections and deterministically applies their component control or derives external effects.
+Simulation can demonstrate mechanical validity and behavior under declared scenarios. It does not prove that an intervention is desirable for a person.
+
+### Operate
+
+Some later use cases need an agent to stop or alter live operation without rewriting source.
+
+Any such operation must be explicitly scoped and ownership-aware. Liquid must not expose generic primitives equivalent to:
+
+```text
+mutate_world
+write_any_component
+destroy_any_intent
+raw_registry_access
+execute_arbitrary_native_code
+```
+
+The exact mutation surface is deliberately deferred until read-only inspection and proposal evaluation reveal what operations are actually necessary.
+
+### Explain
+
+Liquid should expose structured causal facts, not synthesize natural-language explanations itself.
+
+A model may receive facts equivalent to:
+
+```text
+FocusSupport wants office light ON
+its persistent intent is alive but not selected
+FollowUser currently wins with OFF
+OFF was dispatched and confirmed
+observed light state is OFF
+```
+
+The caller/model can turn those facts into language.
 
 ---
 
-## 11. Repository and Folder Direction
+## 8. Model-Facing Schema and Capability Manifest
 
-Conceptual long-term engine layout (not the current repository inventory):
+The first Stage 2 gap exists because `LuaComponentCodec<T>` contains executable C++ `encode`/`decode` functions. A model cannot introspect those functions to discover required fields, ranges, or enums.
 
-```text
-liquid/
-  CMakeLists.txt
-  README.md
+Therefore model-visible Lua bindings need trusted machine-readable metadata beside the executable codec.
 
-  include/
-    liquid/
-      vocabulary/
-      core/
-      runtime/
-      events/
-      behaviors/
-      intents/
-      systems/
-      adapters/
+### `LuaValueSchema`
 
-  src/
-    core/
-    runtime/
-    events/
-    behaviors/
-    intents/
-    systems/
-    adapters/
+The Stage 2 L0 schema describes values as they actually cross the Lua boundary. It is intentionally smaller than JSON Schema.
 
-  apps/
-    liquid_sim_cli/
+V1 vocabulary:
 
-  tests/
-    vocabulary/
-    core/
-    runtime/
-    intents/
-    systems/
+- Boolean;
+- signed Integer with optional bounds;
+- finite Number with optional bounds;
+- String with explicit size bounds and optional enum;
+- Array with one item schema and count bounds;
+- Object with named required/optional fields and unknown fields rejected by default.
 
-  docs/
-    design/
-    adr/
-```
+Optional short bounded descriptions may explain component/field semantics or units. They are trusted registration metadata, not arbitrary runtime text.
 
-The `include/liquid/` prefix is used because Liquid is intended to be a reusable engine/framework, not only a private app. Public include paths should avoid generic names such as `<core/World.hpp>` or `<events/Event.hpp>`.
+Do not initially add null, bytes, unions/composition, `$ref`, recursive graphs, regex constraints, arbitrary JSON Schema, or provider-specific keywords without a real current codec requirement.
 
-Folder responsibility:
+The executable codec remains final value validation. Schema disagreement is a trusted host/configuration bug, not permission for a model to bypass the codec.
 
-| Folder | Responsibility |
-|---|---|
-| `vocabulary/` | Shared project language: IDs, time, priority, result types, names. |
-| `core/` | Minimal ECS-inspired world, component storage, behavior identity, queries. |
-| `runtime/` | Frame context, frame loop, runtime orchestration. |
-| `events/` | Events entering the runtime and event queue/log definitions. |
-| `behaviors/` | Behavior metadata, behavior components, behavior factories. |
-| `intents/` | Intent records, queues, factories/bundles, resolution policy, resolved effects. |
-| `systems/` | Systems that run over world data during frames. |
-| `adapters/` | External boundary: CLI, simulation, MQTT, future web/voice. |
+### Capability manifest
+
+A `LuaCapabilityManifest` is an immutable copied view for a specific prepared behavior/current access state.
+
+It should expose only what the caller needs to author against the real Lua boundary:
+
+- exact host-generated access expression;
+- script-visible type name and component name;
+- current permission;
+- copied readable value when allowed;
+- writable schema when allowed;
+- current monotonic time when relevant;
+- stable authoring-contract/version marker and bounded contract metadata.
+
+Permission projection is exact:
+
+| Permission | readable value | writable schema |
+| --- | ---: | ---: |
+| Read | yes | no |
+| Write | no | yes |
+| ReadWrite | yes | yes |
+
+The manifest never contains authority-bearing pointers, mutable registries, raw component slots, or a caller-selected owner.
+
+The host generates Lua paths itself, including bracket/escaping forms for unusual names. Models should copy the provided path rather than reconstruct it.
 
 ---
 
-## 12. Accepted Decisions So Far
+## 9. Model and Agent Execution Are Application Choices
 
-- Liquid Layer is the final application/research project.
-- Liquid is the standalone engine/framework/runtime.
-- Solid is the first stage: deterministic ECS-inspired runtime.
-- The engine should be its own repo, reusable by both the final application and future simulation/data-collection environments.
-- The internal folders should use technical names, not the metaphors `solid` and `liquid`.
-- We will build a minimal custom ECS instead of starting with an ECS library.
-- The domain term is behavior, not entity, where possible.
-- M1 uses simple world-local `BehaviorId` and `IntentId` handles.
-- ID recycling is allowed through registry APIs in M1.
-- Public behavior, intent, component, system, and related runtime handles are world-bound generational handles in v0.1; stale and cross-world handles are rejected and exhausted generations retire their slots.
-- Composite lookup keys may pack two 16-bit handles into one 32-bit value when that makes ownership or target lookup simpler and deterministic.
-- `IntentId` is now a global recyclable handle to an intent record; owner and target are stored on the record and indexed separately.
-- Component intent targets use `ComponentTypeId + ComponentSlotId` and are indexed as type -> slot -> intent IDs.
-- Type-specific intent records extend the common intent data with a component replacement value, without making intents into component rows.
-- Components should be plain data.
-- Component type is the system query signature; component names are the stable user/device-facing keys for shared component instances.
-- Access relationships hold permissions between behaviors and named component instances.
-- `ComponentType<T>` is the typed runtime handle returned by explicit component registration.
-- Component type lookup is template-driven in M1, following the Superposition-style manager flow.
-- `Runtime` owns the minimal deterministic frame loop, is the sole frame-phase driver, and advances a `World` using nondecreasing explicit time.
-- `World` owns `WorldState`: component, behavior, intent, and system registries plus behavior signatures. It exposes domain commands and queries but not direct system-execution, expiration-cleanup, or intent-resolution phases.
-- World-layer headers and sources live under a dedicated `world` folder because `World` is the public state boundary, while `Runtime` remains separate frame orchestration.
-- `Coordinator` operates internally on `WorldState` for behavior existence checks, cross-manager permission checks, cleanup sequencing, registry forwarding, and system membership.
-- Systems are registered by concrete type and store `Signature` requirements, behavior membership, and membership callbacks.
-- A system's initial `Signature` is supplied atomically at registration. `Coordinator` alone derives membership from signatures; the public `World` API does not provide manual membership overrides.
-- Membership callbacks are observational and should not throw or mutate topology. Membership transitions are committed before the first callback error is rethrown; callers must inspect state rather than assume an exception implies rollback.
-- M4 runs systems in deterministic registration order with `System::run(World&, FrameNumber, IntentTime)` before resolution, so system-created intents can be selected in the same frame.
-- Component, behavior, permission, and system topology is frozen during system dispatch; systems may use permitted component data and create or cancel intents.
-- A frame that lets an exception escape is not committed: its number does not advance, its partial log records the failed phase, and that `Runtime` becomes fail-stop because world mutations are not transactional yet.
-- Systems should own behavior logic.
-- Intents are immutable proposed component-state changes or effects, not component rows and not immediate actions.
-- Intent owner pools are aligned with behavior creation/destruction through `World`.
-- World-created component intents require write access and are cleaned up when their target slot or owner write access becomes invalid.
-- The completed M1 test suite uses assert binaries, deterministic stress coverage, and an opt-in AddressSanitizer/UBSan CMake mode.
-- Intent resolution is target-oriented: the runtime resolves every live component target from `ComponentName -> ComponentSlotId` into `ComponentName -> IntentId` selections.
-- A selected intent handle is decoded through its component codec and control policy, then becomes evidence, an internal component commit, or a resolved effect and adapter command.
-- Completed M2 intent lifetime is persistent or until-time; future factories/bundles should create valid intent records without missing required metadata.
-- `IntentTime` means monotonic milliseconds since the runtime session began. It is not epoch or wall-clock time.
-- Component pointers and references are borrowed views valid only until the next structural mutation of that typed storage; they are never retained across frames or exposed to Lua.
-- `World` and `Runtime` are single-thread-confined and require external synchronization if driven from more than one thread.
-- M5 Lua receives a narrow capability API: typed component name and value, host-fixed behavior owner and current time, and persistent or checked-duration lifetime. Scripts never receive `World`, coordinator/registry/storage objects, raw slots, component pointers, or owner selection.
-- Capability layouts cache only immutable host descriptions keyed by lifecycle-unique world and behavior access revisions. Every execution creates a fresh Lua state, fresh access tables, and copied component snapshots, so script mutations cannot retain or enlarge authority.
-- Writable capabilities expose only `propose(request)`. A script may buffer multiple requests for the same component, such as a temporary high-priority intent plus a persistent lower-priority fallback; access-table fields are never interpreted as authority.
-- Every Lua execution is protected by instruction, Lua-memory, buffered-host-value, string, table, source, diagnostic, and created-intent limits. Lifecycle proposals and owner-scoped cancellations commit only after successful execution; any commit failure restores the exact pre-execution intent state, and errors do not escape `System::run`.
-- The script environment omits protected-call and coroutine facilities as well as dynamic loading, package, OS, I/O, debug, raw-table, and metatable authority. This prevents hook errors from being caught in an unbounded loop and keeps the capability table as the only effect boundary.
-- Lua host closures catch C++ exceptions at the C boundary and avoid Lua long jumps across live C++ RAII objects.
-- No C++ inheritance between components in v1.
-- LLM conflict resolution is not a default mechanism.
-- LLM/script work should be async when it may be slow.
-- Replay/logging must influence the design from the start.
+The architecture separates two independent axes.
+
+### Reasoning style
+
+```text
+direct inference
+    prompt/context -> one bounded response
+
+agent execution
+    goal -> multiple model/tool turns -> result/action
+```
+
+Direct inference is appropriate for bounded classification/interpretation/extraction. Agent execution is useful for iterative tool use, repair, conversation, persistent memory, or orchestration.
+
+### Deployment
+
+Either reasoning style may use:
+
+```text
+local model
+or
+hosted model
+```
+
+Therefore all four combinations are valid:
+
+```text
+Direct + Local
+Direct + Hosted
+Agent + Local
+Agent + Hosted
+```
+
+Liquid does not decide among them. Liquid Layer does.
+
+Hermes Agent is a useful future consumer because it provides an agent loop, memory/sessions, scheduling, provider routing, direct structured plugin LLM calls, and MCP integration. It remains optional and replaceable.
+
+A model may be stateless between calls. The system must not be. Current runtime facts are reconstructed from Liquid/Solid whenever the caller needs them; agent memory may preserve meaning/history but is not runtime truth.
 
 ---
 
-## 13. Lua Behavior Scripting and Model Prompt Contract
+## 10. Reaction, Revalidation, and Application Policy
 
-This section is the canonical authoring contract for M5 behavior scripts. It is intended for human authors, tests, and future prompts that ask a model to generate Lua. If this section and an example disagree, this section wins.
+Liquid does not define what concepts such as `focus`, `sensory overload`, `task initiation`, or `sleep preparation` mean.
 
-### 13.1 Host integration model
+Liquid Layer may use sensors, context, user input, model inference, deterministic policy, or an agent to decide that an existing behavior should start, continue, stop, or be reconsidered.
 
-Lua is embedded through the Lua 5.4.8 C API. A `LuaBehaviorRunner` receives a `World`, the host-selected `BehaviorId`, the current monotonic `IntentTime`, and text source. The C++ host registers each script-visible component type with a `LuaComponentCodec<T>`:
+Whenever possible, a semantic model decision should become deterministic policy inside approved Lua/intents.
 
-```cpp
-struct Light {
-    int brightness = 0;
-};
-
-LuaComponentCodec<Light> lightCodec{
-    [](const Light& light) {
-        return LuaValue::Table{
-            {"brightness", LuaValue{light.brightness}}
-        };
-    },
-    [](const LuaValue& value) {
-        const auto& table = value.as_table();
-        if (table.size() != 1 || !table.contains("brightness"))
-            throw std::runtime_error("Light requires exactly brightness");
-
-        std::int64_t brightness = table.at("brightness").as_integer();
-        if (brightness < 0 || brightness > 100)
-            throw std::runtime_error("brightness must be between 0 and 100");
-
-        return Light{static_cast<int>(brightness)};
-    }
-};
-
-LuaBehaviorRunner runner;
-runner.expose_component(lightType, "Light", lightCodec);
-
-LuaExecutionResult result = runner.execute(
-    world,
-    behavior,
-    now,
-    source
-);
-```
-
-The codec is part of the security and validation boundary:
-
-- `encode` defines the exact copied value Lua may inspect;
-- `decode` defines the exact value shape and ranges Lua may request;
-- the script never receives the original component object or a retained pointer;
-- exposing a component type does not grant access by itself; the executing behavior must also have current access to each named component instance.
-
-Bindings are frozen after the runner's first execution. Register all component codecs before running scripts.
-
-### 13.2 Execution environment
-
-Every execution creates a fresh `lua_State`, a fresh `_ENV`, fresh access tables, and fresh copied component snapshots. Globals and Lua references do not persist between executions.
-
-The script receives these host globals:
-
-| Global | Meaning |
-|---|---|
-| `access` | Capability table described below. This is the only effect boundary. |
-| `now_ms` | Host-supplied monotonic session time as a Lua integer. It is not wall-clock or epoch time. |
-
-The allowlisted base functions are:
+Example:
 
 ```text
-assert  error  ipairs  next  pairs  select  tonumber  type
+model/application interprets:
+    "brief absence should not end focus support"
+
+approved Lua/intent policy:
+    absence -> temporary UntilTime grace-period intent
+    return before deadline -> restore/keep persistent intent
+    deadline passes -> Solid expires temporary state normally
 ```
 
-The `table`, `string`, `math`, and `utf8` libraries are available with these removals:
+This avoids asking an LLM the same deterministic question every frame/minute.
 
-```text
-string.dump
-string.find
-string.format
-string.gmatch
-string.gsub
-string.match
-math.random
-math.randomseed
-```
+No generic `SemanticTrigger`, `BehaviorCondition`, or adaptive state-machine abstraction is currently accepted. Existing components, Lua watches, named intents, intent lifetimes, and application orchestration must be tried first. A new abstraction should be added only after multiple distinct scenarios demonstrate the same missing engine primitive.
 
-The string pattern functions run inside native C and cannot be interrupted by the Lua VM instruction hook, so they are intentionally unavailable. `string.format` and base `tostring` are unavailable because they can expose process/object addresses.
-
-The following facilities are not available:
-
-```text
-_G                 collectgarbage      coroutine
-debug              dofile              getmetatable
-io                 load                loadfile
-os                 package             pcall
-print              rawequal            rawget
-rawset             require             setmetatable
-tostring           warn                xpcall
-```
-
-`pcall` and `xpcall` are deliberately absent. If scripts could catch the count-hook error, a hostile loop could repeatedly catch its instruction-limit failure and continue forever.
-
-Scripts are loaded in text-only mode. Binary Lua chunks and sources containing embedded NUL bytes are rejected.
-
-### 13.3 Capability table shape
-
-The conceptual table path is:
-
-```lua
-access.<registered-type-name>.<component-name>
-```
-
-For example:
-
-```lua
-access.Light.officeLight
-```
-
-Dot notation is valid only when both registered names are valid Lua identifiers. A dynamic manifest must provide an already escaped bracket expression for other names:
-
-```lua
-access["Lighting Device"]["office-light"]
-```
-
-The model must copy the exact path expression from the manifest instead of reconstructing or normalizing component names.
-
-The fields present depend on the behavior's current permission:
-
-| Permission | `value` | `propose` |
-|---|---:|---:|
-| Read | present | absent |
-| Write | absent | present |
-| ReadWrite | present | present |
-
-A read/write entry can therefore look like:
-
-```lua
-access = {
-    Light = {
-        officeLight = {
-            value = {
-                brightness = 10
-            },
-            propose = function(request)
-                -- Host C++ closure.
-            end
-        }
-    }
-}
-```
-
-The visible table is data, not authority. A script may modify it, replace it, move `propose` to another table, or add fake fields, but none of those operations change the closure's host-bound target or permission. The host never reads fields such as `owner`, `slot`, `type`, or `writable` from Lua.
-
-The `value` field is a snapshot. Mutating it changes only the current Lua table:
-
-```lua
-local light = access.Light.officeLight
-light.value.brightness = 50
-```
-
-This does not write the component and does not create an intent. The script must explicitly call `propose` to request an effect.
-
-### 13.4 Proposal request schema
-
-Call `propose` with dot syntax and exactly one table argument:
-
-```lua
-access.Light.officeLight.propose({
-    value = { brightness = 50 },
-    priority = "high",
-    duration_ms = 500
-})
-```
-
-Do not use method/colon syntax:
-
-```lua
--- Invalid: this passes the component table as an extra first argument.
-access.Light.officeLight:propose({
-    value = { brightness = 50 }
-})
-```
-
-The request accepts exactly these fields:
-
-| Field | Required | Contract |
-|---|---:|---|
-| `value` | yes | Must match the registered component codec exactly. `nil` is not a component value. |
-| `priority` | no | `"low"`, `"medium"`, or `"high"`; defaults to `"medium"`. |
-| `lifetime` | no | The only accepted value is `"persistent"`. |
-| `duration_ms` | no | Nonnegative integer duration relative to host `now_ms`. |
-
-Lifetime rules:
-
-- omit both `lifetime` and `duration_ms` for a persistent intent;
-- use `lifetime = "persistent"` to state persistence explicitly;
-- use `duration_ms = N` for an until-time intent ending at `now_ms + N`;
-- do not provide both `lifetime` and `duration_ms`;
-- `duration_ms = 0` is valid;
-- the deadline must fit the signed Lua-integer time domain.
-
-Unknown request fields are rejected. `propose` returns no meaningful value.
-
-### 13.5 Lua values accepted by codecs
-
-The boundary transports these value kinds:
-
-```text
-boolean
-integer
-finite floating-point number
-string
-array table
-object table with string keys
-```
-
-Constraints:
-
-- NaN and positive/negative infinity are rejected;
-- object keys must be strings;
-- arrays use contiguous integer keys starting at `1`;
-- a table cannot mix object and array keys;
-- cyclic table references are rejected;
-- shared table aliases are copied as independent values and remain subject to the aggregate entry and buffered-byte limits;
-- functions, userdata, threads, and `nil` inside a component value are rejected;
-- the component codec may impose stricter fields, types, string rules, enums, and numeric ranges.
-
-Host-encoded arrays carry a private marker so an empty array snapshot remains an array when proposed unchanged. Scripts cannot inspect or forge that marker because metatable and raw-table authority is absent.
-
-A literal empty Lua table, `{}`, is interpreted as an empty object because Lua itself does not distinguish empty arrays from empty objects. A script can create a nonempty array with `{value1, value2}`. If a codec needs an empty array, the script must reuse or clear a host-provided array snapshot; a future array-construction helper may be added if generation without a snapshot becomes necessary.
-
-### 13.6 Buffering, commit, and rollback
-
-Calling `propose` validates and buffers a typed C++ request. It does not mutate the `World` and does not create an intent while Lua is running.
-
-A script may call `propose` more than once for the same component:
-
-```lua
-local light = access.Light.officeLight
-
-light.propose({
-    value = { brightness = 100 },
-    priority = "high",
-    duration_ms = 5
-})
-
-light.propose({
-    value = { brightness = 30 },
-    priority = "low",
-    lifetime = "persistent"
-})
-```
-
-This represents a temporary high-priority state with a persistent lower-priority fallback. The normal immutable-intent resolver decides which intent wins.
-
-After successful script execution, the host closes the Lua state, then commits
-the complete buffered cancellation/proposal bundle as one transaction. During
-that commit it:
-
-1. uses the host-fixed `BehaviorId`;
-2. resolves the host-bound component name to its current slot;
-3. verifies that the target still exists;
-4. verifies current write permission;
-5. creates each new immutable intent through `World` without permitting
-   structural topology mutation to reenter the transaction.
-
-If the script, instruction hook, allocator, codec, callback, or commit fails,
-the exact prior typed intent records, indexes, ordering sequences, and pool
-capacity are restored. There is no visible partial cancellation, replacement,
-or proposal bundle.
-
-Lua receives immutable snapshots only for the executing behavior's named
-intents. It cannot mutate them or supply a raw ID, but lifecycle scripts may
-cancel one of those opaque owner-scoped snapshots inside the same transaction.
-
-### 13.7 Default execution limits
-
-The current defaults are host-configurable through `LuaExecutionLimits`:
-
-| Limit | Default |
-|---|---:|
-| Source bytes | 64 KiB |
-| Lua allocator memory | 8 MiB |
-| VM instructions | 100,000 |
-| Diagnostic bytes | 4 KiB |
-| Intents created per execution | 64 |
-| Table depth | 16 |
-| Table entries per transported value | 4,096 |
-| String bytes | 64 KiB |
-| Buffered host value bytes | 8 MiB |
-
-Generated scripts should stay comfortably below these limits instead of attempting to consume the full allowance. Native APIs that could perform unbounded work outside the VM instruction counter are not exposed.
-
-### 13.8 Script-authoring rules for a model
-
-A future model-generation prompt must contain two separate parts.
-
-The first is the stable contract from this section. The second is a dynamic capability manifest generated by trusted host code for the specific behavior and execution context. At minimum, that manifest must state:
-
-- the exact access path for every available component;
-- whether the path is readable, writable, or read/write;
-- the exact `value` schema expected by that component's codec;
-- field types, allowed enums, required fields, and numeric/string ranges;
-- the current copied value for readable capabilities;
-- current monotonic `now_ms` when time affects the requested behavior.
-
-Example prompt manifest:
-
-```text
-Execution time:
-  now_ms: 100
-
-Available capabilities:
-  - path: access.Light.officeLight
-    permission: read_write
-    readable value: { brightness = 10 }
-    writable schema:
-      value must be exactly { brightness = INTEGER }
-      brightness range: 0..100
-
-  - path: access.Light.hallLight
-    permission: read
-    readable value: { brightness = 40 }
-    writable schema: none
-```
-
-The capability manifest is future integration work; M5 does not yet implement an LLM prompt builder or machine-readable codec schema metadata. `LuaComponentCodec<T>` currently contains executable `encode` and `decode` functions, which cannot be introspected to recover field requirements and ranges. A later integration must register a trusted schema description beside each codec, test that description against codec validation, and combine it with current behavior permissions. The model must never infer authority or schema rules from a snapshot alone.
-
-When generating a script, the model must follow this checklist:
-
-1. Use only capability paths explicitly present in the manifest.
-2. Read only entries whose manifest says they contain `value`.
-3. Call `propose` only on entries marked writable.
-4. Use dot-call syntax with one request table.
-5. Match the codec's value schema exactly; do not add explanatory metadata to the request or component value.
-6. Use only `low`, `medium`, or `high` priority.
-7. Use either persistent lifetime or a nonnegative duration, never both.
-8. Do not assume a snapshot mutation changes the world.
-9. Do not invent globals, libraries, component types, component names, fields, owner IDs, slots, or existing intent IDs.
-10. Produce only Lua source when the caller requests an executable script; do not wrap it in Markdown unless the caller explicitly asks.
-
-The host receives one of these execution statuses:
-
-```text
-Success
-InvalidBehavior
-SourceLimitExceeded
-SyntaxError
-RuntimeError
-InstructionLimitExceeded
-MemoryLimitExceeded
-IntentLimitExceeded
-InvalidProposal
-CommitFailed
-HostError
-```
-
-A future generation pipeline may use the bounded diagnostic from `SyntaxError`, `RuntimeError`, or `InvalidProposal` in a repair prompt, but it must reuse the same capability manifest and must not grant additional authority to make a failed script pass. Retry count and model-selection policy remain future work. `HostError` and `CommitFailed` can represent host-state failures rather than a script-generation error and should not automatically be treated as model-correctable.
-
-Recommended model prompt skeleton:
-
-```text
-You generate one Lua 5.4 behavior script for the Liquid runtime.
-
-Follow the Liquid Lua Behavior Scripting and Model Prompt Contract exactly.
-Use only the capabilities and schemas in the manifest below.
-Do not invent component paths, fields, globals, libraries, IDs, or permissions.
-Changing a .value table changes only a local snapshot; call .propose({...}) to request an intent.
-Use dot syntax for propose, exactly one request table, and no unknown request fields.
-Return only Lua source without Markdown fences.
-
-<insert dynamic capability manifest>
-
-Desired behavior:
-<insert user/system behavior requirement>
-```
-
-### 13.9 Complete example
-
-Given a manifest declaring `access.Light.officeLight` read/write with `brightness` in `0..100`, a valid script is:
-
-```lua
-local light = access.Light.officeLight
-
-assert(light.value.brightness >= 0)
-assert(light.value.brightness <= 100)
-
-light.propose({
-    value = { brightness = 100 },
-    priority = "high",
-    duration_ms = 5
-})
-
-light.propose({
-    value = { brightness = 30 },
-    priority = "low",
-    lifetime = "persistent"
-})
-```
-
-Invalid examples:
-
-```lua
--- Invalid: direct snapshot mutation does not request an intent.
-access.Light.officeLight.value.brightness = 100
-
--- Invalid: colon syntax passes two arguments.
-access.Light.officeLight:propose({ value = { brightness = 100 } })
-
--- Invalid: owner, slot, and reason are unknown request fields.
-access.Light.officeLight.propose({
-    owner = 7,
-    slot = 2,
-    reason = "make the room brighter",
-    value = { brightness = 100 }
-})
-
--- Invalid: a read-only capability has no propose function.
-access.Light.hallLight.propose({ value = { brightness = 0 } })
-
--- Invalid: unavailable libraries and dynamic loading are not part of _ENV.
-local os = require("os")
-```
+Liquid also does not wake an agent whenever an intent loses resolution by default. Losing is normal Solid conflict behavior. Liquid should make current state inspectable; Liquid Layer decides which changes deserve inference.
 
 ---
 
-## 14. Solid v0.1 Contract
+## 11. Acceptance Scenarios
 
-The owner-approved Solid v0.1 completion contract is normative in the focused documents under `docs/`:
+These examples test the abstraction but are not hard-coded Liquid concepts.
 
-- `PUBLIC_API.md` defines the installed framework surface, handles, codecs, and mutation boundary;
-- `EVENT_FORMAT_V1.md` defines canonical records, durability, recovery, checkpoints, and retention;
-- `THREADING.md` defines owner-thread confinement and the bounded concurrent feedback boundary;
-- `ADAPTER_CONTRACT.md` defines effects, commands, reports, timing, retry, idempotency, and reconciliation;
-- `REPLAY.md` distinguishes generic projection from host-assisted execution verification;
-- `COMPATIBILITY.md`, `SECURITY_BOUNDARY.md`, and `SUPPORT.md` state the release claims and limits.
+### FocusSupport
 
-The v0.1 frame order is `begin -> snapshot/apply queued feedback -> expire -> systems -> expire same-frame intents -> resolve desires -> reconcile commands -> record issuance/attempts -> dispatch -> apply permitted synchronous immediate reports -> durably complete or fail -> end`.
+A prepared behavior wants a light state while the user is in a focus context.
 
-Remaining open decisions belong to later Liquid stages: Go integration, LLM integration, adaptive behavior triggers and policy, real hardware protocols, voice, biosignals, and final Liquid Layer application behavior. They must not weaken the deterministic Solid authority boundary.
+The behavior may own a persistent intent and encode temporary absence/grace-period policy using existing lifetimes/named-intent replacement. Once encoded, Solid handles the timer deterministically.
+
+### FollowUser competing with FocusSupport
+
+A second behavior follows the user between rooms and wants an abandoned light OFF.
+
+If FollowUser wins:
+
+```text
+FocusSupport ON intent: alive
+FocusSupport ON intent: not selected
+FollowUser OFF intent: selected
+observed light: OFF after authoritative feedback
+```
+
+If FollowUser later stops wanting OFF, the original persistent FocusSupport intent may win again without reconstruction.
+
+A future Liquid runtime view must represent this correctly.
+
+### Stateless caller reconstruction
+
+An agent process may restart, change provider/model, or lose conversational context. When called again it should be able to reconstruct relevant runtime truth through Liquid rather than rely on what it remembers having requested previously.
+
+### Multiple AI strategies
+
+The same semantic Liquid capability should be usable by a direct local model chosen by Liquid Layer and by an external agent such as Hermes through an MCP adapter. The authority rules do not change based on who calls.
 
 ---
 
-## 15. Source Notes
+## 12. MCP Is a Transport, Not the Architecture
 
-This document builds on the earlier NeurOS design baseline and the implementation discussion that followed it.
+MCP is the intended first agent-facing transport, but Liquid's semantic API must be independently testable without MCP serialization/networking.
 
-External references supporting the direction:
+Relationship:
 
-1. Flecs documentation describes ECS entities as identifiers and components as data attached to entities. This supports separating identity, data, and systems.
-   - https://www.flecs.dev/flecs/md_docs_2EntitiesComponents.html
-2. Bevy describes entities as unique things assigned groups of components, then processed by systems over component types. This supports component-type query signatures.
-   - https://bevy.org/learn/quick-start/getting-started/ecs/
-3. EnTT's registry/storage/query model supports component-type storage and queries without making commands or intents into components.
-   - https://github.com/skypjack/entt/wiki/Entity-Component-System
-4. Unity ECS documentation emphasizes data-oriented ECS for control and determinism, and its component model separates component data from systems.
-   - https://unity.com/ecs
-   - https://docs.unity.cn/Packages/com.unity.entities%401.0/manual/concepts-components.html
-5. Home Assistant's AI agents article explicitly warns that AI models hallucinate and should not be completely trusted, while also showing that AI can be useful through constrained APIs such as intents.
-   - https://www.home-assistant.io/blog/2024/06/07/ai-agents-for-the-smart-home/
-6. Modern CMake project structure commonly separates public headers under `include/<project>/`, implementation under `src/`, apps, tests, docs, and external dependencies.
-   - https://cliutils.gitlab.io/modern-cmake/chapters/basics/structure.html
-7. Architecture Decision Records capture significant decisions, context, and consequences, and will be used later to avoid losing reasoning.
-   - https://adr.github.io/
-   - https://docs.arc42.org/tips/9-5/
+```text
+Liquid semantic API
+      │
+      ├── direct application use
+      │
+      └── MCP adapter
+              │
+              ├── Hermes
+              └── other MCP clients
+```
+
+The current MCP direction as of 28 August 2026:
+
+- stable revision `2026-07-28` uses a stateless protocol core;
+- Sampling, Roots, and Logging are deprecated for new implementations;
+- tool input/output schemas use JSON Schema 2020-12;
+- authorization has been hardened and is a transport concern;
+- official Tier 1 SDKs are TypeScript, Python, Go, and C#; no official C++ SDK currently exists.
+
+Consequences for Liquid:
+
+- do not use MCP Sampling as an internal model-provider abstraction;
+- render Liquid contracts into MCP schemas rather than make MCP schema types canonical engine types;
+- keep tools focused and context-scoped;
+- validate tool arguments/results locally;
+- treat tool annotations/descriptions as hints, not authority;
+- re-evaluate implementation language/SDK only when the MCP milestone begins;
+- prefer a local/owner-controlled first integration unless a real remote-use requirement justifies OAuth/network complexity.
+
+Hermes should be one integration proof, not the owner of the MCP contract.
+
+---
+
+## 13. Threading and Async Boundary
+
+`World` and `Runtime` are single-thread-confined by the Solid v0.1 contract.
+
+A future model/HTTP/MCP transport cannot safely keep a `Runtime&` and invoke it from arbitrary request threads.
+
+The accepted direction is:
+
+> Model-facing data crosses the boundary as bounded immutable copies. Mutating requests are marshalled back to the host/Runtime owner-controlled path. The transport itself owns no Runtime authority.
+
+This also helps keep model calls asynchronous and outside `Runtime::run_frame()`.
+
+The exact snapshot publisher, request queue, host bridge, or IPC mechanism is deferred until a transport/operation milestone needs it.
+
+---
+
+## 14. Evidence
+
+Solid evidence answers:
+
+> What did the deterministic runtime execute, select, command, receive, and observe?
+
+Future Liquid evidence answers a different question:
+
+> Why was a behavior proposed, evaluated, revised, approved, rejected, or activated?
+
+Do not casually add model prompts, conversation history, proposal rationales, or provider metadata to Solid Event Format v1.
+
+Future Liquid records may correlate to Solid session/behavior/evidence while remaining a separate adaptive-control record stream. What model/user context is retained is a Liquid Layer/privacy decision and must be explicit.
+
+---
+
+## 15. Privacy and Security Principles
+
+- Context is allowlisted/scoped, not dumped wholesale.
+- A model sees only capabilities selected for the current authoring/inspection task.
+- A readable value never implies write authority.
+- Model-visible schema metadata never enlarges `World` permission.
+- Raw slots, pointers, registries, credentials, adapter internals, unrelated users, and full event history are excluded by default.
+- Repair/retry attempts never receive extra authority merely because earlier model output failed.
+- External agent memory is not trusted as current runtime truth.
+- Model/provider constrained output is useful for quality but is not trusted validation; Liquid/Solid validate locally.
+- Host-provided descriptions are bounded trusted metadata. Arbitrary runtime strings remain data and must be structurally encoded/delimited by future renderers.
+- Remote MCP authorization and tool annotations never replace Solid ownership/permission checks.
+- Model-facing values, diagnostics, manifests, schemas, and later tool results must have explicit resource bounds.
+
+---
+
+## 16. Accepted Stage 2 Decisions
+
+- Solid v0.1.0 remains the frozen deterministic foundation.
+- Liquid is a model-facing semantic control/authoring layer over Solid, not an AI provider/runtime.
+- Liquid Layer chooses the inference/agent strategy and owns application meaning/policy.
+- Local versus hosted inference is independent from direct versus agent execution.
+- No `ModelPort` is added unless a future reusable Liquid feature proves the engine itself must call a model.
+- Hermes is optional and replaceable.
+- MCP is a future transport adapter, not Liquid's internal API.
+- Lua remains the generated executable behavior boundary for the first Stage 2 milestones.
+- Approved Lua source is not silently rewritten because context changed.
+- Intent lifetime remains intent metadata; scripts do not gain their own lifetime model merely for Liquid.
+- A losing live intent remains alive and may win again later.
+- Liquid should expose current truth rather than continuously notify an agent of every normal resolution change.
+- Model-facing capability discovery requires trusted machine-readable Lua value schemas.
+- The first approved implementation milestone is L0: schema + capability manifest inside the existing `Liquid::Lua` boundary.
+- No speculative adaptive/agent/provider/MCP directory or exported target is created in L0.
+
+---
+
+## 17. Deferred / Rejected Directions
+
+### LLM inside `Runtime::run_frame()`
+
+Rejected. It breaks deterministic frame ownership, latency/failure isolation, and replay expectations.
+
+### Hermes as a core dependency
+
+Rejected. Approved behavior must keep running without Hermes, and other agents must be able to consume the same Liquid surface.
+
+### MCP as Liquid's internal object model
+
+Rejected. Protocol evolution must not dictate engine semantics.
+
+### Full JSON Schema as the canonical Liquid value schema
+
+Rejected for L0. Liquid needs a small schema matching the actual Lua value vocabulary and can render outward schemas later.
+
+### New behavior IR before Lua evidence
+
+Deferred until concrete model-generation problems justify it.
+
+### Generic semantic-trigger engine
+
+Deferred until multiple scenarios prove an engine-level primitive is missing.
+
+### Continuous agent notification for every lost intent selection
+
+Rejected as a default. Conflict/loss is normal runtime behavior; applications decide which changes matter.
+
+### Provider/model selection inside Liquid
+
+Rejected for current Stage 2. This is application policy.
+
+---
+
+## 18. Documentation Authority
+
+For current development, use this order:
+
+1. `AGENTS.md` — active milestone, allowed scope, coding-agent rules;
+2. `DEVELOPMENT_TRACKING.md` — milestone status/order/evidence;
+3. `docs/LIQUID_STAGE2_PLAN.md` — detailed Stage 2 design rationale, roadmap, research;
+4. `COMPLETE_SOLID.md` — accepted Solid completion audit;
+5. focused `docs/*.md` contracts — Solid public API, threading, Lua, effects, events, replay, security;
+6. this document — conceptual architecture and vocabulary.
+
+When implementation reveals that an accepted concept is wrong, update the architecture explicitly rather than silently coding around it.
