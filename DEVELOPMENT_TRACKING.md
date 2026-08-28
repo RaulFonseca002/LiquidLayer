@@ -2,7 +2,7 @@
 
 This file tracks the practical development path for the `liquid` engine.
 
-The goal is to keep each active milestone small, testable, and explicit. Detailed Solid v0.1 completion evidence lives in `COMPLETE_SOLID.md` and `docs/TRACEABILITY.md`; Stage 2 architecture and rationale live in `docs/LIQUID_STAGE2_PLAN.md`.
+The goal is to keep each active milestone small, testable, and explicit. Detailed Solid v0.1 completion evidence lives in `COMPLETE_SOLID.md` and `docs/TRACEABILITY.md`; Stage 2 architecture/rationale lives in `docs/LIQUID_STAGE2_PLAN.md`; L0 implementation semantics live in `docs/LIQUID_L0_IMPLEMENTATION_SPEC.md`.
 
 ---
 
@@ -57,11 +57,9 @@ Liquid Layer owns:
 
 ## Current Development Policy
 
-Stage 1 is frozen at Solid v0.1.0. Stage 2 may extend the framework only through owner-approved Liquid milestones and must not weaken the Solid contracts to make model integration easier.
+Stage 1 is frozen at Solid v0.1.0. Stage 2 may extend the framework only through owner-approved Liquid milestones and must not weaken Solid contracts to make model integration easier.
 
 Current milestone: **L0 — Model-Facing Lua Capability Contract**.
-
-The accepted Stage 2 boundary is:
 
 ```text
 Liquid Layer
@@ -86,12 +84,12 @@ MCP is a future transport over Liquid's semantic API, not Liquid's internal doma
 
 **Status:** Complete — v0.1.0, 22 August 2026.
 
-The detailed implementation and release audit is intentionally not duplicated here. See:
+Detailed implementation/release history is intentionally not duplicated here. See:
 
 - `COMPLETE_SOLID.md` — accepted completion gates;
 - `docs/TRACEABILITY.md` — milestone/test traceability;
 - `docs/PUBLIC_API.md` — public framework contract;
-- `docs/LIFECYCLE_SCRIPTING.md` — current Lua lifecycle contract;
+- `docs/LIFECYCLE_SCRIPTING.md` — executable Lua lifecycle contract;
 - `docs/THREADING.md` — owner-thread contract;
 - `docs/ADAPTER_CONTRACT.md` — effects/feedback contract;
 - `docs/EVENT_FORMAT_V1.md` — durable evidence format.
@@ -104,7 +102,7 @@ Completed implementation stages:
 - **M4** — Minimal Frame Loop;
 - **M5** — Lua Behavior Scripting;
 - **M6** — Simulation CLI;
-- **S0-S7** — Solid v0.1 framework finalization, hardening, Scope, packaging, and release audit.
+- **S0-S7** — Solid v0.1 finalization, hardening, Scope, packaging, and release audit.
 
 Frozen facts especially relevant to Liquid:
 
@@ -118,7 +116,8 @@ Frozen facts especially relevant to Liquid:
 - A live intent that loses resolution remains alive and may win again later.
 - Selected desire, command, report, and authoritative observed external state are distinct facts.
 - Lua executes in a fresh capability-bounded VM and may only propose/cancel owner-scoped intents through the host contract.
-- Existing Lua lifecycle proposal/cancellation bundles commit transactionally.
+- Existing Lua lifecycle proposal/cancellation/watch bundles commit transactionally.
+- `LuaComponentCodec<T>` has independent `encode` and `decode` directions; Solid does not require their Lua value shapes to be symmetric.
 
 ---
 
@@ -132,11 +131,9 @@ Frozen facts especially relevant to Liquid:
 
 Make the existing Lua behavior boundary machine-readable enough for an external model/agent to author against it without adding a model provider, MCP transport, new runtime authority, or a second behavior language.
 
-The smallest complete L0 circuit is:
-
 ```text
-trusted Lua component binding
-    + trusted model-facing schema metadata
+trusted Lua binding
+    + trusted read/write schema metadata
         │
         ▼
 prepared behavior's current World permissions
@@ -155,58 +152,51 @@ L0 performs no inference and activates no generated behavior.
 
 ### Required concepts
 
-- bounded `LuaValueSchema` matching the values actually transported by `LuaBehaviorRunner`;
-- optional bounded trusted descriptions sufficient to explain component/field semantics without creating an ontology;
-- model-visible schema metadata registered beside the existing `LuaComponentCodec<T>` binding;
-- immutable `LuaCapabilityManifest` for one prepared behavior and current access state;
-- exact host-generated Lua access-path expressions;
-- explicit read/write/read-write projection from current `World` permissions;
-- copied readable snapshots validated against declared schema;
-- current monotonic `now_ms` and a stable authoring-contract/version marker when exposed to a model-facing renderer;
-- explicit limits on schema depth/size and manifest size;
-- deterministic bounded diagnostics.
+- bounded `LuaValueSchema` matching exact current `LuaValue` storage kinds;
+- separate trusted `readSchema` and `writeSchema` for model-visible Lua bindings, with a symmetric helper for common codecs;
+- optional bounded trusted descriptions sufficient to explain binding/field meaning or units without building an ontology;
+- model-facing metadata registered beside the existing executable Lua binding, not in a second capability registry;
+- immutable `LuaCapabilityManifest` built through `LuaBehaviorRunner` for one prepared behavior/current access state;
+- exact host-generated Lua access expressions;
+- explicit projection of current `World` permission;
+- copied readable snapshots validated against `readSchema`;
+- `writeSchema` values exercised against the real codec decoder in tests;
+- current monotonic `now_ms` and a stable Lua authoring-contract/version marker;
+- explicit schema/manifest resource limits and deterministic bounded diagnostics;
+- current empty-array construction limitation remains visible in the authoring contract.
 
-### V1 schema vocabulary
+### Exact V1 schema kinds
 
-Keep the vocabulary intentionally smaller than JSON Schema and aligned with current `LuaValue`:
+- Boolean = `bool`;
+- Integer = `std::int64_t`;
+- Number = finite `double`;
+- String = `std::string` with finite bounds/optional enum;
+- Array = `LuaValue::Array` with one item schema/count bounds;
+- Object = `LuaValue::Table` with named required/optional fields; unknown fields rejected by default.
 
-- Boolean;
-- signed Integer with optional bounds;
-- finite Number with optional bounds;
-- String with explicit size bounds and optional finite enum;
-- Array with one item schema and item-count bounds;
-- Object with named required/optional fields; reject unknown fields by default.
+Do not add implicit Integer/Number coercion. Do not add null, bytes, unions/composition, `$ref`, recursive schema graphs, regex, arbitrary JSON Schema, or provider-specific keywords until a real codec requires them.
 
-Do not add until a real current codec requires them:
-
-- null;
-- bytes;
-- unions/composition;
-- `$ref` or recursive schema graphs;
-- regular-expression constraints;
-- arbitrary user-provided JSON Schema;
-- provider-specific schema keywords.
-
-The canonical schema remains a Liquid type. Later adapters may render it to MCP JSON Schema or provider-specific structured-output schemas.
+The canonical schema remains a Liquid type. Future adapters may render it to MCP JSON Schema or provider-specific structured-output subsets.
 
 ### Authority rules
 
 Schema metadata is descriptive validation, not authority.
 
-- The real `World` permission remains final.
-- The host-bound Lua closure remains final.
-- `LuaComponentCodec<T>::decode` remains final value validation.
+- Current `World` permission remains final.
+- Host-bound Lua capability closures remain final.
+- `LuaComponentCodec<T>::decode` remains final write/proposal validation.
 - Transactional commit remains final mutation validation.
-- Missing or incorrect model metadata must fail closed for discovery; it must never widen executable authority.
-- Model-facing descriptions are trusted bounded registration metadata. Runtime/user strings and values are data and must not become executable instructions through naive prompt concatenation.
+- A model-facing description never grants a missing permission.
+- Provider-side structured/constrained output never replaces local validation.
+- Missing/incorrect model metadata fails closed for discovery and cannot widen executable Lua authority.
 
-Permission projection:
+For a fully described binding:
 
-| Current permission | readable snapshot | writable schema |
-| --- | ---: | ---: |
-| Read | yes | no |
-| Write | no | yes |
-| ReadWrite | yes | yes |
+| `World` permission | Manifest read side | Manifest write side |
+| --- | --- | --- |
+| Read | `readSchema` + copied value | absent |
+| Write | absent | `writeSchema` |
+| ReadWrite | `readSchema` + copied value | `writeSchema` |
 
 ### L0 allowed files
 
@@ -228,45 +218,48 @@ DEVELOPMENT_TRACKING.md
 Liquid_Concepts_and_Architecture.md
 README.md
 docs/LIQUID_STAGE2_PLAN.md
-docs/LIFECYCLE_SCRIPTING.md      # only when the public Lua contract changes
+docs/LIQUID_L0_IMPLEMENTATION_SPEC.md
+docs/LIFECYCLE_SCRIPTING.md      # only when public Lua contract changes
 ```
 
-Small filename/API-shape adjustments inside the existing `scripting/` boundary are allowed when tests make a cleaner shape obvious. Do not create speculative `adaptive/`, provider, agent, or MCP directories in L0.
+Keep implementation inside the existing `scripting/` / `Liquid::Lua` boundary. Do not create speculative `adaptive/`, provider, agent, or MCP directories/targets in L0.
 
 ### L0 implementation order
 
-1. Write `LuaValueSchema` value/limit tests first.
+1. Draft failing `LuaValueSchema` construction/value tests.
 2. Draft the minimal public schema header.
-3. Implement schema construction and validation.
-4. Add real codec fixtures, including `Light{brightness: 0..100}`.
-5. Write capability-manifest permission/copy/path tests.
-6. Draft the minimal manifest API and additive schema-bearing Lua binding registration.
-7. Implement manifest construction on the owner thread using the same current permissions/snapshots as Lua execution.
-8. Add stale/revoked-access and hostile/unusual-name cases.
-9. Update CMake and the scripting contract documentation.
-10. Run strict full regression and sanitizer-relevant checks before merge.
+3. Implement schema validation/limits.
+4. Add symmetric and intentionally asymmetric codec fixtures.
+5. Draft manifest permission/copy/path/time/version tests.
+6. Draft the smallest manifest API plus additive model-metadata registration on the existing Lua binding.
+7. Implement manifest construction through `LuaBehaviorRunner` using current `World` permissions/snapshots.
+8. Add access revocation/removal, exact path escaping, empty-array, bounds, and mismatch cases.
+9. Update CMake and scripting contract docs for only the implemented surface.
+10. Run strict full regression and relevant sanitizer/consumer checks.
 
-The project owner implements substantive `.cpp` logic unless explicitly delegating it. Coding agents should primarily prepare headers, tests, CMake, small boilerplate, diagnostics tables, and docs.
+The project owner implements substantive `.cpp` logic unless explicitly delegating it. Coding agents should primarily prepare headers, tests, CMake, small boilerplate, diagnostics, and docs.
 
 ### L0 success evidence
 
 At minimum:
 
-- valid and invalid schemas for every V1 kind;
-- integer/number range enforcement;
-- required/optional field behavior;
-- unknown-field rejection;
-- string/array/depth/node/description bounds;
-- invalid schema definitions rejected at construction/configuration time;
-- a real Lua codec whose declared schema accepts valid snapshots and rejects invalid ones;
-- every readable snapshot emitted into a manifest validates against its declared schema;
-- Read/Write/ReadWrite manifest projection exactly matches current `World` permission;
-- access revocation/removal is reflected in a newly built manifest;
-- unusual type/component names receive exact safe host-generated Lua expressions;
-- manifest values are immutable copies, never retained component pointers or registry references;
-- the existing schema-less `expose_component(...)` path remains source-compatible;
-- schema metadata cannot enlarge actual Lua/World authority;
-- diagnostics and manifests remain within explicit limits;
+- valid/invalid schemas for every exact V1 kind;
+- Integer/Number non-coercion;
+- numeric ranges/finite rules;
+- required/optional fields and unknown-field rejection;
+- string/array/depth/node/field/enum/description bounds;
+- invalid schema definitions rejected before use;
+- a symmetric `Light{brightness: Integer 0..100}` fixture;
+- an intentionally asymmetric codec proving read/write schemas stay distinct;
+- every readable snapshot in a manifest validates against `readSchema`;
+- representative write-schema candidates exercise the actual Lua codec decoder;
+- exact Read/Write/ReadWrite projection from current `World` permission;
+- access revocation/removal reflected by rebuild;
+- unusual type/component names generate safe deterministic Lua expressions that resolve in the real sandbox;
+- manifest data is copied and exposes no raw slot/pointer/registry;
+- schema-less `expose_component(...)` remains source-compatible/executable but absent from model discovery;
+- model metadata cannot enlarge actual Lua authority;
+- current empty-array marker/literal limitation remains accurately represented;
 - full existing tests remain green under strict warnings-as-errors.
 
 ### L0 out of scope
@@ -275,16 +268,16 @@ At minimum:
 - OpenAI-compatible API abstraction;
 - Hermes dependency;
 - MCP server/client;
-- prompt-orchestration/repair loop;
+- prompt orchestration/repair loop;
 - behavior proposal persistence;
 - automatic activation/approval;
 - generic runtime inspection;
 - cross-behavior cancellation;
-- a new DSL/IR;
-- `SemanticTrigger`/adaptive state-machine abstraction;
+- new DSL/IR;
+- `SemanticTrigger`/adaptive state machine;
 - real hardware/MQTT/voice/biosignals;
 - Liquid Layer application policy;
-- changes to Solid event format v1.
+- Solid Event Format v1 changes.
 
 ---
 
@@ -297,22 +290,22 @@ At minimum:
 Likely scope:
 
 - immutable owner-thread-built snapshots;
-- behavior references suitable for model/API use;
+- API/model-safe behavior references;
 - owned live intents with stable name, encoded value, target, priority, lifetime;
 - selected/not-selected distinction;
-- selected competitor and owner when applicable;
-- authoritative observed external state where available;
+- selected competitor/owner where applicable;
+- authoritative observed external state;
 - bounded command/report/evidence context;
-- explicit snapshot/frame consistency semantics.
+- explicit frame/snapshot consistency semantics.
 
-Known design questions to resolve in L1:
+Known design questions:
 
-- how to identify component type/name generically without exposing `ComponentRegistry`;
-- how to map a selected external component to observed state without exposing Runtime effect bindings;
-- whether the view represents the last completed frame or an explicitly captured host snapshot;
-- how opaque behavior references survive only within their documented world/session scope.
+- generic stable type/component names for `ComponentTarget` without registry exposure;
+- mapping external component targets to observed state without exposing private Runtime bindings;
+- ensuring live-intent facts and selection facts refer to one defined capture point;
+- avoiding misuse of world-local generational handles as historical/global IDs.
 
-Required acceptance scenario: a persistent FocusSupport `ON` intent loses to a FollowUser `OFF` intent, remains live, and can become selected again after the competitor disappears. The view must represent those facts without calling a model.
+Required acceptance: FocusSupport persistent `ON` loses to FollowUser `OFF`, remains live, and can win again after the competitor disappears. The view represents all of those facts accurately without model involvement.
 
 ---
 
@@ -324,14 +317,15 @@ Required acceptance scenario: a persistent FocusSupport `ON` intent loses to a F
 
 Likely scope:
 
-- immutable behavior proposal containing exact Lua source and bounded review metadata;
-- host/application-selected prospective authoring scope;
+- immutable behavior proposal with exact Lua source and bounded review metadata;
+- trusted prospective authoring scope chosen by host/application;
 - capability manifest for that scope;
+- source/capability/contract-version validation;
 - stale-scope detection;
-- separation between a new behavior proposal and a revision of an approved behavior;
+- explicit new-behavior versus approved-behavior-revision workflow;
 - no model-selected arbitrary permissions.
 
-Do not silently mutate an approved `LuaBehaviorScript` because context changed. A source change is an explicit revision operation.
+Do not silently mutate an approved `LuaBehaviorScript` because context changed.
 
 ---
 
@@ -344,14 +338,14 @@ Do not silently mutate an approved `LuaBehaviorScript` because context changed. 
 Likely scope:
 
 - isolated prepared `World`/`Runtime` fixture;
-- real `LuaLifecycleSystem` and `LuaBehaviorRunner`;
-- real intent resolution;
-- real `InMemoryAdapter` for external effects;
+- real `LuaLifecycleSystem`/runner;
+- real intent lifetime/resolution;
+- real `InMemoryAdapter` for effects;
 - deterministic evaluation scenarios;
-- report that keeps proposed intents, selected desires, commands, reports, and observed state separate;
-- bounded failures suitable for a caller/model repair loop.
+- report separating intents, selections, commands, reports, observations, and final authoritative state;
+- bounded failures suitable for an external repair loop.
 
-Do not treat the current light-specific `SimulationScenario` as a generic proposal evaluator until this milestone earns that abstraction.
+The current light-specific `SimulationScenario` is not automatically a generic proposal evaluator; generalize only what L3 tests require.
 
 ---
 
@@ -363,26 +357,27 @@ Do not treat the current light-specific `SimulationScenario` as a generic propos
 
 Likely first surface:
 
-- discovery/capability tools;
-- read-only runtime inspection tools;
-- behavior proposal validation/evaluation tools;
+- focused discovery/capability tools;
+- read-only runtime inspection;
+- behavior validation/evaluation;
 - no unrestricted mutators.
 
 Protocol direction based on research current on 28 August 2026:
 
 - implement against the current stable MCP revision at milestone start; current stable is `2026-07-28`;
 - do not build new functionality around deprecated MCP Sampling/Roots/Logging;
-- MCP remains a renderer/transport over Liquid's own contracts;
-- define both input and structured output schemas for tools;
+- model invocation remains client/application-owned;
+- MCP is a renderer/transport over Liquid's contracts;
+- define structured input/output schemas where useful;
 - keep tools few, focused, and context-scoped;
-- treat MCP annotations/descriptions as hints, never authorization;
-- validate every request server-side;
-- preserve Solid owner-thread confinement through immutable snapshots and marshalled mutation requests;
-- prefer local/owner-controlled transport first unless a real requirement justifies remote OAuth/network exposure.
+- tool descriptions/annotations never become authorization;
+- validate every request/result server-side;
+- preserve owner-thread confinement with immutable snapshots and marshalled mutation requests;
+- prefer local/owner-controlled first deployment unless a real remote requirement justifies OAuth/network exposure.
 
-SDK/language choice is deferred. As of 28 August 2026 the official Tier 1 SDKs are TypeScript, Python, Go, and C#; there is no official C++ SDK. Do not add a community C++ MCP dependency before L4 re-evaluates the ecosystem.
+SDK/language choice is deferred. As of 28 August 2026 official Tier 1 MCP SDKs are TypeScript, Python, Go, and C#; no official C++ SDK is listed.
 
-Hermes is an integration proof, not the contract owner. At least one non-Hermes client/conformance test should prove the surface is generic.
+Hermes is an integration proof, not contract owner. Current Hermes docs support protocol-era negotiation including the 2026 stateless probe. Test at least one non-Hermes client/conformance path.
 
 ---
 
@@ -394,14 +389,15 @@ Hermes is an integration proof, not the contract owner. At least one non-Hermes 
 
 Likely scope:
 
-- approval bound to exact proposal/source hash, authoring scope/revision, and evaluation evidence;
-- installation of the exact approved lifecycle source;
+- approval bound to exact source/proposal hash;
+- binding to authoring scope/access revision and evaluation evidence;
+- installation of exact approved lifecycle revision;
 - explicit revision workflow;
-- explicit semantics for what happens to intents owned by the previous approved revision;
-- ownership-aware cancellation/removal operations justified by real scenarios;
-- no generic `destroy_any_intent` or arbitrary world mutation.
+- explicit semantics for persistent intents owned by the prior revision;
+- ownership-aware cancellation/removal justified by real scenarios;
+- no generic `destroy_any_intent`/world mutation.
 
-The revision/intents interaction must be designed deliberately: changing script revision must not accidentally leave old persistent intents with semantics the new source no longer owns or understands.
+Changing `LuaBehaviorScript.source/revision` alone does not prove what happens to persistent intents already owned by that behavior. L5 must define this deliberately.
 
 ---
 
@@ -409,17 +405,17 @@ The revision/intents interaction must be designed deliberately: changing script 
 
 **Status:** Provisional — re-evaluate after L5.
 
-**Question:** Can adaptive decisions be audited and can applications learn about bounded changes without contaminating Solid's deterministic evidence contract?
+**Question:** Can adaptive decisions be audited and can applications learn bounded changes without contaminating Solid's deterministic evidence contract?
 
 Likely scope:
 
-- Liquid proposal/evaluation/approval records separate from Solid event format v1;
+- separate Liquid proposal/evaluation/approval/revision records;
 - correlation to Solid session/behavior/runtime evidence;
-- optional provider/model metadata supplied by the application that actually performed inference;
-- record of what context/capabilities were shared, subject to application privacy policy;
+- optional provider/model metadata supplied by the application that actually performs inference;
+- privacy-aware record of context/capabilities shared;
 - bounded change cursor/feed only if Liquid Layer scenarios prove it necessary.
 
-Liquid records answer why a behavior was proposed/revised/approved/rejected. Solid records continue to answer what the deterministic runtime actually executed and observed.
+Liquid evidence answers why a behavior was proposed/revised/evaluated/approved/rejected. Solid evidence continues to answer what the deterministic Runtime actually executed and observed.
 
 ---
 
@@ -431,14 +427,14 @@ Expected application work includes:
 
 - neurodivergent-support scenarios;
 - focus/task-initiation/transition/sensory/sleep support;
-- application-specific inference triggers and revalidation policy;
+- application-specific inference triggers/revalidation policy;
 - local/hosted model routing;
-- Hermes or other agent-runtime orchestration when useful;
+- Hermes or another agent runtime when useful;
 - consent/privacy/data-export design;
-- real device integrations and smart-home adapters;
+- real device/smart-home integrations;
 - simulation and user-study tooling.
 
-Liquid Layer may teach an agent application policies such as grace periods or when context changes deserve re-evaluation. Whenever possible, semantic reasoning should be compiled into deterministic Lua/intent policy so Solid can continue correctly while all models/agents are offline.
+Liquid Layer may teach an agent policies such as grace periods or when context changes deserve re-evaluation. Whenever possible, semantic reasoning should become deterministic Lua/intent policy so Solid continues correctly while models/agents are offline.
 
 ---
 
@@ -448,17 +444,17 @@ For every Liquid milestone:
 
 1. Start a short-lived branch from current `main`.
 2. State the one missing capability being closed.
-3. List the existing Solid facilities reused before adding new abstractions.
+3. List existing Solid facilities reused before adding abstractions.
 4. Define header/data/failure contracts before substantive implementation.
 5. Write success, stale-state, permission, bound, and adversarial tests.
-6. Add no provider/network dependency unless that milestone exists specifically to integrate it.
+6. Add no provider/network dependency unless the milestone explicitly integrates it.
 7. Preserve owner-thread and deterministic authority contracts.
-8. Run strict full tests and relevant sanitizers/consumer checks.
+8. Run strict full tests and relevant sanitizer/consumer checks.
 9. Record completion evidence.
-10. Re-evaluate the next provisional milestone instead of expanding it automatically.
-11. Update `AGENTS.md`, this file, and `docs/LIQUID_STAGE2_PLAN.md` before widening scope.
+10. Re-evaluate the next provisional milestone instead of expanding automatically.
+11. Update `AGENTS.md`, this file, and Stage 2 docs before widening scope.
 
-A new abstraction must answer a demonstrated requirement that current Solid/Liquid primitives cannot cleanly solve. Folder creation follows an accepted milestone, not speculative architecture.
+A new abstraction must answer a demonstrated requirement current Solid/Liquid primitives cannot cleanly solve. Folder creation follows an accepted milestone, not speculative architecture.
 
 ---
 
@@ -470,7 +466,7 @@ A new abstraction must answer a demonstrated requirement that current Solid/Liqu
 - Liquid does not own model/provider choice.
 - MCP is deferred until the semantic API exists and is independently testable.
 - Hermes remains optional and replaceable.
-- A model may be stateless between calls; current runtime truth must be reconstructed from Liquid/Solid.
+- A model may be stateless between calls; current runtime truth is reconstructed from Liquid/Solid.
 - Losing intent resolution does not kill a live intent.
-- Application-specific semantic triggers/revalidation remain Liquid Layer policy unless repeated scenarios prove a generic engine primitive is missing.
+- Application semantic triggers/revalidation remain Liquid Layer policy unless repeated scenarios prove a generic engine primitive is missing.
 - The project owner implements substantive core `.cpp` logic unless explicitly delegating it.
