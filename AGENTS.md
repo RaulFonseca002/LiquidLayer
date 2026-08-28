@@ -18,7 +18,7 @@ Liquid is developed in stages:
 2. **Liquid** — model-facing control, authoring, inspection, validation, and later bounded operation over Solid.
 3. **Liquid Layer** — application policy: user/environment context, sensors, AI/model/agent selection, invocation policy, memory/conversation, and neurodivergent-support scenarios.
 
-Stage 2 is now active. The first approved implementation milestone is **L0 — Model-Facing Lua Capability Contract**.
+Stage 2 is active. The first approved implementation milestone is **L0 — Model-Facing Lua Capability Contract**.
 
 Superposition ECS reference lives at `/home/raul/Desktop/superposition`. Use it only as a local design reference for ECS mechanics where relevant.
 
@@ -37,12 +37,13 @@ L0 extends the existing `Liquid::Lua` authoring boundary. It does not introduce 
 Required concepts:
 
 - a bounded `LuaValueSchema` matching the current `LuaValue` vocabulary;
-- trusted schema metadata registered beside model-visible `LuaComponentCodec<T>` bindings;
-- an immutable `LuaCapabilityManifest` built from trusted binding metadata, the target behavior's current permissions, exact host-generated Lua access paths, and copied readable values;
+- optional short bounded trusted descriptions for component/field meaning or units, without creating a domain ontology;
+- trusted model-facing schema metadata registered beside `LuaComponentCodec<T>` bindings;
+- an immutable `LuaCapabilityManifest` built from trusted binding metadata, the target behavior's current permissions, exact host-generated Lua access paths, copied readable values, current monotonic `now_ms`, and a stable Lua authoring-contract/version marker;
 - deterministic schema/manifest validation and bounded diagnostics;
-- current `World` permission and real codec decode remain final authority.
+- current `World` permission, host-bound Lua closures, and the real codec decode remain final authority.
 
-V1 schema vocabulary should stay intentionally small:
+V1 schema vocabulary stays intentionally small:
 
 - Boolean;
 - signed Integer with optional bounds;
@@ -61,7 +62,9 @@ Permission projection must be exact:
 | Write | no | yes |
 | ReadWrite | yes | yes |
 
-A snapshot is data, never authority. The host must generate the exact Lua path expression; models must not be expected to reconstruct/escape component paths.
+A snapshot is data, never authority. The host generates the exact Lua path expression; models must not reconstruct/escape component paths.
+
+Trusted registration descriptions are bounded metadata. Dynamic runtime/user/device strings remain data and must not be promoted into trusted instructions by future renderers.
 
 Model-facing views are immutable copies built on the owner thread. Do not introduce an async transport that calls `World`/`Runtime` from another thread.
 
@@ -85,6 +88,7 @@ CMakeLists.txt
 AGENTS.md
 DEVELOPMENT_TRACKING.md
 Liquid_Concepts_and_Architecture.md
+README.md
 docs/LIQUID_STAGE2_PLAN.md
 docs/LIFECYCLE_SCRIPTING.md   # only if the public Lua contract changes
 ```
@@ -96,15 +100,16 @@ Small filename/API adjustments inside this existing `scripting/` boundary are al
 At minimum test:
 
 - valid and invalid schemas for every V1 kind;
-- range, required-field, unknown-field, nesting, collection, and string bounds;
+- range, required-field, unknown-field, nesting, collection, string, enum, node, and description bounds;
 - a real `Light{brightness}` Lua codec with declared `0..100` shape;
 - every emitted readable snapshot validates against its registered schema;
 - Read/Write/ReadWrite manifest projection matches current `World` permission exactly;
 - access revocation/removal is reflected by a rebuilt manifest;
 - unusual names receive exact safe host-generated Lua path expressions;
+- manifest captures `now_ms` and the authoring-contract/version marker deterministically;
 - manifest data contains copies, never raw slots/pointers/registries;
 - the existing schema-less `expose_component(...)` path remains source-compatible;
-- model schema metadata cannot enlarge actual Lua/World authority;
+- model schema/description metadata cannot enlarge actual Lua/World authority;
 - strict full suite remains green.
 
 Do not claim formal equivalence between arbitrary executable C++ codecs and schema metadata. The real codec remains final validation.
@@ -140,8 +145,9 @@ Important consequences:
 - Do not introduce `SemanticTrigger`, `BehaviorCondition`, or equivalent adaptive abstractions until multiple real scenarios prove existing Lua/components/intents/application orchestration are insufficient.
 - Changing context does not silently mutate an approved `LuaBehaviorScript`; changing source is an explicit behavior revision.
 - An external model may be stateless between calls, but current runtime truth must be reconstructed from Liquid/Solid rather than trusted from agent memory.
+- Provider-side structured/constrained output is useful generation assistance, never an authority boundary; Liquid/Solid validate locally.
 
-See `docs/LIQUID_STAGE2_PLAN.md` for the complete rationale, acceptance scenarios, rejected alternatives, and provisional L1+ ladder.
+See `docs/LIQUID_STAGE2_PLAN.md` for the rationale, acceptance scenarios, rejected alternatives, research, and provisional L1+ ladder.
 
 ---
 
@@ -227,7 +233,7 @@ The project owner implements substantive core `.cpp` logic unless explicitly ask
 - Stale and cross-world handles are rejected; exhausted generations retire slots.
 - `ComponentType<T>` is also world-bound/versioned as implemented by v0.1.
 - `SessionId`, `CommandId`, and `RecordId` are monotonic/non-recyclable in their documented scopes.
-- Runtime handles are not permanent historical identities and should not be exposed to models when a stable semantic name/view can be used instead.
+- Runtime handles are not permanent historical identities and should not be exposed to models when a stable semantic/opaque view can be used instead.
 
 ### Intents
 
@@ -246,7 +252,7 @@ The project owner implements substantive core `.cpp` logic unless explicitly ask
 - Lua never receives `World`, registries, storage, raw slots/pointers, or arbitrary owner selection.
 - Named proposals, cancellations, and watches validate/commit transactionally; failed bundles leave no partial mutation.
 - `solid.owned_intents` exposes only opaque snapshots of the executing behavior's own named live intents.
-- The stable authoring contract is documented in `docs/LIFECYCLE_SCRIPTING.md` and the scripting section of `Liquid_Concepts_and_Architecture.md`.
+- The executable authoring contract is in `docs/LIFECYCLE_SCRIPTING.md` and the current scripting headers. Stage 2 model-facing metadata/roadmap is in `docs/LIQUID_STAGE2_PLAN.md`.
 
 ### Evidence
 
@@ -272,7 +278,7 @@ Do not add:
 - voice or biosignal pipelines;
 - Liquid Layer application policy;
 - shared-library ABI promises;
-- changes to Solid event format v1;
+- changes to Solid Event Format v1;
 - multi-writer/network-filesystem event stores;
 - encryption/tamper-evidence claims.
 
