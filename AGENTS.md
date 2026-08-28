@@ -2,7 +2,7 @@
 
 This file is the working context for Codex or other coding agents inside the `liquid` repository.
 
-Keep this file short and operational. Do not turn it into a full design document.
+Keep this file short and operational. Do not turn it into a full design document. `docs/LIQUID_STAGE2_PLAN.md` contains the Stage 2 architecture and roadmap.
 
 ---
 
@@ -10,46 +10,138 @@ Keep this file short and operational. Do not turn it into a full design document
 
 **Liquid Layer** is the final application/research project: an adaptive smart-environment system focused on reducing cognitive friction for neurodivergent people.
 
-**Liquid** is the standalone engine/runtime that Liquid Layer will use.
+**Liquid** is the standalone engine/framework that Liquid Layer will use.
 
-Liquid is being developed in stages:
+Liquid is developed in stages:
 
-1. **Solid** — deterministic ECS-inspired runtime.
-2. **Liquid** — adaptive/LLM layer that generates or modifies solid behavior blocks.
-3. **Liquid Layer** — final neurodivergent-support application built on top of Liquid.
+1. **Solid** — deterministic ECS-inspired runtime, complete at v0.1.0 through M1-M6 and S0-S7.
+2. **Liquid** — model-facing control, authoring, inspection, validation, and later bounded operation over Solid.
+3. **Liquid Layer** — application policy: user/environment context, sensors, AI/model/agent selection, invocation policy, memory/conversation, and neurodivergent-support scenarios.
 
-Stage 1, **Solid**, is complete and released at v0.1.0, including the S0-S7
-framework finalization. Current work is limited to researching, debating, and
-approving the first Stage 2, **Liquid**, milestone.
+Stage 2 is now active. The first approved implementation milestone is **L0 — Model-Facing Lua Capability Contract**.
 
-Superposition ECS reference lives at `/home/raul/Desktop/superposition`. Use it as a local design reference for component managers, coordinator-owned signatures, and template-driven component type lookup.
+Superposition ECS reference lives at `/home/raul/Desktop/superposition`. Use it only as a local design reference for ECS mechanics where relevant.
 
 ---
 
 ## Current Coding Milestone
 
-### Stage 2 Liquid Research and Milestone Definition
+### L0 — Model-Facing Lua Capability Contract
 
-Solid v0.1.0 is complete. M1-M6 and S0-S7 provide the frozen deterministic
-foundation: lifecycle scripting, effects/feedback, durable replay, simulation,
-packaging, and the optional Solid Scope instrument.
+Goal:
 
-Current milestone: **define and obtain owner approval for the first Stage 2
-Liquid implementation milestone**. This is a research/design phase. Compare
-candidate adaptive/LLM boundaries against the frozen Solid contracts, make
-tradeoffs explicit, and record the approved smallest complete milestone in
-`DEVELOPMENT_TRACKING.md` before implementation begins.
+> Make an existing prepared Solid behavior's Lua capabilities machine-readable, bounded, and host-verifiable without calling a model, adding MCP, changing runtime semantics, or activating generated behavior.
 
-Do not add Stage 2 source folders, dependencies, LLM integrations, prompts,
-adapters, or runtime behavior during this research phase. Documentation may be
-updated to record research decisions, but repository expansion waits for the
-owner-approved milestone. Solid v0.1 contracts must not be weakened to make an
-adaptive design easier.
+L0 extends the existing `Liquid::Lua` authoring boundary. It does not introduce a new adaptive runtime, provider abstraction, MCP server, or `Liquid::Adaptive` target.
 
-All later implementation still belongs on a short-lived branch from current
-`origin/main`. Solid Scope remains an optional Unix-only owner-operated
-development application, is excluded from the installed package, and must
-never become a second Runtime.
+Required concepts:
+
+- a bounded `LuaValueSchema` matching the current `LuaValue` vocabulary;
+- trusted schema metadata registered beside model-visible `LuaComponentCodec<T>` bindings;
+- an immutable `LuaCapabilityManifest` built from trusted binding metadata, the target behavior's current permissions, exact host-generated Lua access paths, and copied readable values;
+- deterministic schema/manifest validation and bounded diagnostics;
+- current `World` permission and real codec decode remain final authority.
+
+V1 schema vocabulary should stay intentionally small:
+
+- Boolean;
+- signed Integer with optional bounds;
+- finite Number with optional bounds;
+- String with explicit bounds and optional finite enum;
+- Array with one item schema and count bounds;
+- Object with named required/optional fields and unknown fields rejected by default.
+
+Do not add null, bytes, unions, `$ref`, regex constraints, arbitrary JSON Schema, or provider-specific schema keywords unless a real current Lua codec proves they are required.
+
+Permission projection must be exact:
+
+| Permission | readable snapshot | writable schema |
+|---|---:|---:|
+| Read | yes | no |
+| Write | no | yes |
+| ReadWrite | yes | yes |
+
+A snapshot is data, never authority. The host must generate the exact Lua path expression; models must not be expected to reconstruct/escape component paths.
+
+Model-facing views are immutable copies built on the owner thread. Do not introduce an async transport that calls `World`/`Runtime` from another thread.
+
+### L0 allowed files
+
+Expected implementation area:
+
+```text
+include/liquid/scripting/LuaValueSchema.hpp
+include/liquid/scripting/LuaCapabilityManifest.hpp
+include/liquid/scripting/LuaBehaviorRunner.hpp
+
+src/scripting/LuaValueSchema.cpp
+src/scripting/LuaCapabilityManifest.cpp
+src/scripting/LuaBehaviorRunner.cpp
+
+tests/test_lua_schema.cpp
+tests/test_lua_manifest.cpp
+
+CMakeLists.txt
+AGENTS.md
+DEVELOPMENT_TRACKING.md
+Liquid_Concepts_and_Architecture.md
+docs/LIQUID_STAGE2_PLAN.md
+docs/LIFECYCLE_SCRIPTING.md   # only if the public Lua contract changes
+```
+
+Small filename/API adjustments inside this existing `scripting/` boundary are allowed when tests make a cleaner shape obvious. Do not create speculative Stage 2 folders.
+
+### L0 success evidence
+
+At minimum test:
+
+- valid and invalid schemas for every V1 kind;
+- range, required-field, unknown-field, nesting, collection, and string bounds;
+- a real `Light{brightness}` Lua codec with declared `0..100` shape;
+- every emitted readable snapshot validates against its registered schema;
+- Read/Write/ReadWrite manifest projection matches current `World` permission exactly;
+- access revocation/removal is reflected by a rebuilt manifest;
+- unusual names receive exact safe host-generated Lua path expressions;
+- manifest data contains copies, never raw slots/pointers/registries;
+- the existing schema-less `expose_component(...)` path remains source-compatible;
+- model schema metadata cannot enlarge actual Lua/World authority;
+- strict full suite remains green.
+
+Do not claim formal equivalence between arbitrary executable C++ codecs and schema metadata. The real codec remains final validation.
+
+---
+
+## Stage 2 Boundary
+
+The accepted architecture is:
+
+```text
+Liquid Layer
+    chooses local/hosted model or agent runtime
+    decides when to invoke it and what application context means
+        │
+        ▼
+Liquid
+    exposes focused model-facing semantic capabilities
+    discover / author / observe / validate / evaluate / bounded operation
+        │
+        ▼
+Solid
+    deterministic runtime authority and evidence
+```
+
+Important consequences:
+
+- Liquid does not choose providers/models or decide local versus cloud.
+- Direct inference and agent execution are separate application choices over the same Liquid surface.
+- Hermes is a future external consumer/integration target, not a Liquid dependency.
+- MCP is a future transport adapter over Liquid's semantic API, not Liquid's internal domain model.
+- Do not add a `ModelPort` unless a future engine-level requirement proves Liquid itself must invoke a model.
+- Do not introduce `SemanticTrigger`, `BehaviorCondition`, or equivalent adaptive abstractions until multiple real scenarios prove existing Lua/components/intents/application orchestration are insufficient.
+- Changing context does not silently mutate an approved `LuaBehaviorScript`; changing source is an explicit behavior revision.
+- An external model may be stateless between calls, but current runtime truth must be reconstructed from Liquid/Solid rather than trusted from agent memory.
+
+See `docs/LIQUID_STAGE2_PLAN.md` for the complete rationale, acceptance scenarios, rejected alternatives, and provisional L1+ ladder.
 
 ---
 
@@ -57,31 +149,19 @@ never become a second Runtime.
 
 This project uses one GitHub repository, `RaulFonseca002/tcc`, with one long-lived branch.
 
-- `main` is the single development branch. It carries the Solid engine and the development instruments (Solid Scope, trace tooling, test applications) in one tree.
-- Engine/tool separation is enforced at the CMake packaging boundary, not by branches: installed consumers receive only the `Liquid::Core`, `Liquid::Lua`, and `Liquid::Simulation` targets and their public package files; Solid Scope, app executables, and their tests are never installed or exported.
-- `experiment/stage2` is retired. It was the former visualization track and was fast-forwarded into `main` at its final commit; do not develop on it.
-- Never force-push or rebase `main` after it has been published.
-
-### Making a Change
-
-1. Start a short-lived branch from current `origin/main`.
-2. Implement the smallest complete change with its regression evidence.
-3. Run the strict full suite (`-DLIQUID_ENABLE_STRICT_WARNINGS=ON -DLIQUID_WARNINGS_AS_ERRORS=ON`, `ctest --output-on-failure`).
-4. Merge into `main` through its normal review path and confirm the remote CI matrix stays green. The standing matrix is Linux-only by design (strict Release on GCC and Clang, ASan/UBSan, TSan, the Core coverage gate, and the Core-only consumers); the matrix runs only on `main` landings, pull requests, or manual dispatch, never on ordinary branch pushes, and superseded runs cancel.
-5. macOS AppleClang and Windows MSVC are source-compatibility targets verified on demand through the manual Portability workflow (`gh workflow run Portability`), not on every landing. Run it before a release candidate or after touching platform-conditional code.
-6. Core changes must not depend on visualization code; Scope changes must not alter Solid core semantics. The Python bridge regressions run on Linux CI only — the bridge is an owner-operated Linux instrument.
-
-### Future Separation
-
-The intended "proper" separation is a later split of Solid Scope into its own repository that consumes the engine through `find_package(Liquid)` like any other installed consumer. The natural moment is Stage 2 kickoff or the first post-0.1 release. Until then, do not create new long-lived branches, and update this section before moving any code to a second repository.
+- `main` is the single long-lived development branch.
+- `experiment/stage2` is retired; do not develop on it.
+- Start each implementation milestone/change on a short-lived branch from current `origin/main`.
+- Never force-push or rebase published `main`.
+- Run the strict full suite before merge: `-DLIQUID_ENABLE_STRICT_WARNINGS=ON -DLIQUID_WARNINGS_AS_ERRORS=ON`, then `ctest --output-on-failure`.
+- Standing CI is Linux strict GCC/Clang, ASan/UBSan, TSan, Core coverage, and Core-only consumers. AppleClang/MSVC portability is manually dispatched when appropriate.
+- Engine/tool separation is enforced at the CMake packaging boundary. Solid Scope remains an owner-operated development instrument and never becomes a second Runtime.
 
 ---
 
 ## Current Repository Shape
 
-Do not create folders before an approved milestone needs them. The map below is
-directory-level; the CMake source list in `CMakeLists.txt` is the authoritative
-file inventory.
+Do not create folders before an approved milestone needs them. `CMakeLists.txt` is the authoritative source-file inventory.
 
 ```text
 liquid/
@@ -89,29 +169,24 @@ liquid/
   AGENTS.md
   DEVELOPMENT_TRACKING.md
   Liquid_Concepts_and_Architecture.md
-  ARTICLE_NOTES.md
   COMPLETE_SOLID.md
 
-  docs/            # frozen v0.1 contracts and operational guides
-  apps/            # simulation CLI, trace executable, Solid Scope visualizer
-  include/liquid/  # public headers; detail/ is internal implementation
+  docs/
+  apps/
+  include/liquid/
   src/
-    world/         # World and Coordinator
-    runtime/       # Runtime frame driver, effects state, evidence,
-                   # feedback, restore; src-private RuntimeInternals.hpp
-    events/        # event stores, on-disk format codec, value codec, replay
-    effects/       # effect types, feedback channel, idempotent dispatcher
-    scripting/     # sandboxed Lua boundary
-  tests/           # Catch2 suites and golden fixtures
-  fuzz/            # decoder fuzz targets
-  examples/        # source-tree and installed-package consumers
-  third_party/     # pinned Catch2 and Lua distributions
+    world/
+    runtime/
+    events/
+    effects/
+    scripting/
+  tests/
+  fuzz/
+  examples/
+  third_party/
 ```
 
-Allowed to add new folders only when a milestone explicitly requires them.
-Src-private headers (for example `src/runtime/RuntimeInternals.hpp` and the
-`src/events/FileEventStore*.hpp` pair) are included by quoted relative path,
-are never installed, and never appear in `include/liquid`.
+Src-private headers are never installed or treated as consumer API.
 
 ---
 
@@ -126,183 +201,93 @@ Codex should primarily generate:
 - compile fixes;
 - documentation updates.
 
-The project owner implements the core `.cpp` logic unless explicitly asked otherwise.
-
-Do not silently implement large behavior or runtime logic.
+The project owner implements substantive core `.cpp` logic unless explicitly asking an agent to do so. Do not silently implement large runtime or behavior logic.
 
 ---
 
-## Solid Core Rules
+## Frozen Solid Rules Relevant to Liquid
 
-### Behaviors
+### Authority and runtime
 
-- A behavior is the main domain identity in the Solid runtime.
-- Agents later will be behaviors with an `Agent` component.
-- Behaviors own the intents created on their behalf.
-- Behavior logic belongs in systems that process behavior components, not in virtual behavior objects.
+- `Runtime` owns the deterministic frame loop and is its sole phase driver.
+- `World` is the public state/behavior/component lifecycle boundary.
+- `Coordinator`, registries, `WorldState`, storage internals, raw slots, and mutable pointers are not model-facing API.
+- `World` and `Runtime` are single-thread-confined. Hosts provide broader synchronization.
+- External state changes only after authoritative reports or revisioned observations; selected desire is not physical truth.
+
+### Behaviors and agents
+
+- A behavior is the main Solid domain identity and owns its intents.
+- Behavior logic belongs in systems/components such as the Lua lifecycle system, not virtual behavior objects.
+- Do **not** assume an external adaptive agent must itself be represented by an `Agent` component or Solid behavior. Stage 2 agents may live outside Solid and consume Liquid's model-facing API.
+
+### Handles
+
+- Public `BehaviorId`, `IntentId`, and component-slot handles are world-bound generational handles carrying world identity, slot, and 32-bit generation.
+- Stale and cross-world handles are rejected; exhausted generations retire slots.
+- `ComponentType<T>` is also world-bound/versioned as implemented by v0.1.
+- `SessionId`, `CommandId`, and `RecordId` are monotonic/non-recyclable in their documented scopes.
+- Runtime handles are not permanent historical identities and should not be exposed to models when a stable semantic name/view can be used instead.
 
 ### Intents
 
 - Intents are immutable after creation.
-- Behaviors, agents, systems, events, or schedules may create intents with a `BehaviorId` owner/source.
-- Intents request component-state changes or external effects; they are not stored as components.
-- `IntentRegistry` resolution may select or ignore an intent.
-- Lifetime/cleanup logic may expire an intent.
-- Cleanup may delete an intent, and explicit deletion is the current cancellation model.
-- No system should mutate the semantic contents of an existing intent after creation.
-- `IntentRegistry` owns immutable typed intent records as the source of truth and keeps secondary indexes for owner and target lookup.
-- `IntentRegistry` owns intent data, indexes, expiration cleanup during resolution, and deterministic intent selection.
-- Intent targets use `ComponentTypeId + ComponentSlotId` for component-state requests and are indexed as type -> slot -> intent IDs.
-- `IntentRegistry` does not validate whether an owner `BehaviorId` exists.
-- Valid behavior ownership should be enforced before calling intent APIs, normally through `World` or behavior creation flow.
-- World-created component intents require current write access to their target slot.
-- World cleanup destroys intents whose target slot is removed or whose owner loses write access to that target.
-- `World::create_behavior()` must create the matching intent pool, and behavior destruction must remove that pool, so behavior state and intent-manager behavior pools stay aligned.
-- Manager command functions such as `IntentRegistry::destroy(IntentId)` may assume valid live handles from the project flow; query functions such as `exists(...)` can still return false safely.
-- Prefer making invalid states unreachable at the call boundary over repeating defensive checks in every lower-level manager.
+- Current lifetime policies are `Persistent` and `UntilTime`; explicit cancellation destroys an intent.
+- A live intent that loses resolution remains alive. Losing selection is not cancellation.
+- Behaviors own intents; owner/target indexes and cleanup remain registry-owned.
+- World-created component intents require current write permission and are cleaned if the target disappears or permission is lost.
+- Do not add LLM arbitration to deterministic conflict resolution by default.
 
-### IDs
+### Lua boundary
 
-Current planned ID model:
+- Generated executable behavior uses the existing lifecycle Lua path unless a later milestone explicitly proves another representation is necessary.
+- Lua gets a fresh VM per behavior/frame. Persistent state belongs in normal serializable components.
+- Lua gets only typed, named, allowlisted capabilities, copied snapshots, a host-fixed owner, and host-fixed monotonic time.
+- Lua never receives `World`, registries, storage, raw slots/pointers, or arbitrary owner selection.
+- Named proposals, cancellations, and watches validate/commit transactionally; failed bundles leave no partial mutation.
+- `solid.owned_intents` exposes only opaque snapshots of the executing behavior's own named live intents.
+- The stable authoring contract is documented in `docs/LIFECYCLE_SCRIPTING.md` and the scripting section of `Liquid_Concepts_and_Architecture.md`.
 
-- `BehaviorId`: 16-bit value, world-local, recyclable.
-- `IntentId`: 32-bit value, world-local, recyclable.
-- `ComponentTypeId`: 16-bit value used for registered component types and signatures.
-- `Signature`: component-type bitset used by both behavior composition and system requirements.
-- `ComponentType<T>`: typed runtime handle returned by component registration; outside code should keep this handle and pass it back to component APIs.
-- `ComponentSlotId`: 16-bit value used as the slot handle inside one typed component storage.
-- Packed composite keys may combine two 16-bit values into one 32-bit value when the relationship is structural and stable.
-- `IntentId` is a global recyclable intent-record handle; owner and target are stored on the intent record and indexed separately.
-- IDs are handles inside the current world state, not permanent historical IDs.
-- Logs/replay later use frame/log/event identifiers for historical uniqueness.
+### Evidence
 
-### Components
-
-- Components are plain data.
-- Component types are the signatures systems query for.
-- Component storage is only a typed slot pool for one component type.
-- Component names are owned by `ComponentRegistry`, not by `ComponentStorage`.
-- Component names are globally unique per component type, such as `Light` plus `"officeLight"`.
-- Component types are registered with explicit stable names and return `ComponentType<T>` handles, as established in M1.
-- `TypeName -> ComponentTypeId` happens at registration; after that, `ComponentTypeId` is the internal runtime key for storage, name maps, and behavior signatures.
-- Behaviors do not own components exclusively. Multiple behaviors may receive read/write access to the same named component.
-- `ComponentRegistry` owns component type IDs, the type-erased storage map, and the `ComponentName <-> ComponentSlotId` indexes for each component type.
-- `ComponentStorage<T>` owns component slots, slot recycling, and access records for that one component type.
-- Live component slots are represented explicitly; removal destroys the stored value immediately, and liveness checks are constant-time.
-- References and pointers returned by component APIs are borrowed only until the next structural mutation of that typed storage. Never retain them across frames or expose them to Lua.
-- Behavior access is tracked inside the typed storage as `BehaviorId -> vector<ComponentSlotAccess>`, where each access records a slot and read/write mode.
-- In M4, `World` is the outside-facing state boundary and owns `WorldState`. `Runtime` is the sole frame-phase driver; `Coordinator` is internal consistency logic over `WorldState`.
-- The settled M4 order is `begin -> expire -> systems -> resolve -> end`, so intents created by systems can participate in the same frame.
-- World and system topology cannot change during system dispatch. Systems may use component data through existing APIs and create or cancel intents.
-- Systems request `name -> ComponentSlotId` maps for a behavior and component type. Behavior permission checks happen before component slots are handed out or resolved.
-- System registration receives its initial `Signature` atomically. Only `Coordinator` derives membership from behavior signatures; `World` has no public manual membership override.
-- Membership callbacks are observational and should not throw or mutate topology. The registry commits all transitions and then rethrows the first callback error; creation/registration may roll back the newly created object, while already-started structural changes remain committed and consistent.
-- Physical addresses or adapter references may belong inside component data when needed; permissions belong in the behavior/type/slot access table.
-- Components should not contain virtual behavior.
-- Do not use C++ inheritance between components.
-- Use composition: common components plus specific components.
-- Script behavior should be represented as component data processed by a system later; the completed M1 core only provides the storage/query foundation for that path.
-
-### Lifetime
-
-- Behavior lifetime may be modeled with behavior components when needed.
-- Intent lifetime is intent metadata, not component storage.
-- M2 introduced the minimal lifetime model needed to evaluate and clean expired immutable intents.
-- Current lifetime policies are persistent and until-time. Explicit cancellation is represented by destroying the intent. Until-frame, cancellation events, or script-based lifetime can remain future work unless explicitly required.
-- `IntentTime` is monotonic session-relative time in milliseconds, never wall-clock or epoch time. Explicit frame times must be nondecreasing.
-- Factories/bundles should be used later so required intent fields and behavior component sets are not forgotten.
-
-### Runtime and Lua Boundary
-
-- `World` and `Runtime` are single-thread-confined; callers provide any external synchronization.
-- Lua receives only typed, named, allowlisted capabilities for creating new intents. It never receives `World`, `Coordinator`, registries, storage, raw component slots, component pointers, or a caller-selected owner.
-- Cached capability layouts contain only immutable host descriptions keyed by lifecycle-unique world and behavior access revisions. Lua gets a fresh state, table, and copied snapshot on every execution.
-- Access-table contents are data, not authority. Writable entries expose only `propose(request)`, and one execution may buffer multiple proposals for the same target before any intent is committed.
-- The host fixes the executing `BehaviorId` and current time. Lua may request only persistent lifetime or a checked duration in milliseconds.
-- Each execution has bounded instructions, Lua memory, buffered host values, strings, tables, source size, diagnostic size, and created-intent count.
-- A failed script returns an execution error and restores the exact pre-execution intent transaction state, including cancellations, replacements, indexes, sequences, and capacity. Script errors must not escape `System::run` and fault the whole runtime.
-- Lua C closures catch C++ exceptions before returning to Lua, and Lua error jumps must not cross live C++ RAII objects.
-- `Liquid_Concepts_and_Architecture.md`, section 13, is the canonical Lua script-authoring and future model-prompt contract. Generated scripts also require a trusted dynamic capability manifest; never infer codec schemas or permissions from snapshots alone.
-
-### Serialization/Reproducibility
-
-Design headers so the data can later be serialized and replayed.
-
-Avoid:
-
-- raw function pointers in components;
-- hidden mutation paths;
-- polymorphic component objects;
-- runtime-only state as the only source of truth.
+- Solid evidence answers what the deterministic runtime executed and observed.
+- Do not put model prompts, agent memory, or proposal rationale into frozen Solid Event Format v1.
+- A future Liquid proposal journal may reference Solid evidence without replacing it.
 
 ---
 
-## Current Success Criteria
+## What Not to Build in L0
 
-The Stage 2 research phase is complete when:
+Do not add:
 
-1. The problem and smallest useful Liquid capability are stated without
-   assuming an LLM must sit inside the deterministic Runtime.
-2. Candidate designs are compared against Solid's authority, determinism,
-   replay, privacy, failure, and testability contracts.
-3. Open questions and rejected alternatives are explicit enough for the owner
-   to debate and decide.
-4. The owner approves one bounded first milestone, its evidence, and its
-   allowed files before any implementation begins.
-5. `DEVELOPMENT_TRACKING.md` and this file are updated to promote that
-   milestone; no speculative repository structure is added beforehand.
-
----
-
-## What Not to Build Yet
-
-Do not add these until an approved Stage 2 milestone explicitly requires them:
-
-- LLM integration;
+- model-provider clients or API keys;
+- OpenAI/Anthropic/llama.cpp/vLLM/Hermes integration;
+- MCP server/client dependencies;
+- prompt builders or autonomous repair loops;
+- behavior activation/approval flow;
+- generic runtime-inspection or mutating remote tools;
+- a new behavior DSL/IR;
+- adaptive trigger abstractions;
 - MQTT or real hardware adapters;
 - voice or biosignal pipelines;
-- final Liquid Layer application concepts;
+- Liquid Layer application policy;
 - shared-library ABI promises;
-- multi-writer or network-filesystem event stores;
-- encryption or tamper-evidence claims.
-
-## Future Notes
-
-- M1 is complete: ECS-style behavior identity, typed component storage/registry, coordinator-owned signatures, intent owner pools, system membership, expanded assert tests, stress tests, and opt-in sanitizer builds are in place.
-- M2 intent lifetime and expiration is complete and now flows through `World` at the public boundary.
-- M3 intent resolution is complete: behavior/type access produces `name -> ComponentSlotId`, `IntentRegistry` returns `name -> selected IntentId`, and later application resolves component data through coordinator/registry APIs.
-- System coordination is implemented as template-addressed system registration, signatures, behavior membership, and membership callbacks.
-- M4 minimal frame loop is complete: `Runtime` alone drives `begin -> expire -> systems -> resolve -> end`, records completed or failed frames, accepts only nondecreasing explicit time, and runs systems in deterministic registration order.
-- M5 Lua behavior scripting is complete: Lua may create new intents only through controlled APIs and cannot mutate existing intent records or bypass `World`.
-- M6 Simulation CLI is complete: it provides a deterministic, inspectable, hardware-free way to exercise the completed Solid core.
-- `Coordinator` remains responsible internally for registering systems, storing or forwarding system `Signature`s, matching behavior signatures to systems, and updating system membership whenever component access changes or a behavior/component is destroyed.
-- Future systems, runtime loops, and adapters should not store direct component pointers as long-term state; use behavior IDs, component type handles, component names, and slots as handles that can be validated each frame.
-
-Only add these when `DEVELOPMENT_TRACKING.md` says the next milestone requires them.
+- changes to Solid event format v1;
+- multi-writer/network-filesystem event stores;
+- encryption/tamper-evidence claims.
 
 ---
 
-## When the User Says the Current Milestone Is Done
+## Milestone Advancement
 
-When the user says something like:
+When L0 is complete:
 
-- “M2 is done”
-- “we are done with this milestone”
-- “move to the next step”
+1. record its regression/verification evidence in `DEVELOPMENT_TRACKING.md`;
+2. re-evaluate the provisional next milestone from `docs/LIQUID_STAGE2_PLAN.md` using what L0 actually taught us;
+3. update this file to the newly approved scope;
+4. expand repository structure only when that milestone requires it.
 
-Codex should:
-
-1. Update `DEVELOPMENT_TRACKING.md`:
-   - mark the current milestone as done;
-   - promote the next milestone to current;
-   - add only the folders/files needed for that next milestone.
-
-2. Update this `AGENTS.md`:
-   - replace the “Current Coding Milestone” section;
-   - update the allowed file/folder list;
-   - keep old completed milestone details out of this file unless still needed.
-
-3. Do not expand the repository structure beyond the new milestone.
+Do not automatically implement the entire provisional L1-L6 ladder.
 
 ---
 
@@ -314,13 +299,13 @@ Codex should:
 - No speculative folders.
 - No large rewrites without explicit request.
 - Prefer clear ownership over clever abstractions.
-- Prefer simple data structures until profiling or complexity proves otherwise.
+- Prefer existing Solid primitives until a missing capability is demonstrated.
 
 ### C++ Formatting Preferences
 
 - Use 4 spaces for indentation.
 - Put opening braces on the same line for functions, classes, and control blocks.
 - Keep simple one-line guard clauses readable; braces are not required for a single obvious statement.
-- Prefer the current project style over adding strict boilerplate everywhere: do not add `nodiscard`, `noexcept`, `const`, or similar qualifiers unless they make the code clearer or solve a real problem.
-- For new classes, keep access sections visually simple: indent `private:`/`public:` one level inside the class and indent members one level under the access label.
+- Prefer the current project style over adding qualifiers/boilerplate without a concrete benefit.
+- For new classes, keep access sections visually simple.
 - Do not reformat unrelated existing code just to normalize style.
