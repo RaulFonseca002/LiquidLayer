@@ -202,3 +202,35 @@ Use the documented `Light{brightness}` example and a deliberately asymmetric cod
 5. **Reassess the provisional roadmap from L0 evidence:** retain the selected external-agent priority. Resolve checkpoint longevity before long-running operation, and approval/revision provenance before live activation.
 
 After fixes, run the strict full suite, the relevant sanitizer/concurrency checks, and the consumer-package gates touched by public APIs. Record reproduction and closure at the actual fixed revision. This review creates no implementation milestone approval and does not advance L0 or the later roadmap.
+
+## Closure — 5 September 2026
+
+**Status of this section:** closure evidence recorded after the fixes; the review text above is preserved unchanged as the dated finding record.
+
+The findings were addressed on branch `fix/pre-liquid-hardening`, based on `origin/main` (`af5af08`, whose `src/`, `include/`, `apps/`, and `tests/` trees are identical to the reviewed revision). One commit per finding; the closing commits and regression test names are tabulated in the "Pre-Liquid Hardening — September 2026" section of `DEVELOPMENT_TRACKING.md`.
+
+| Item | Outcome |
+| --- | --- |
+| B1 | Lifecycle callback lookup, argument construction, and invocation run inside a protected Lua entry; the VM closes through an RAII guard. The 16-change × 2 × 4 KiB reproduction now returns `MemoryLimitExceeded` at 16, 24, 32, 64, and 128 KiB with no committed intents, cancellations, or watches. |
+| B2 | Forward/reverse binding indexes change together; feedback projects only through a binding whose current route/target match the incoming key and whose component slot is live. Rebind, internal-control conversion, removal/recreation, stale queued reports, and target reuse are covered. |
+| B3 | The shared in-flight entry carries the leader's command and outcome; waiters consume it directly. The overlapping-waiter scenario failed within two iterations on the reviewed code and is stable across repeated runs after the fix. |
+| B4 | Behavior and component removals record their tombstone/removed-component evidence whenever the removal completed before a callback threw; pre-removal failures record nothing. |
+| B5 | The effects-path catch publishes the failed `FrameLog` before best-effort failure evidence; injected failures before systems, after dispatch, and while recording failure evidence all surface through `last_frame_log()`. |
+| B6 | Blank or whitespace-only brightness is rejected; explicit `0` remains valid. The headless self-test exercises the parser table. |
+| C1 | Retained-record capacity grows geometrically up to the record cap. Debug probe (2k/4k/8k single appends): 0.498/1.973/7.929 s before, 0.015/0.012/0.022 s after. The simulation-adapter test dropped from about 148 s to 1.35 s in the same build profile. |
+| C2 | Documented as a finite-session limitation in `docs/EVENT_FORMAT_V1.md` and pinned by a replay regression (3,000 embedded frame records survive retention; the next checkpoint after 1,000 more fails with `value node limit exceeded`). No Value-limit or format change. |
+| C3 | One `Impl` helper emits `ScriptExecuted` evidence for both entry points; parity is tested in full-source and hash-only modes. |
+| C4 | The capability cache is bounded at 256 entries with dead-generation pruning and clear-on-overflow; eviction only forces recomputation. |
+| C5 | Recorded as L0 fixture guidance in `DEVELOPMENT_TRACKING.md`; the new regressions use public codec registration. |
+| D1 | `docs/EVENT_FORMAT_V1.md` now states the atomic-replacement commit boundary. |
+| D2 / product | `COMPLETE_SOLID.md` status, Scope findings, and verdict are dated evidence pointing to `DEVELOPMENT_TRACKING.md`; `PRODUCT.md` is explicitly the Solid Scope document. |
+
+Verification at the closing revision (local, Linux, GCC):
+
+- strict Debug build (`LIQUID_ENABLE_STRICT_WARNINGS=ON`, `LIQUID_WARNINGS_AS_ERRORS=ON`): zero warnings;
+- `ctest --test-dir build -j4 --output-on-failure`: 30/30 passed, 9.35 s total;
+- ASan/UBSan Debug build (`LIQUID_ENABLE_SANITIZERS=ON`), same eight-test subset as the review command above: 8/8 passed; `idempotent_dispatcher` also passed `--repeat until-fail:20` under the sanitizers;
+- `visualizer_selftest` (dependency-free Node harness) passed with the new parser table;
+- the simulation-adapter test, which took about 148 s at the reviewed revision, completes in about 1.3 s after C1 in the same Debug profile.
+
+Not run locally: ThreadSanitizer, coverage, Release, cross-platform, fuzz, and consumer-package matrices (Clang is not installed on this machine; the standing CI matrix covers TSan, coverage, Release, and Core-only consumers on push). This closure does not create a milestone approval and does not advance L0.
