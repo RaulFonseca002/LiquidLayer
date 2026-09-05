@@ -63,12 +63,15 @@ code:
     }
 
     if (showVitals) {
-      tftA.print(csi.vitalsCalibrating() ? "vitals  calibrating 60s" : "vitals  heuristic");
+      const char* banner = csi.vitalsCalibrating() ? "vitals  calibrating 60s"
+                          : (csi.presence() ? "vitals  heuristic" : "vitals  room empty");
+      tftA.print(banner);
       char big[16];
-      snprintf(big, sizeof big, "HR %2.0f", csi.heartRate());
-      tftA.displayText(big, 2, 16, 3, csi.presence() ? ST7735_TFT::COLOR_GREEN : ST7735_TFT::COLOR_WHITE);
-      snprintf(big, sizeof big, "BR %2.0f", csi.breathingRate());
-      tftA.displayText(big, 2, 44, 3, ST7735_TFT::COLOR_WHITE);
+      bool show = csi.presence() && !csi.vitalsCalibrating();
+      if (show) snprintf(big, sizeof big, "HR %2.0f", csi.heartRate()); else snprintf(big, sizeof big, "HR --");
+      tftA.displayText(big, 2, 16, 3, show ? ST7735_TFT::COLOR_GREEN : 0x8410);
+      if (show) snprintf(big, sizeof big, "BR %2.0f", csi.breathingRate()); else snprintf(big, sizeof big, "BR --");
+      tftA.displayText(big, 2, 44, 3, show ? ST7735_TFT::COLOR_WHITE : 0x8410);
       // presence lamp + fall flag, top-right
       tftA.fillCircle(148, 8, 6, csi.presence() ? ST7735_TFT::COLOR_GREEN : 0x2104);
       if (csi.fall()) tftA.displayText("FALL", 96, 44, 2, ST7735_TFT::COLOR_RED);

@@ -210,8 +210,18 @@ void RuViewEdge::push(const int8_t* iq, uint16_t iqLen, uint32_t nowMs) {
         if (_fall && (nowMs - _lastFallMs) > 1500) _fall = false;  // auto-clear the flag
     }
 
+    // When no one is present (after calibration), fade the vitals toward 0 so a
+    // stale noise reading does not freeze on screen; RuView also suppresses
+    // vitals without presence.
+    if (!calibrating() && !_presence) {
+        _hrBpm *= 0.8f; if (_hrBpm < 1.0f) _hrBpm = 0.0f;
+        _brBpm *= 0.8f; if (_brBpm < 1.0f) _brBpm = 0.0f;
+    }
+
     // BPM once per second over the filtered histories (linearized into scratch order).
-    if (nowMs - _lastBpmMs >= 1000 && _frameCount > PHASE_HISTORY / 4) {
+    // Only accept estimates while a body is present; noise in an empty room gives
+    // meaningless but in-range numbers otherwise.
+    if (_presence && nowMs - _lastBpmMs >= 1000 && _frameCount > PHASE_HISTORY / 4) {
         _lastBpmMs = nowMs;
         static float scratch[PHASE_HISTORY];
         uint16_t len = (_frameCount < PHASE_HISTORY) ? (uint16_t)_frameCount : PHASE_HISTORY;

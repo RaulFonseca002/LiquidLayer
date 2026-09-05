@@ -42,6 +42,8 @@ public:
     float    motionEnergy() const { return _motion; }
     float    presenceScore() const { return _score; }
     bool     calibrating() const { return _calibFrames < CALIB_FRAMES; }
+    // Vitals are only meaningful when someone is present and warmup is done.
+    bool     vitalsValid() const { return !calibrating() && _presence && _hrBpm > 0.0f; }
     float    sampleRateHz() const { return _fs; }
     uint32_t frames() const { return _frameCount; }
     // True once when a filtered-heart positive zero-crossing occurs (for a heartbeat LED pulse).
