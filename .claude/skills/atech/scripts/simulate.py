@@ -504,7 +504,7 @@ int main(int argc, char** argv) {{
     print(f"compile: ok ({time.time() - t0:.1f}s)")
 
     run = subprocess.run([str(binary), str(scen_file), str(args.tick_us), str(duration), str(args.max_trace)],
-                         capture_output=True, text=True, timeout=120)
+                         capture_output=True, text=True, errors="replace", timeout=120)
     out = run.stdout.splitlines()
     trace = [l for l in out if not l.startswith("#")]
     summary = [l for l in out if l.startswith("#")]

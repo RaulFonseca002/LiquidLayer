@@ -16,6 +16,7 @@
  */
 #include "ruview_csi.h"
 #include "atech_actions.h"
+#include "ruview_wire.h"
 #include <string.h>
 #include <math.h>
 #include <ping/ping_sock.h>   // IDF ping session: the CSI traffic source (esp-csi does the same)
@@ -72,7 +73,6 @@ void RuViewCsi::startWifi() {
     _state = State::Connecting;
     _connectStartMs = millis();
     _probeInject = false;
-    _havePrev = false;
 }
 
 void RuViewCsi::enableCsi() {
@@ -105,7 +105,7 @@ void RuViewCsi::enableCsi() {
     startPump();
     _rateWindowStartMs = millis();
     _framesAtWindowStart = _framesTotal;
-    calibrate();
+    _edge.reset();
 }
 
 void RuViewCsi::armCsi(esp_err_t* eCfg, esp_err_t* eCb, esp_err_t* eOn) {
@@ -196,11 +196,9 @@ void RuViewCsi::update() {
     pumpTraffic(now);
     drainRing(now);
     updateRate(now);
-
-    if (_calibrating && now - _calibStartMs > CALIB_MS && _ambientN > 20) {
-        float mean = _ambientSum / (float)_ambientN;
-        _threshold = mean * 2.5f + 0.02f;   // ambient x2.5 plus a floor against a silent room
-        _calibrating = false;
+    if (_streaming && _sinkValid && now - _lastVitalsMs >= 1000) {
+        _lastVitalsMs = now;
+        sendVitalsPacket(now);
     }
 }
 
@@ -264,7 +262,7 @@ void RuViewCsi::drainRing(uint32_t now) {
     int budget = RING_SLOTS;  // never spend more than one ring per loop
     while (_tail != _head && budget-- > 0) {
         Slot& s = _ring[_tail];
-        updateActivity(s);
+        _edge.push(s.iq, s.len, now);
         if (_streaming && _sinkValid) {
             size_t n = ruview_wire::serializeCsi(_txBuf, sizeof _txBuf, _nodeId, s.nAnt, s.channel,
                                                  s.seq, s.rssi, s.noise, s.iq, s.len);
@@ -275,30 +273,6 @@ void RuViewCsi::drainRing(uint32_t now) {
         }
         __sync_synchronize();
         _tail = (uint8_t)((_tail + 1) % RING_SLOTS);
-    }
-}
-
-void RuViewCsi::updateActivity(const Slot& s) {
-    // Amplitude per subcarrier over the first ACT_SUBCARRIERS complex bins,
-    // mean absolute change vs the previous frame, smoothed with an EMA.
-    uint16_t bins = s.len / 2;
-    if (bins > ACT_SUBCARRIERS) bins = ACT_SUBCARRIERS;
-    if (bins < 8) return;
-    float sum = 0;
-    for (uint16_t i = 0; i < bins; ++i) {
-        float I = (float)s.iq[2 * i], Q = (float)s.iq[2 * i + 1];
-        float amp = sqrtf(I * I + Q * Q) / 128.0f;
-        if (_havePrev) sum += fabsf(amp - _prevAmp[i]);
-        _prevAmp[i] = amp;
-    }
-    if (!_havePrev) { _havePrev = true; return; }
-    float delta = sum / (float)bins;
-    _activity = _activity * 0.9f + delta * 0.1f;
-    if (_calibrating) { _ambientSum += delta; _ambientN++; }
-    else if (_threshold > 0) {
-        // Schmitt trigger: enter above threshold, leave below half of it.
-        if (!_presence && _activity > _threshold) _presence = true;
-        else if (_presence && _activity < _threshold * 0.5f) _presence = false;
     }
 }
 
@@ -313,6 +287,17 @@ void RuViewCsi::updateRate(uint32_t now) {
             if (!_probeInject && _rateHz < LOW_RATE_HZ && now - _connectStartMs > 6000) _probeInject = true;
             if (_probeInject && _rateHz > LOW_RATE_HZ * 3) _probeInject = false;  // beacons alone suffice
         }
+    }
+}
+
+void RuViewCsi::sendVitalsPacket(uint32_t nowMs) {
+    ruview_wire::Vitals v;
+    ruview_wire::fillVitals(v, _nodeId, _edge.presence(), _edge.fall(), _edge.motionEnergy() > 0.02f,
+                            _edge.breathingBpm(), _edge.heartRateBpm(), (int8_t)_lastRssi,
+                            _edge.presence() ? 1 : 0, _edge.motionEnergy(), _edge.presenceScore(), nowMs);
+    if (_udp.beginPacket(_sinkAddr, _sinkPort)) {
+        _udp.write((const uint8_t*)&v, sizeof v);
+        _udp.endPacket();
     }
 }
 
@@ -333,8 +318,9 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
         _logCount--;
         return n > 0 && (size_t)n < cap;
     }
-    const char* type = (_evIdx >= 3) ? "state" : "sensor";
-    static const char* keys[5] = {"frame_rate", "rssi", "activity", "presence", "link"};
+    // Cycle: frame_rate, rssi, heart_rate, breathing_rate, activity, presence, link
+    static const char* keys[7] = {"frame_rate", "rssi", "heart_rate", "breathing_rate", "activity", "presence", "link"};
+    const char* type = (_evIdx >= 5) ? "state" : "sensor";
     int n = snprintf(out, cap, "{\"type\":\"event\",\"payload\":{\"event_type\":\"%s\",\"key\":\"%s_%s\",\"value\":",
                      type, _name, keys[_evIdx]);
     if (n < 0 || (size_t)n >= cap) return false;
@@ -343,14 +329,16 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
     switch (_evIdx) {
         case 0: m = snprintf(out + n, left, "%.1f,\"unit\":\"Hz\"", _rateHz); break;
         case 1: m = snprintf(out + n, left, "%d,\"unit\":\"dBm\"", _lastRssi); break;
-        case 2: m = snprintf(out + n, left, "%.3f", _activity); break;
-        case 3: m = snprintf(out + n, left, "%d", _presence ? 1 : 0); break;
+        case 2: m = snprintf(out + n, left, "%.1f,\"unit\":\"bpm\"", _edge.heartRateBpm()); break;
+        case 3: m = snprintf(out + n, left, "%.1f,\"unit\":\"bpm\"", _edge.breathingBpm()); break;
+        case 4: m = snprintf(out + n, left, "%.3f", _edge.motionEnergy()); break;
+        case 5: m = snprintf(out + n, left, "%d", _edge.presence() ? 1 : 0); break;
         default: m = snprintf(out + n, left, "\"%s\"", stateName()); break;
     }
     if (m < 0 || (size_t)m >= left) return false;
     n += m; left = cap - (size_t)n;
     m = snprintf(out + n, left, ",\"source\":\"ruview_csi\"}}");
-    _evIdx = (uint8_t)((_evIdx + 1) % 5);
+    _evIdx = (uint8_t)((_evIdx + 1) % 7);
     return m > 0 && (size_t)m < left;
 }
 
@@ -383,11 +371,7 @@ void RuViewCsi::setSink(const char* ip, uint16_t port, uint8_t nodeId) {
 }
 
 void RuViewCsi::calibrate() {
-    _calibrating = true;
-    _calibStartMs = millis();
-    _ambientSum = 0;
-    _ambientN = 0;
-    _presence = false;
+    _edge.forceCalibrate();
 }
 
 void RuViewCsi::scanNetworks() {

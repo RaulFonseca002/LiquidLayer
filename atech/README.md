@@ -5,9 +5,9 @@ the room through WiFi (RuView-compatible CSI sensing), shows vitals and the
 Liquid runtime rail on two TFT screens, and talks to the host over USB in the
 Atech event/action envelope.
 
-Status: **Milestone A** (CSI proof). See `~/.claude/plans/…nygaard.md` for the
-full plan; milestones B (vitals DSP, screen A, LEDs/speaker/button) and C
-(screen B rail + Liquid bridge) follow.
+Status: **Milestone B done** — CSI proof (A) plus on-device heart-rate/breathing
+vitals, screen A, and NeoPixel/speaker/button (B). Milestone C (screen B Liquid
+rail + host bridge) is next. See `~/.claude/plans/…nygaard.md` for the full plan.
 
 This folder is deliberately outside Liquid core (`include/`, `src/`, `apps/`,
 `tests/`) and adds nothing to the CMake build. A later round turns it into an
@@ -28,7 +28,7 @@ atech/
 ## Board (14port)
 
 ```
-[9] empty        [10] empty       [11] csi:ruview_csi (Restart)   [13] empty   [14] empty
+[9] btn:button   [10] led:neopixel [11] csi:ruview_csi (Restart)  [13]+[14] spk:speaker
 [7] empty                                                                        (USB-C)
 [1]+[2] tftA:st7735_tft            [3] empty  [4] empty  [5] empty  [6] empty
 ```
@@ -49,8 +49,9 @@ bash $S/deploy.sh atech/projects/liquid-node --port /dev/ttyACM0          # vali
 bash $S/atech-env.sh python $S/monitor.py --seconds 20 --send csi_calibrate null
 ```
 
-Events at 1 Hz each: `csi_frame_rate` (Hz), `csi_rssi` (dBm), `csi_activity`,
-`csi_presence` (0/1), `csi_link` (`unconfigured | connecting | streaming | lost`).
+Events (paced, ~5/s cycling): `csi_frame_rate` (Hz), `csi_rssi` (dBm),
+`csi_heart_rate`/`csi_breathing_rate` (bpm, heuristic), `csi_activity`,
+`csi_presence` (0/1), `csi_link` (`unconfigured|connecting|streaming|lost`).
 
 ## Prove it is a RuView node
 
@@ -73,11 +74,24 @@ Result on 2026-09-05: the server lists the Atech board as `node_id 1`,
 `rssi_dbm -32`, `motion_level present_moving`, `person_count 1`, i.e. it is
 indistinguishable from a stock RuView node.
 
-## Milestone A result (2026-09-05)
+## Results (2026-09-05)
 
-Board on the owner's 2.4 GHz network: **20 CSI frames/s sustained**, ADR-018
-frames received by `csi_sink.py` from the board with 192 subcarriers, zero
-sequence gaps, RSSI about -32 dBm. Activity metric responds to motion.
+**Milestone A** — board on the owner's 2.4 GHz network: 20 CSI frames/s
+sustained, ADR-018 frames received with 192 subcarriers, zero sequence gaps,
+RSSI about -32 dBm. RuView's own Docker sensing server lists it as a live node
+(`node_id 1`, `present_moving`, `person_count` valid).
+
+**Milestone B** — on-device Tier-2 vitals (`modules/ruview_csi/ruview_edge`,
+ported from RuView `edge_processing.c`): biquad bandpass + zero-crossing BPM for
+heart and breathing, Welford presence with 60 s calibration, fall, motion.
+Validated host-side on a synthetic 72 BPM / 15 BPM signal (recovered 71.8 /
+15.1). Live on hardware: heart-rate events around 70-90 BPM, a byte-correct
+32-byte RuView vitals packet (`0xC5110002`) received and decoded, firmware
+736 KB, free heap ~208 KB. Screen A (HR/BR + presence lamp + fall), the
+NeoPixel heartbeat pulse, the speaker presence tick and the button screen-swap
+are code-complete and validated in the host simulator; they are not yet
+hardware-verified because the display, LED and speaker modules are not plugged
+in. These vitals are RuView's heuristic Tier-2, noisy and not medical.
 
 ## Upstream notes (RuView, MIT)
 

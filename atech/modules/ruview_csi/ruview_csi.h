@@ -22,6 +22,7 @@
 #include <Preferences.h>
 #include <esp_wifi.h>
 #include "ruview_wire.h"
+#include "ruview_edge.h"
 
 class RuViewCsi {
 public:
@@ -32,8 +33,6 @@ public:
     static constexpr uint32_t PUMP_INTERVAL_MS  = 50;         // ICMP ping to the gateway -> 20 CSI frames/s
     static constexpr uint32_t PROBE_INTERVAL_MS = 100;        // probe-request injection fallback (10 Hz)
     static constexpr float    LOW_RATE_HZ       = 12.0f;      // below this, enable probe injection
-    static constexpr uint32_t CALIB_MS          = 10 * 1000;  // ambient activity learning window
-    static constexpr uint8_t  ACT_SUBCARRIERS   = 64;         // amplitude bins used for the activity metric
     static constexpr uint8_t  LOGQ              = 24;         // queued log lines (drained one per event tick)
     static constexpr size_t   LOGQ_LEN          = 96;
 
@@ -48,10 +47,15 @@ public:
     bool        isConnected() const { return _state == State::Streaming; }
     float       frameRateHz() const { return _rateHz; }
     int         rssi() const { return _lastRssi; }
-    float       activity() const { return _activity; }
-    bool        presence() const { return _presence; }
-    bool        isCalibrating() const { return _calibrating; }
+    float       activity() const { return _edge.motionEnergy(); }
+    bool        presence() const { return _edge.presence(); }
+    bool        isCalibrating() const { return _edge.calibrating(); }
     uint32_t    framesTotal() const { return _framesTotal; }
+    float       heartRate() const { return _edge.heartRateBpm(); }
+    float       breathingRate() const { return _edge.breathingBpm(); }
+    bool        fall() const { return _edge.fall(); }
+    bool        vitalsCalibrating() const { return _edge.calibrating(); }
+    bool        consumeBeat() { return _edge.consumeBeat(); }
     uint32_t    packetsSent() const { return _packetsSent; }
     uint32_t    droppedFrames() const { return _dropped; }
     const char* sinkIp() const { return _sinkIp; }
@@ -94,7 +98,6 @@ private:
     void stopPump();
     void injectProbe();
     void drainRing(uint32_t nowMs);
-    void updateActivity(const Slot& s);
     void updateRate(uint32_t nowMs);
     static void onActionStatic(const char* action, const char* value, void* ctx);
     void onAction(const char* action, const char* value);
@@ -144,15 +147,6 @@ private:
     float       _rateHz = 0;
 
     // activity / presence
-    float       _prevAmp[ACT_SUBCARRIERS] = {0};
-    bool        _havePrev = false;
-    float       _activity = 0;
-    float       _ambientSum = 0;
-    uint32_t    _ambientN = 0;
-    float       _threshold = 0;
-    bool        _presence = false;
-    bool        _calibrating = false;
-    uint32_t    _calibStartMs = 0;
     uint32_t    _packetsSent = 0;
     uint32_t    _lastTickMs = 0;
     uint8_t     _evIdx = 0;
@@ -161,4 +155,7 @@ private:
     uint8_t     _logHead = 0;
     uint8_t     _logCount = 0;
     uint8_t     _txBuf[ruview_wire::CSI_HEADER + ruview_wire::MAX_IQ_BYTES];
+    RuViewEdge  _edge;
+    uint32_t    _lastVitalsMs = 0;
+    void        sendVitalsPacket(uint32_t nowMs);
 };
