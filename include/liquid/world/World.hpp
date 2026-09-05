@@ -544,15 +544,26 @@ void World::remove_component(ComponentType<Component> type, const std::string& n
             throw std::logic_error("component disappeared before removal");
         encoded = coordinator.encode_component(type, *component);
     }
-    coordinator.remove_component(type, name);
-    if (encoded) {
-        record_component_mutation(ComponentMutation{
-            ComponentTarget{type.id, slot}, name, std::move(*encoded),
-            Value{}, true});
+    auto record_removal = [&] {
+        if (encoded) {
+            record_component_mutation(ComponentMutation{
+                ComponentTarget{type.id, slot}, name, std::move(*encoded),
+                Value{}, true});
+        }
+        record_topology(
+            "component:" + std::to_string(type.id) + ":" + name,
+            Value{}, true);
+    };
+    try {
+        coordinator.remove_component(type, name);
+    } catch (...) {
+        // Membership callbacks may throw after the removal itself has
+        // completed; the evidence must still describe what happened.
+        if (!coordinator.has_component_named(type, name))
+            record_removal();
+        throw;
     }
-    record_topology(
-        "component:" + std::to_string(type.id) + ":" + name,
-        Value{}, true);
+    record_removal();
 }
 
 template <typename Component>

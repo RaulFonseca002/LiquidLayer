@@ -56,11 +56,23 @@ BehaviorId World::create_behavior() {
 void World::destroy_behavior(BehaviorId id) {
     ensure_owner_thread();
     ensure_structural_mutation_allowed();
-    coordinator.destroy_behavior(id);
-    record_topology(
-        "behavior:" + std::to_string(id.world) + ":" +
-            std::to_string(id.slot) + ":" + std::to_string(id.generation),
-        Value{}, true);
+    const bool existed = coordinator.behavior_exists(id);
+    auto record_tombstone = [&] {
+        record_topology(
+            "behavior:" + std::to_string(id.world) + ":" +
+                std::to_string(id.slot) + ":" + std::to_string(id.generation),
+            Value{}, true);
+    };
+    try {
+        coordinator.destroy_behavior(id);
+    } catch (...) {
+        // Membership callbacks may throw after the destruction itself has
+        // completed; the evidence must still describe what happened.
+        if (existed && !coordinator.behavior_exists(id))
+            record_tombstone();
+        throw;
+    }
+    record_tombstone();
 }
 
 bool World::behavior_exists(BehaviorId id) {

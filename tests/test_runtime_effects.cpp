@@ -7,7 +7,9 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -1775,4 +1777,175 @@ TEST_CASE("stale queued reports for a superseded target do not project") {
     REQUIRE(later.frame.completed);
     REQUIRE(later.reports.size() == 1);
     REQUIRE(!runtime.faulted());
+}
+
+namespace {
+
+struct ThrowingRemovalSystem : System {
+    static constexpr std::string_view stableName =
+        "tests.runtime.effects.ThrowingRemovalSystem";
+    static constexpr std::uint32_t version = 1;
+
+    void on_behavior_removed(BehaviorId) override {
+        throw std::runtime_error("removal callback failed");
+    }
+};
+
+// Throws on the Nth append of one event type while persisting everything
+// else, so a frame can be failed at a chosen point of its effects path.
+class FailOnEventTypeStore final : public EventStore {
+    MemoryEventStore backing;
+    EventType failType;
+    std::size_t failOnOccurrence;
+    std::size_t occurrences = 0;
+
+public:
+    std::string failureMessage = "injected append failure";
+    std::optional<EventType> alsoFailType;
+
+    FailOnEventTypeStore(
+        EventStoreMetadata metadata,
+        EventType type,
+        std::size_t occurrence)
+        : backing(std::move(metadata)), failType(type), failOnOccurrence(occurrence) {
+    }
+
+    const EventStoreMetadata& metadata() const override {
+        return backing.metadata();
+    }
+
+    RecordId append(EventData event, Durability durability = Durability::Durable) override {
+        if (event.type == failType && ++occurrences == failOnOccurrence)
+            throw EventStoreError(failureMessage);
+        if (alsoFailType && event.type == *alsoFailType)
+            throw EventStoreError("injected failure-evidence append failure");
+        return backing.append(std::move(event), durability);
+    }
+
+    std::vector<RecordId> append_batch(
+        std::span<const EventData> events,
+        Durability durability = Durability::Durable
+    ) override {
+        std::vector<RecordId> ids;
+        for (const EventData& event : events)
+            ids.push_back(append(event, durability));
+        return ids;
+    }
+
+    std::vector<EventRecord> read_all() const override {
+        return backing.read_all();
+    }
+
+    void flush() override {
+        backing.flush();
+    }
+
+    void retain_from_checkpoint(RecordId checkpoint) override {
+        backing.retain_from_checkpoint(checkpoint);
+    }
+};
+
+std::size_t count_records(
+    const std::vector<EventRecord>& records,
+    EventType type,
+    bool removed
+) {
+    std::size_t count = 0;
+    for (const auto& record : records) {
+        if (record.type != type)
+            continue;
+        const auto& payload = record.payload.as_object();
+        const auto flag = payload.find("removed");
+        if (type != EventType::TopologyChanged ||
+            (flag != payload.end() && flag->second == Value{removed})) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+}
+
+TEST_CASE("removal tombstones survive throwing callbacks into replayed evidence") {
+    EventStoreMetadata metadata;
+    metadata.session = SessionId{42};
+    metadata.engineVersion = "0.1.0";
+    metadata.feedbackTiming = FeedbackTiming::Deferred;
+    FailOnEventTypeStore store{metadata, EventType::FrameStarted, 2};
+    auto runtimeOptions = options(FeedbackTiming::Deferred);
+    runtimeOptions.eventStore = &store;
+    Runtime runtime{runtimeOptions};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    Signature signature;
+    signature.set(levelType.id);
+    world.register_system<ThrowingRemovalSystem>(signature);
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    runtime.run_frame(FrameInput{50, {}, {}});
+    const std::size_t baseline = store.read_all().size();
+
+    REQUIRE_THROWS_AS(world.remove_component(levelType, "level"), std::runtime_error);
+    REQUIRE(!world.has_component_named(levelType, "level"));
+
+    // The tombstones are buffered evidence until a frame drains them, even
+    // if that frame itself fails at its first event append.
+    REQUIRE_THROWS_AS(runtime.run_frame(FrameInput{100, {}, {}}), EventStoreError);
+    REQUIRE(runtime.faulted());
+    const auto records = store.read_all();
+    const bool persisted =
+        count_records(records, EventType::ComponentRemoved, true) == 1 &&
+        count_records(records, EventType::TopologyChanged, true) == 1;
+    const bool stillBuffered =
+        world.component_mutations().size() == 1 &&
+        world.component_mutations().front().removed &&
+        world.topology_mutations().size() == 1 &&
+        world.topology_mutations().front().removed;
+    REQUIRE((persisted || stillBuffered));
+    REQUIRE(records.size() >= baseline);
+}
+
+TEST_CASE("removal tombstones from throwing callbacks drain on the next frame") {
+    EventStoreMetadata metadata;
+    metadata.session = SessionId{42};
+    metadata.engineVersion = "0.1.0";
+    metadata.feedbackTiming = FeedbackTiming::Deferred;
+    MemoryEventStore store{metadata};
+    auto runtimeOptions = options(FeedbackTiming::Deferred);
+    runtimeOptions.eventStore = &store;
+    Runtime runtime{runtimeOptions};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    Signature signature;
+    signature.set(levelType.id);
+    world.register_system<ThrowingRemovalSystem>(signature);
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    runtime.run_frame(FrameInput{50, {}, {}});
+
+    REQUIRE_THROWS_AS(world.destroy_behavior(behavior), std::runtime_error);
+    REQUIRE(!world.behavior_exists(behavior));
+    REQUIRE(runtime.run_frame(FrameInput{100, {}, {}}).frame.completed);
+
+    const auto records = store.read_all();
+    REQUIRE(count_records(records, EventType::TopologyChanged, true) == 1);
+    for (const auto& record : records) {
+        if (record.type != EventType::TopologyChanged)
+            continue;
+        const auto& payload = record.payload.as_object();
+        if (payload.at("removed") == Value{true})
+            REQUIRE(payload.at("key").as_string().find("behavior:") == 0);
+    }
 }
