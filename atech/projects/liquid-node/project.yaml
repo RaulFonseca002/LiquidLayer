@@ -1,0 +1,38 @@
+name: liquid-node
+board: 14port
+modules_path: ../../modules
+modules:
+  - {id: st7735_tft, instance: tftA, ports: [1, 2]}
+  - {id: ruview_csi, instance: csi,  port: 11}
+code:
+  setup: |
+    tftA.setRotation(1);
+  loop: |
+    // Screen A, milestone A: link state, CSI rate, RSSI, activity. Redraw at 2 Hz.
+    static uint32_t lastDraw = 0;
+    if (millis() - lastDraw < 500) return;
+    lastDraw = millis();
+
+    tftA.clear();
+    tftA.setTextSize(1);
+    tftA.setTextColor(ST7735_TFT::COLOR_CYAN);
+    tftA.setCursor(2, 2);
+    tftA.print("RuView CSI node  heuristic");
+
+    const char* st = csi.stateName();
+    uint16_t stColor = csi.isConnected() ? ST7735_TFT::COLOR_GREEN : ST7735_TFT::COLOR_ORANGE;
+    tftA.displayText(st, 2, 14, 2, stColor);
+
+    if (csi.state() == RuViewCsi::State::Unconfigured) {
+      tftA.displayText("send csi_set_wifi", 2, 40, 1, ST7735_TFT::COLOR_WHITE);
+      tftA.displayText("over USB to start", 2, 52, 1, ST7735_TFT::COLOR_WHITE);
+    } else {
+      char line[40];
+      snprintf(line, sizeof line, "%5.1f Hz   %d dBm", csi.frameRateHz(), csi.rssi());
+      tftA.displayText(line, 2, 36, 1, ST7735_TFT::COLOR_WHITE);
+      snprintf(line, sizeof line, "act %.3f %s", csi.activity(), csi.isCalibrating() ? "calibrating" : (csi.presence() ? "PRESENT" : "empty"));
+      tftA.displayText(line, 2, 48, 1, csi.presence() ? ST7735_TFT::COLOR_GREEN : ST7735_TFT::COLOR_WHITE);
+      snprintf(line, sizeof line, "%lu fr  %lu tx  %s", (unsigned long)csi.framesTotal(), (unsigned long)csi.packetsSent(), csi.sinkIp());
+      tftA.displayText(line, 2, 62, 1, ST7735_TFT::COLOR_YELLOW);
+    }
+    tftA.display();
