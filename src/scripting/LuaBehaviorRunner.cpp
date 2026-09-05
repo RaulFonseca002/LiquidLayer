@@ -11,6 +11,7 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -121,6 +122,15 @@ struct LuaMemoryBudget {
     std::size_t limit = 0;
     bool exceeded = false;
 };
+
+struct LuaStateCloser {
+    void operator()(lua_State* state) const noexcept {
+        if (state)
+            lua_close(state);
+    }
+};
+
+using LuaStateGuard = std::unique_ptr<lua_State, LuaStateCloser>;
 
 void* budget_allocator(void* userData, void* pointer, std::size_t oldSize, std::size_t newSize) noexcept {
     auto* budget = static_cast<LuaMemoryBudget*>(userData);
@@ -1156,33 +1166,49 @@ struct LuaBehaviorRunner::Impl {
         return 1;
     }
 
-    static int call_lifecycle_callbacks(
+    // Runs only inside lifecycle_callback's protected frame: callback lookup,
+    // argument construction, and the call itself may all raise Lua errors
+    // (including allocation failures under the memory budget).
+    static void call_lifecycle_callbacks(
         lua_State* state,
         ExecutionContext& context
     ) {
         auto call = [&](std::string_view name, bool includeChanges) {
             if (push_callback(state, name) == 0)
-                return LUA_OK;
+                return;
             push_frame(state, context);
             int argumentCount = 1;
             if (includeChanges) {
                 push_changes(state, context);
                 argumentCount++;
             }
-            return lua_pcall(state, argumentCount, 0, 0);
+            lua_call(state, argumentCount, 0);
         };
 
-        if (context.start) {
-            int status = call("on_start", false);
-            if (status != LUA_OK)
-                return status;
+        if (context.start)
+            call("on_start", false);
+        if (!context.changes->empty())
+            call("on_components_changed", true);
+        call("on_frame", false);
+    }
+
+    static int lifecycle_callback(lua_State* state) noexcept {
+        ExecutionContext& context = context_from_state(state);
+
+        try {
+            call_lifecycle_callbacks(state, context);
+            return 0;
+        } catch (const ExecutionFailure& failure) {
+            context.runner->set_sticky(context, failure.status, failure.what());
+        } catch (const std::exception& exception) {
+            context.runner->set_sticky(context, LuaExecutionStatus::HostError, exception.what());
+        } catch (...) {
+            context.runner->set_sticky(context, LuaExecutionStatus::HostError, "unknown Lua lifecycle error");
         }
-        if (!context.changes->empty()) {
-            int status = call("on_components_changed", true);
-            if (status != LUA_OK)
-                return status;
-        }
-        return call("on_frame", false);
+
+        const std::string& diagnostic = context.stickyDiagnostic;
+        lua_pushlstring(state, diagnostic.data(), diagnostic.size());
+        return lua_error(state);
     }
 
     LuaExecutionResult failure_result(
@@ -1282,7 +1308,8 @@ struct LuaBehaviorRunner::Impl {
 
         LuaMemoryBudget memory;
         memory.limit = limits.maxMemoryBytes;
-        lua_State* state = lua_newstate(budget_allocator, &memory);
+        LuaStateGuard stateGuard(lua_newstate(budget_allocator, &memory));
+        lua_State* state = stateGuard.get();
 
         if (!state)
             return failure_result(LuaExecutionStatus::MemoryLimitExceeded, "Lua state could not be created within memory limit");
@@ -1291,23 +1318,16 @@ struct LuaBehaviorRunner::Impl {
 
         lua_pushcfunction(state, bootstrap_callback);
         int bootstrapStatus = lua_pcall(state, 0, 0, 0);
-        if (bootstrapStatus != LUA_OK) {
-            LuaExecutionResult result = lua_error_result(state, context, memory, LuaExecutionStatus::HostError);
-            lua_close(state);
-            return result;
-        }
+        if (bootstrapStatus != LUA_OK)
+            return lua_error_result(state, context, memory, LuaExecutionStatus::HostError);
 
         int loadStatus = luaL_loadbufferx(state, source.data(), source.size(), "behavior", "t");
-        if (loadStatus != LUA_OK) {
-            LuaExecutionResult result = lua_error_result(state, context, memory, LuaExecutionStatus::SyntaxError);
-            lua_close(state);
-            return result;
-        }
+        if (loadStatus != LUA_OK)
+            return lua_error_result(state, context, memory, LuaExecutionStatus::SyntaxError);
 
         lua_rawgetp(state, LUA_REGISTRYINDEX, &EnvironmentRegistryKey);
         if (!lua_setupvalue(state, -2, 1)) {
             lua_pop(state, 1);
-            lua_close(state);
             return failure_result(LuaExecutionStatus::HostError, "Lua chunk has no environment upvalue");
         }
 
@@ -1319,23 +1339,19 @@ struct LuaBehaviorRunner::Impl {
         int callStatus = lua_pcall(state, 0, 0, 0);
 
         if (callStatus == LUA_OK && context.lifecycle) {
-            try {
-                callStatus = call_lifecycle_callbacks(state, context);
-            } catch (const ExecutionFailure& failure) {
-                lua_sethook(state, nullptr, 0, 0);
-                lua_close(state);
-                return failure_result(failure.status, failure.what());
-            }
+            // Lifecycle callbacks and their host-built arguments run inside
+            // their own protected call so an allocation failure yields a
+            // bounded result instead of a Lua panic.
+            lua_pushcfunction(state, lifecycle_callback);
+            callStatus = lua_pcall(state, 0, 0, 0);
         }
         lua_sethook(state, nullptr, 0, 0);
 
-        if (callStatus != LUA_OK || context.stickyStatus != LuaExecutionStatus::Success || context.instructionExceeded) {
-            LuaExecutionResult result = lua_error_result(state, context, memory, LuaExecutionStatus::RuntimeError);
-            lua_close(state);
-            return result;
-        }
+        if (callStatus != LUA_OK || context.stickyStatus != LuaExecutionStatus::Success || context.instructionExceeded)
+            return lua_error_result(state, context, memory, LuaExecutionStatus::RuntimeError);
 
-        lua_close(state);
+        stateGuard.reset();
+        state = nullptr;
 
         std::vector<IntentId> created;
         std::vector<IntentId> cancelled;

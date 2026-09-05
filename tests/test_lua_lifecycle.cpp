@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 using namespace liquid;
 using namespace liquid::scripting;
@@ -176,4 +177,118 @@ end
     REQUIRE(system.last_result(behavior) != nullptr);
     REQUIRE(!system.last_result(behavior)->succeeded());
     REQUIRE(system.last_result(behavior)->watches.empty());
+}
+
+namespace {
+
+std::vector<LuaBehaviorRunner::ComponentChange> large_changes(std::size_t count) {
+    std::vector<LuaBehaviorRunner::ComponentChange> changes;
+    changes.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        changes.push_back({
+            "Light",
+            "office" + std::to_string(index),
+            LuaValue{std::string(4096, 'a')},
+            LuaValue{std::string(4096, 'b')}
+        });
+    }
+    return changes;
+}
+
+}
+
+// On the reviewed code these cases abort the whole test executable with
+// SIGABRT because lifecycle argument construction ran outside any protected
+// Lua call. ctest reports that abort as a failed test.
+TEST_CASE("lifecycle change arguments exhausting Lua memory yield a bounded result") {
+    const std::string source = R"lua(
+function on_components_changed(frame, changes) end
+function on_frame(frame) end
+)lua";
+    const auto changes = large_changes(16);
+
+    for (const std::size_t limit : {16384u, 24576u, 32768u, 65536u, 131072u}) {
+        INFO("maxMemoryBytes = " << limit);
+        World world;
+        const BehaviorId behavior = world.create_behavior();
+        LuaExecutionLimits limits;
+        limits.maxMemoryBytes = limit;
+        LuaBehaviorRunner runner(limits);
+
+        const LuaExecutionResult result = runner.execute_lifecycle(
+            world, behavior, 0, 100, 0, false, changes, source);
+        REQUIRE(result.status == LuaExecutionStatus::MemoryLimitExceeded);
+        REQUIRE(result.createdIntents.empty());
+        REQUIRE(result.cancelledIntents.empty());
+        REQUIRE(result.watches.empty());
+        REQUIRE(world.intent_count(behavior) == 0);
+
+        LuaBehaviorRunner healthy;
+        const LuaExecutionResult next = healthy.execute_lifecycle(
+            world, behavior, 1, 200, 100, false, changes, source);
+        REQUIRE(next.succeeded());
+    }
+}
+
+TEST_CASE("lifecycle argument exhaustion after on_start commits nothing") {
+    World world;
+    const auto lightType = world.register_component<Light>(
+        "example.Light", 1, light_codec());
+    world.add_component(lightType, "office", Light{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        lightType, behavior, "office", ComponentAccessMode::ReadWrite);
+
+    LuaExecutionLimits limits;
+    limits.maxMemoryBytes = 65536;
+    LuaBehaviorRunner runner(limits);
+    runner.expose_component(lightType, "Light", lua_light_codec());
+
+    const std::string source = R"lua(
+function on_start(frame)
+    solid.watch(access.Light.office)
+    access.Light.office.propose{name = "queued", value = {level = 70}}
+end
+function on_components_changed(frame, changes) end
+function on_frame(frame) end
+)lua";
+    const auto changes = large_changes(16);
+    const LuaExecutionResult result = runner.execute_lifecycle(
+        world, behavior, 0, 100, 0, true, changes, source);
+    REQUIRE(result.status == LuaExecutionStatus::MemoryLimitExceeded);
+    REQUIRE(result.createdIntents.empty());
+    REQUIRE(result.watches.empty());
+    REQUIRE(world.intent_count(behavior) == 0);
+    REQUIRE(world.read_component(lightType, behavior, "office")->level == 10);
+
+    const LuaExecutionResult next = runner.execute_lifecycle(
+        world, behavior, 1, 200, 100, true, {}, source);
+    REQUIRE(next.succeeded());
+    REQUIRE(world.intent_count(behavior) == 1);
+}
+
+TEST_CASE("frame argument construction never escapes the Lua memory bound") {
+    const std::string source = R"lua(
+function on_start(frame) end
+function on_frame(frame) end
+)lua";
+    bool sawBoundedFailure = false;
+    bool sawSuccess = false;
+    for (std::size_t limit = 4096; limit <= 65536; limit += 256) {
+        INFO("maxMemoryBytes = " << limit);
+        World world;
+        const BehaviorId behavior = world.create_behavior();
+        LuaExecutionLimits limits;
+        limits.maxMemoryBytes = limit;
+        LuaBehaviorRunner runner(limits);
+        const LuaExecutionResult result = runner.execute_lifecycle(
+            world, behavior, 0, 100, 0, true, {}, source);
+        REQUIRE((result.status == LuaExecutionStatus::Success ||
+                 result.status == LuaExecutionStatus::MemoryLimitExceeded));
+        sawBoundedFailure = sawBoundedFailure ||
+            result.status == LuaExecutionStatus::MemoryLimitExceeded;
+        sawSuccess = sawSuccess || result.succeeded();
+    }
+    REQUIRE(sawBoundedFailure);
+    REQUIRE(sawSuccess);
 }
