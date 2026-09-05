@@ -248,6 +248,9 @@ public:
         BehaviorId owner,
         const LuaExecutionResult::Watch& watch
     );
+
+    // Diagnostic view of the bounded capability-description cache.
+    std::size_t cached_capability_entries() const;
 };
 
 template <typename Component>

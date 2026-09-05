@@ -844,3 +844,77 @@ TEST_CASE("test_lua_behavior") {
     }
 
 }
+
+TEST_CASE("execute and execute_lifecycle emit byte-identical execution evidence") {
+    const auto evidence = [](bool fullSource, bool lifecycle) {
+        EventStoreMetadata metadata;
+        metadata.session = SessionId{92};
+        metadata.engineVersion = "0.1.0";
+        metadata.feedbackTiming = FeedbackTiming::Deferred;
+        MemoryEventStore store{metadata};
+        RuntimeOptions runtimeOptions;
+        runtimeOptions.sessionId = metadata.session;
+        runtimeOptions.feedbackTiming = metadata.feedbackTiming;
+        runtimeOptions.eventStore = &store;
+        Runtime runtime{runtimeOptions};
+        World& world = runtime.world();
+        const BehaviorId behavior = world.create_behavior();
+        LuaExecutionLimits limits;
+        limits.recordFullSource = fullSource;
+        LuaBehaviorRunner runner{limits};
+        const std::string source = "function on_frame(frame) end\nlocal answer = 42";
+        if (lifecycle) {
+            REQUIRE(runner.execute_lifecycle(
+                world, behavior, 3, 7, 0, true, {}, source).succeeded());
+        } else {
+            REQUIRE(runner.execute(world, behavior, 7, source).succeeded());
+        }
+
+        runtime.run_frame(FrameInput{7, {}, {}});
+        for (const auto& record : store.read_all()) {
+            if (record.type == EventType::ScriptExecuted)
+                return record.payload.as_object();
+        }
+        throw std::runtime_error("missing ScriptExecuted evidence");
+    };
+
+    for (const bool fullSource : {true, false}) {
+        INFO("recordFullSource = " << fullSource);
+        const auto direct = evidence(fullSource, false);
+        const auto viaLifecycle = evidence(fullSource, true);
+        REQUIRE(direct == viaLifecycle);
+        REQUIRE(direct.at("source_included").as_boolean() == fullSource);
+        REQUIRE(direct.at("source_hash").as_string().starts_with("fnv1a64:"));
+        REQUIRE(direct.at("source_hash").as_string().size() == 8 + 16);
+    }
+}
+
+TEST_CASE("capability cache stays bounded under behavior churn in one world") {
+    World world;
+    const auto lightType = world.register_component<Light>(
+        "tests.Light", 1, component_codec());
+    world.add_component(lightType, "office", Light{10});
+    LuaBehaviorRunner runner;
+    runner.expose_component(lightType, "Light", light_codec());
+
+    const BehaviorId keeper = world.create_behavior();
+    world.grant_component_access(lightType, keeper, "office", ComponentAccessMode::Read);
+    const std::string reads = "assert(access.Light.office ~= nil)";
+    const std::string cannotRead =
+        "assert(access.Light == nil or access.Light.office == nil)";
+    REQUIRE(runner.execute(world, keeper, 0, reads).succeeded());
+
+    for (int round = 0; round < 1000; ++round) {
+        const BehaviorId churned = world.create_behavior();
+        world.grant_component_access(lightType, churned, "office", ComponentAccessMode::Read);
+        REQUIRE(runner.execute(world, churned, 0, reads).succeeded());
+        world.destroy_behavior(churned);
+    }
+    REQUIRE(runner.cached_capability_entries() <= 256);
+
+    // Eviction only forces recomputation; it never changes permissions.
+    REQUIRE(runner.execute(world, keeper, 1, reads).succeeded());
+    world.revoke_component_access(lightType, keeper, "office");
+    REQUIRE(runner.execute(world, keeper, 2, cannotRead).succeeded());
+    REQUIRE(runner.cached_capability_entries() <= 256);
+}

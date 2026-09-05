@@ -571,6 +571,10 @@ struct LuaBehaviorRunner::Impl {
         std::size_t bufferedValueBytes = 0;
     };
 
+    // Optional acceleration data only: eviction forces recomputation and
+    // never changes permissions, which the access-revision check guards.
+    static constexpr std::size_t MaximumCachedCapabilityEntries = 256;
+
     LuaExecutionLimits limits;
     std::vector<Binding> bindings;
     std::map<std::pair<WorldInstanceId, BehaviorId>, CachedCapabilities> cache;
@@ -590,6 +594,17 @@ struct LuaBehaviorRunner::Impl {
         context.stickyDiagnostic = bounded_diagnostic(message, limits.maxDiagnosticBytes);
     }
 
+    void prune_cache(World& world) {
+        for (auto entry = cache.begin(); entry != cache.end();) {
+            if (!world.behavior_exists(entry->first.second))
+                entry = cache.erase(entry);
+            else
+                ++entry;
+        }
+        if (cache.size() >= MaximumCachedCapabilityEntries)
+            cache.clear();
+    }
+
     const std::vector<CapabilityDescription>& capabilities_for(World& world, BehaviorId owner) {
         if (!cachedWorld || *cachedWorld != world.instance_id()) {
             cache.clear();
@@ -602,6 +617,9 @@ struct LuaBehaviorRunner::Impl {
 
         if (found != cache.end() && found->second.revision == revision)
             return found->second.descriptions;
+
+        if (found == cache.end() && cache.size() >= MaximumCachedCapabilityEntries)
+            prune_cache(world);
 
         CachedCapabilities refreshed;
         refreshed.revision = revision;
@@ -1211,6 +1229,42 @@ struct LuaBehaviorRunner::Impl {
         return lua_error(state);
     }
 
+    // Single source of the ScriptExecuted evidence for both execution entry
+    // points: FNV-1a 64 digest, lowercase hex rendering, and the full-source
+    // retention decision. The emitted bytes must stay identical across paths.
+    void record_execution_evidence(
+        World& world,
+        BehaviorId owner,
+        IntentTime now,
+        std::string_view source,
+        const LuaExecutionResult& result
+    ) const {
+        constexpr std::uint64_t offset = 14695981039346656037ULL;
+        constexpr std::uint64_t prime = 1099511628211ULL;
+        std::uint64_t hash = offset;
+        for (const char sourceCharacter : source) {
+            hash ^= static_cast<unsigned char>(sourceCharacter);
+            hash *= prime;
+        }
+        static constexpr char digits[] = "0123456789abcdef";
+        std::string sourceHash(16, '0');
+        for (std::size_t index = 0; index < sourceHash.size(); ++index) {
+            sourceHash[sourceHash.size() - index - 1] = digits[hash & 0x0fU];
+            hash >>= 4U;
+        }
+        world.record_script_execution(ScriptExecutionEvidence{
+            owner,
+            now,
+            limits.recordFullSource ? std::string{source} : std::string{},
+            "fnv1a64:" + sourceHash,
+            limits.recordFullSource,
+            static_cast<std::uint32_t>(result.status),
+            result.diagnostic,
+            result.createdIntents.size()
+        });
+    }
+
+
     LuaExecutionResult failure_result(
         LuaExecutionStatus status,
         std::string_view diagnostic
@@ -1446,29 +1500,7 @@ LuaExecutionResult LuaBehaviorRunner::execute(
     } catch (...) {
         result = impl->failure_result(LuaExecutionStatus::HostError, "unknown Lua host error");
     }
-    constexpr std::uint64_t offset = 14695981039346656037ULL;
-    constexpr std::uint64_t prime = 1099511628211ULL;
-    std::uint64_t hash = offset;
-    for (const char sourceCharacter : source) {
-        hash ^= static_cast<unsigned char>(sourceCharacter);
-        hash *= prime;
-    }
-    static constexpr char digits[] = "0123456789abcdef";
-    std::string sourceHash(16, '0');
-    for (std::size_t index = 0; index < sourceHash.size(); ++index) {
-        sourceHash[sourceHash.size() - index - 1] = digits[hash & 0x0fU];
-        hash >>= 4U;
-    }
-    world.record_script_execution(ScriptExecutionEvidence{
-        owner,
-        now,
-        impl->limits.recordFullSource ? std::string{source} : std::string{},
-        "fnv1a64:" + sourceHash,
-        impl->limits.recordFullSource,
-        static_cast<std::uint32_t>(result.status),
-        result.diagnostic,
-        result.createdIntents.size()
-    });
+    impl->record_execution_evidence(world, owner, now, source, result);
     return result;
 }
 
@@ -1491,30 +1523,12 @@ LuaExecutionResult LuaBehaviorRunner::execute_lifecycle(
         result = impl->failure_result(LuaExecutionStatus::HostError, "unknown Lua host error");
     }
 
-    constexpr std::uint64_t offset = 14695981039346656037ULL;
-    constexpr std::uint64_t prime = 1099511628211ULL;
-    std::uint64_t hash = offset;
-    for (const char sourceCharacter : source) {
-        hash ^= static_cast<unsigned char>(sourceCharacter);
-        hash *= prime;
-    }
-    static constexpr char digits[] = "0123456789abcdef";
-    std::string sourceHash(16, '0');
-    for (std::size_t index = 0; index < sourceHash.size(); ++index) {
-        sourceHash[sourceHash.size() - index - 1] = digits[hash & 0x0fU];
-        hash >>= 4U;
-    }
-    world.record_script_execution(ScriptExecutionEvidence{
-        owner,
-        now,
-        impl->limits.recordFullSource ? std::string{source} : std::string{},
-        "fnv1a64:" + sourceHash,
-        impl->limits.recordFullSource,
-        static_cast<std::uint32_t>(result.status),
-        result.diagnostic,
-        result.createdIntents.size()
-    });
+    impl->record_execution_evidence(world, owner, now, source, result);
     return result;
+}
+
+std::size_t LuaBehaviorRunner::cached_capability_entries() const {
+    return impl->cache.size();
 }
 
 std::optional<LuaValue> LuaBehaviorRunner::snapshot(
