@@ -135,6 +135,7 @@ public:
         const liquid::Value& value) const;
     liquid::Value decode_observed(
         ComponentTypeId type, const liquid::Value& value) const;
+    bool component_exists(ComponentTypeId type, ComponentSlotId slot) const noexcept;
     liquid::Value encode_component(
         ComponentTypeId type, ComponentSlotId slot) const;
     liquid::Value replace_component(
@@ -301,6 +302,13 @@ inline liquid::Value Coordinator::decode_observed(
     const liquid::Value& value
 ) const {
     return state.components.decode_observed(type, value);
+}
+
+inline bool Coordinator::component_exists(
+    ComponentTypeId type,
+    ComponentSlotId slot
+) const noexcept {
+    return state.components.slot_is_current(type, slot);
 }
 
 inline liquid::Value Coordinator::encode_component(

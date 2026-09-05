@@ -207,6 +207,11 @@ Value World::component_value(ComponentTarget target) const {
     return coordinator.encode_component(target.type, target.slot);
 }
 
+bool World::component_exists(ComponentTarget target) const {
+    ensure_owner_thread();
+    return coordinator.component_exists(target.type, target.slot);
+}
+
 Value World::decode_observed(
     ComponentTarget target,
     const Value& observed

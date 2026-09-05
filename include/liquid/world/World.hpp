@@ -113,6 +113,7 @@ private:
         const ComponentName& name,
         const Value& desired) const;
     Value component_value(ComponentTarget target) const;
+    bool component_exists(ComponentTarget target) const;
     Value decode_observed(
         ComponentTarget target, const Value& observed) const;
     Value replace_component_value(

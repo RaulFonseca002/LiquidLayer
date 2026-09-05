@@ -1631,3 +1631,148 @@ TEST_CASE("effect records compare by value") {
     REQUIRE(record == record);
     REQUIRE_FALSE(record == differentPayload);
 }
+
+namespace {
+
+FeedbackSendResult send_observation(
+    Runtime& runtime,
+    const std::string& target,
+    std::uint64_t value,
+    std::uint64_t revision,
+    std::uint64_t observedAt
+) {
+    FeedbackSender feedback = runtime.feedback_sender();
+    return feedback.try_send(ExternalObservation{
+        SessionId{42}, AdapterRoute{"test.light"}, EffectTarget{target},
+        Value{value}, StateRevision{revision}, observedAt});
+}
+
+}
+
+TEST_CASE("rebinding an effect component retires the former target's authority") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    world.add_component(levelType, "other", std::uint64_t{20});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    world.grant_component_access(
+        levelType, behavior, "other", ComponentAccessMode::Read);
+
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"old"});
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"new"});
+
+    REQUIRE(send_observation(runtime, "old", 90, 1, 100) == FeedbackSendResult::Sent);
+    REQUIRE(runtime.run_frame(FrameInput{100, {}, {}}).observations.size() == 1);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 10);
+
+    REQUIRE(send_observation(runtime, "new", 25, 2, 105) == FeedbackSendResult::Sent);
+    REQUIRE(runtime.run_frame(FrameInput{105, {}, {}}).observations.size() == 1);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 25);
+
+    // The formerly bound target is free for another component.
+    runtime.bind_effect_component(levelType, "other", EffectTarget{"old"});
+    REQUIRE(send_observation(runtime, "old", 33, 3, 110) == FeedbackSendResult::Sent);
+    runtime.run_frame(FrameInput{110, {}, {}});
+    REQUIRE(*world.read_component(levelType, behavior, "other") == 33);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 25);
+    REQUIRE(!runtime.faulted());
+}
+
+TEST_CASE("converting an external component to internal control drops old-target authority") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"level"});
+    runtime.configure_component(levelType, "level", ComponentControl::InternalState);
+
+    REQUIRE(send_observation(runtime, "level", 90, 1, 100) == FeedbackSendResult::Sent);
+    const FrameResult frame = runtime.run_frame(FrameInput{100, {}, {}});
+    REQUIRE(frame.frame.completed);
+    REQUIRE(frame.observations.size() == 1);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 10);
+    REQUIRE(!runtime.faulted());
+}
+
+TEST_CASE("removed and recreated components do not inherit stale effect bindings") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"level"});
+
+    world.remove_component(levelType, "level");
+    REQUIRE(send_observation(runtime, "level", 90, 1, 100) == FeedbackSendResult::Sent);
+    REQUIRE(runtime.run_frame(FrameInput{100, {}, {}}).frame.completed);
+    REQUIRE(!runtime.faulted());
+
+    world.add_component(levelType, "level", std::uint64_t{5});
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    REQUIRE(send_observation(runtime, "level", 91, 2, 105) == FeedbackSendResult::Sent);
+    REQUIRE(runtime.run_frame(FrameInput{105, {}, {}}).frame.completed);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 5);
+
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"level"});
+    REQUIRE(send_observation(runtime, "level", 92, 3, 110) == FeedbackSendResult::Sent);
+    REQUIRE(runtime.run_frame(FrameInput{110, {}, {}}).frame.completed);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 92);
+}
+
+TEST_CASE("stale queued reports for a superseded target do not project") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::ReadWrite);
+    const ComponentSlotId slot =
+        world.get_components(levelType, behavior).at("level");
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"level"});
+    world.create_intent(
+        behavior, levelType, slot, IntentLifetime::persistent(),
+        std::uint64_t{70}, IntentPriority::High);
+
+    const FrameResult issued = runtime.run_frame(FrameInput{100, {}, {}});
+    REQUIRE(issued.commands.size() == 1);
+    REQUIRE(adapter->dispatched.size() == 1);
+
+    // The adapter's report for target "level" is still queued when the host
+    // converts the component to internal control.
+    runtime.configure_component(levelType, "level", ComponentControl::InternalState);
+    const FrameResult later = runtime.run_frame(FrameInput{105, {}, {}});
+    REQUIRE(later.frame.completed);
+    REQUIRE(later.reports.size() == 1);
+    REQUIRE(!runtime.faulted());
+}

@@ -186,6 +186,7 @@ liquid::FrameResult Runtime::run_frame(liquid::FrameInput input) {
             }));
         effectsState->process_feedback(
             result.reports, result.observations);
+        retire_dead_effect_bindings();
         project_authoritative_reports(result.reports);
         project_authoritative_observations(result.observations);
         result.frame = execute_frame_phases(input.now, input.resolutions);
