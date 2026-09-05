@@ -33,9 +33,9 @@ def print_boards() -> None:
 
 
 def print_modules() -> None:
-    print("## Modules  (id | category | interface | width | name)")
+    print("## Modules  (commercial name | id | category | width)")
     for m in atech.list_modules():
-        print(f"- {_attr(m, 'id'):20} {_attr(m, 'category'):10} {_attr(m, 'interface'):6} size={_attr(m, 'size')}  {_attr(m, 'name')}")
+        print(f"- {_attr(m, 'name'):34} {_attr(m, 'id'):18} {_attr(m, 'category'):10} size={_attr(m, 'size')}")
     print()
 
 

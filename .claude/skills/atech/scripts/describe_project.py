@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from atech_lint import format_lint, lint_project  # noqa: E402
+from atech_names import full_name, short_name  # noqa: E402
 
 
 def _attr(obj, name, default=None):
@@ -37,8 +38,9 @@ def render_layout(board, modules) -> str:
     slot_to_label: dict[str, str] = {}
     for pm in modules:
         ports = _attr(pm, "ports", []) or ([_attr(pm, "port")] if _attr(pm, "port") else [])
+        mid = _attr(pm, "module_id") or _attr(pm, "id")
         for p in ports:
-            slot_to_label[_slot_of(p)] = f"{_attr(pm, 'instance')}:{_attr(pm, 'module_id') or _attr(pm, 'id')}"
+            slot_to_label[_slot_of(p)] = short_name(mid)
     reserved_slots = {_slot_of(r) for r in _attr(board, "reserved", [])}
     width = max([16] + [len(v) + 4 for v in slot_to_label.values()])
     lines = []
@@ -73,6 +75,8 @@ def main() -> None:
     print()
     print("## Board layout (USB-C side is where the cable goes)")
     print(render_layout(board, project.modules))
+    print("   (labels are commercial module names; (Restart) and (USB-C) are")
+    print("    fixed board hardware, not module slots)")
     print()
 
     print("## Assembly: module -> port")
