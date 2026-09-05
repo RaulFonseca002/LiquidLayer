@@ -1949,3 +1949,54 @@ TEST_CASE("removal tombstones from throwing callbacks drain on the next frame") 
             REQUIRE(payload.at("key").as_string().find("behavior:") == 0);
     }
 }
+
+TEST_CASE("effects-path frame failures publish the failed frame log") {
+    struct Injection {
+        EventType type;
+        std::size_t occurrence;
+        bool alsoFailFailureEvidence;
+    };
+    const Injection injections[] = {
+        {EventType::FrameStarted, 2, false},    // before system execution
+        {EventType::FrameCompleted, 2, false},  // after resolution and dispatch
+        {EventType::FrameStarted, 2, true}      // failure while recording failure
+    };
+    for (const Injection& injection : injections) {
+        INFO("injection type " << static_cast<int>(injection.type)
+            << " alsoFailFailureEvidence " << injection.alsoFailFailureEvidence);
+        EventStoreMetadata metadata;
+        metadata.session = SessionId{42};
+        metadata.engineVersion = "0.1.0";
+        metadata.feedbackTiming = FeedbackTiming::Deferred;
+        FailOnEventTypeStore store{metadata, injection.type, injection.occurrence};
+        store.failureMessage = "injected effects failure";
+        if (injection.alsoFailFailureEvidence)
+            store.alsoFailType = EventType::FrameFailed;
+        auto runtimeOptions = options(FeedbackTiming::Deferred);
+        runtimeOptions.eventStore = &store;
+        Runtime runtime{runtimeOptions};
+        auto adapter = std::make_shared<TestAdapter>();
+        runtime.register_adapter(adapter);
+
+        const FrameResult first = runtime.run_frame(FrameInput{50, {}, {}});
+        REQUIRE(first.frame.completed);
+        REQUIRE(runtime.last_frame_log().completed);
+        REQUIRE(runtime.last_frame_log().now == 50);
+
+        bool threw = false;
+        try {
+            runtime.run_frame(FrameInput{100, {}, {}});
+        } catch (const EventStoreError& error) {
+            threw = true;
+            REQUIRE(std::string{error.what()} == "injected effects failure");
+        }
+        REQUIRE(threw);
+        REQUIRE(runtime.faulted());
+        const FrameLog& failed = runtime.last_frame_log();
+        REQUIRE(!failed.completed);
+        REQUIRE(failed.frame == FrameNumber{1});
+        REQUIRE(failed.now == 100);
+        REQUIRE(failed.failure_phase == "effects_and_persistence");
+        REQUIRE(failed.failure_message == "injected effects failure");
+    }
+}

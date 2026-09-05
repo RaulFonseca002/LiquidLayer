@@ -7,6 +7,7 @@
 #include "liquid/world/World.hpp"
 
 #include <cstddef>
+#include <exception>
 #include <map>
 #include <memory>
 #include <optional>
@@ -102,6 +103,11 @@ private:
         const std::vector<EffectReport>& reports);
     void project_authoritative_observations(
         const std::vector<ExternalObservation>& observations);
+    void publish_frame_failure(
+        FrameLog& frame,
+        FrameNumber frameNumber,
+        IntentTime now,
+        const std::exception_ptr& failure);
     void unbind_effect_component(const ComponentTarget& component);
     void retire_dead_effect_bindings();
     const ExternalComponentBinding* current_effect_binding(
