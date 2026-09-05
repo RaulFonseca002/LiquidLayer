@@ -275,7 +275,8 @@ public:
 
         const auto encoded = encode_batch(prepared);
         const std::uint64_t offset = file->size();
-        records.reserve(records.size() + prepared.size());
+        events_detail::reserve_for_append(
+            records, prepared.size(), EventLimits::maxRecordsRead);
         try {
             file->write(offset, encoded);
 

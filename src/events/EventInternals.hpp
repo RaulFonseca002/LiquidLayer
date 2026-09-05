@@ -3,6 +3,8 @@
 #include "liquid/events/EventStore.hpp"
 #include "liquid/events/ValueCodec.hpp"
 
+#include <algorithm>
+#include <cstddef>
 #include <exception>
 #include <string>
 #include <utility>
@@ -179,6 +181,28 @@ inline void validate_event(const EventData& event) {
     } catch (const std::exception& error) {
         throw EventStoreError(std::string("invalid event payload: ") + error.what());
     }
+}
+
+// Grows retained-record capacity geometrically (bounded by the store's record
+// cap) so that single-record appends do not relocate the whole history on
+// every call. Callers reserve before durable side effects so the later insert
+// cannot throw after bytes are written.
+inline void reserve_for_append(
+    std::vector<EventRecord>& records,
+    std::size_t incoming,
+    std::size_t maximumRecords
+) {
+    const std::size_t required = records.size() + incoming;
+    if (required <= records.capacity())
+        return;
+    std::size_t target = records.capacity() > maximumRecords / 2
+        ? maximumRecords
+        : records.capacity() * 2;
+    if (target < required)
+        target = required;
+    if (target > maximumRecords)
+        target = std::max(required, maximumRecords);
+    records.reserve(target);
 }
 
 inline Value retention_payload(RecordId firstPruned,
