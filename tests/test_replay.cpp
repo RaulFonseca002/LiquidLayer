@@ -267,3 +267,48 @@ TEST_CASE("test_replay") {
         "test.adapter:office").as_unsigned_integer() == 70);
 
 }
+
+// Documents the current finite-session limitation: physical retention removes
+// records before a checkpoint, but the checkpoint payload still embeds every
+// historical record array, so repeated checkpointing eventually exceeds the
+// global Value node limit. Changing this is a separate checkpoint design
+// decision, not part of Event Format v1.
+TEST_CASE("checkpoint payloads embed retained history until the value node limit") {
+    using namespace liquid;
+
+    MemoryEventStore store(metadata());
+    ReplayProjector projector;
+    constexpr std::uint64_t retainedFrames = 3000;
+    for (std::uint64_t frame = 0; frame < retainedFrames; ++frame)
+        store.append(EventData{EventType::FrameCompleted, 1, Value(frame)});
+
+    SerializedWorldState projected = projector.project(
+        store.metadata(), store.read_all());
+    REQUIRE(projected.frameEvents.size() == retainedFrames);
+    const RecordId checkpointSequence =
+        store.checkpoint(projector.checkpoint_payload(projected));
+    store.retain_from_checkpoint(checkpointSequence);
+
+    // Two physical records remain (checkpoint + retention) while the replayed
+    // state still carries every historical frame record.
+    REQUIRE(store.read_all().size() == 2);
+    SerializedWorldState restored = projector.project(
+        store.metadata(), store.read_all());
+    REQUIRE(restored.frameEvents.size() == retainedFrames);
+    REQUIRE(restored.frameEvents == projected.frameEvents);
+
+    for (std::uint64_t frame = retainedFrames; frame < retainedFrames + 1000; ++frame)
+        store.append(EventData{EventType::FrameCompleted, 1, Value(frame)});
+    SerializedWorldState grown = projector.project(
+        store.metadata(), store.read_all());
+    REQUIRE(grown.frameEvents.size() == retainedFrames + 1000);
+
+    bool nodeLimitHit = false;
+    try {
+        projector.checkpoint_payload(grown);
+    } catch (const std::exception& error) {
+        nodeLimitHit = std::string(error.what()).find("value node limit exceeded")
+            != std::string::npos;
+    }
+    REQUIRE(nodeLimitHit);
+}
