@@ -6,6 +6,7 @@
 #include <functional>
 #include <list>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
@@ -52,8 +53,12 @@ class IdempotentDispatcher::Impl {
         std::list<DispatchKey>::iterator recency;
     };
 
+    // Waiters consume the leader's outcome from this shared entry, so a
+    // bounded-cache eviction between completion and wake-up cannot make a
+    // duplicate execute the command a second time.
     struct InFlightEntry {
         bool completed = false;
+        std::optional<CachedDispatchOutcome> outcome;
         std::exception_ptr failure;
     };
 
@@ -76,6 +81,7 @@ class IdempotentDispatcher::Impl {
         DispatchKeyHash
     > inFlight;
     std::unordered_map<DispatchKey, UncertainOutcome, DispatchKeyHash> uncertain;
+    std::size_t waitingDuplicates = 0;
 
     std::optional<CachedDispatchOutcome> find_memory_locked(const DispatchKey& key) {
         const auto found = memory.find(key);
@@ -120,15 +126,22 @@ class IdempotentDispatcher::Impl {
     ) {
         try {
             std::lock_guard lock(mutex);
-            recency.push_front(key);
-            try {
-                memory.emplace(
-                    key,
-                    MemoryEntry{std::move(outcome), recency.begin()}
-                );
-            } catch (...) {
-                recency.pop_front();
-                throw;
+            entry->outcome = outcome;
+            const auto existing = memory.find(key);
+            if (existing != memory.end()) {
+                recency.splice(recency.begin(), recency, existing->second.recency);
+                existing->second.outcome = std::move(outcome);
+            } else {
+                recency.push_front(key);
+                try {
+                    memory.emplace(
+                        key,
+                        MemoryEntry{std::move(outcome), recency.begin()}
+                    );
+                } catch (...) {
+                    recency.pop_front();
+                    throw;
+                }
             }
 
             while (memory.size() > maximumMemoryOutcomes) {
@@ -146,6 +159,11 @@ class IdempotentDispatcher::Impl {
     }
 
 public:
+    std::size_t waiting_duplicate_dispatches() const {
+        std::lock_guard lock(mutex);
+        return waitingDuplicates;
+    }
+
     Impl(
         std::size_t maxMemoryOutcomes,
         std::shared_ptr<PersistentOutcomeCache> cache,
@@ -185,9 +203,15 @@ public:
                 const auto running = inFlight.find(key);
                 if (running != inFlight.end()) {
                     const auto duplicateEntry = running->second;
+                    ++waitingDuplicates;
                     completed.wait(lock, [&] { return duplicateEntry->completed; });
+                    --waitingDuplicates;
                     if (duplicateEntry->failure)
                         std::rethrow_exception(duplicateEntry->failure);
+                    if (duplicateEntry->outcome) {
+                        require_same_command(*duplicateEntry->outcome, command);
+                        return duplicateEntry->outcome->result;
+                    }
                     continue;
                 }
                 if (inFlight.size() >= maximumConcurrentDispatches) {
@@ -287,6 +311,10 @@ std::size_t IdempotentDispatcher::cached_outcomes() const {
 
 void IdempotentDispatcher::clear_memory() {
     implementation->clear_memory();
+}
+
+std::size_t IdempotentDispatcher::waiting_duplicate_dispatches() const {
+    return implementation->waiting_duplicate_dispatches();
 }
 
 }

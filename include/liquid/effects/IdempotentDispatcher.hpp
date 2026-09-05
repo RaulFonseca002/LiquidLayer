@@ -51,6 +51,8 @@ public:
 
     std::size_t cached_outcomes() const;
     void clear_memory();
+    // Diagnostic: dispatch calls currently waiting on an in-flight duplicate.
+    std::size_t waiting_duplicate_dispatches() const;
 };
 
 }

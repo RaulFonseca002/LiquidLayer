@@ -277,3 +277,151 @@ TEST_CASE("test_idempotent_dispatcher") {
     REQUIRE(invalidCapacity);
 
 }
+
+namespace {
+
+// Blocks selected command ids inside the adapter until released, so tests can
+// order leader completion, duplicate waiting, and eviction explicitly.
+class KeyedBlockingAdapter final : public liquid::EffectAdapter {
+    liquid::AdapterRoute adapterRoute{"test.adapter"};
+    std::mutex mutex;
+    std::condition_variable condition;
+    std::map<std::uint64_t, int> callsById;
+    std::map<std::uint64_t, bool> heldById;
+
+public:
+    const liquid::AdapterRoute& route() const override {
+        return adapterRoute;
+    }
+
+    liquid::AdapterCapabilities capabilities() const override {
+        return {false, false, false};
+    }
+
+    liquid::DispatchResult dispatch(
+        const liquid::EffectCommand& command,
+        liquid::FeedbackSender
+    ) override {
+        const std::uint64_t id = command.commandId.value;
+        std::unique_lock lock(mutex);
+        ++callsById[id];
+        condition.notify_all();
+        condition.wait(lock, [&] { return !heldById[id]; });
+        return liquid::DispatchResult::accepted();
+    }
+
+    void hold(std::uint64_t id) {
+        std::lock_guard lock(mutex);
+        heldById[id] = true;
+    }
+
+    void release(std::uint64_t id) {
+        {
+            std::lock_guard lock(mutex);
+            heldById[id] = false;
+        }
+        condition.notify_all();
+    }
+
+    void wait_for_calls(std::uint64_t id, int expected) {
+        std::unique_lock lock(mutex);
+        condition.wait(lock, [&] { return callsById[id] >= expected; });
+    }
+
+    int calls(std::uint64_t id) {
+        std::lock_guard lock(mutex);
+        return callsById[id];
+    }
+};
+
+}
+
+TEST_CASE("overlapping duplicate waiters consume the leader outcome after cache eviction") {
+    constexpr int iterations = 100;
+    constexpr int waiterCount = 12;
+    constexpr std::uint64_t leaderId = 20;
+    constexpr std::uint64_t evictorId = 21;
+    auto feedback = liquid::make_feedback_channel(4);
+
+    for (int iteration = 0; iteration < iterations; ++iteration) {
+        KeyedBlockingAdapter adapter;
+        // One memory outcome and two dispatch slots: the evictor's completion
+        // pushes the leader's outcome out of the bounded cache.
+        liquid::IdempotentDispatcher dispatcher(1, {}, 2);
+        adapter.hold(leaderId);
+        adapter.hold(evictorId);
+
+        std::thread leader([&] {
+            dispatcher.dispatch(adapter, command(leaderId), feedback.sender);
+        });
+        adapter.wait_for_calls(leaderId, 1);
+
+        std::thread evictor([&] {
+            dispatcher.dispatch(adapter, command(evictorId), feedback.sender);
+        });
+        adapter.wait_for_calls(evictorId, 1);
+
+        std::atomic<int> waitersAccepted{0};
+        std::vector<std::thread> waiters;
+        for (int index = 0; index < waiterCount; ++index) {
+            waiters.emplace_back([&] {
+                const auto result = dispatcher.dispatch(
+                    adapter, command(leaderId), feedback.sender);
+                if (result.disposition == liquid::DispatchDisposition::Accepted)
+                    ++waitersAccepted;
+            });
+        }
+        // Every duplicate is parked on the in-flight entry before the leader
+        // completes, so any second adapter call for the leader's command is
+        // the eviction defect rather than a late arrival.
+        while (dispatcher.waiting_duplicate_dispatches() <
+               static_cast<std::size_t>(waiterCount)) {
+            std::this_thread::yield();
+        }
+
+        // The leader completes first; the evictor completes immediately after,
+        // while the woken duplicates are still returning.
+        adapter.release(leaderId);
+        adapter.release(evictorId);
+
+        leader.join();
+        evictor.join();
+        for (auto& waiter : waiters)
+            waiter.join();
+
+        INFO("iteration " << iteration);
+        REQUIRE(adapter.calls(leaderId) == 1);
+        REQUIRE(adapter.calls(evictorId) == 1);
+        REQUIRE(waitersAccepted.load() == waiterCount);
+    }
+}
+
+TEST_CASE("duplicate waiters validate the shared leader outcome against their own command") {
+    constexpr std::uint64_t leaderId = 30;
+    auto feedback = liquid::make_feedback_channel(4);
+    KeyedBlockingAdapter adapter;
+    liquid::IdempotentDispatcher dispatcher(4);
+    adapter.hold(leaderId);
+
+    std::thread leader([&] {
+        dispatcher.dispatch(adapter, command(leaderId), feedback.sender);
+    });
+    adapter.wait_for_calls(leaderId, 1);
+
+    std::atomic<bool> rejected{false};
+    std::thread mismatched([&] {
+        try {
+            dispatcher.dispatch(adapter, command(leaderId, 71), feedback.sender);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+    });
+    while (dispatcher.waiting_duplicate_dispatches() < 1)
+        std::this_thread::yield();
+    adapter.release(leaderId);
+    leader.join();
+    mismatched.join();
+
+    REQUIRE(rejected.load());
+    REQUIRE(adapter.calls(leaderId) == 1);
+}
