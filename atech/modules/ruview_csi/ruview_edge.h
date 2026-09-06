@@ -64,6 +64,7 @@ public:
     static constexpr uint32_t HOLD_MS        = 60000;   // presence after the last motion event
     static constexpr uint32_t MEMORY_MS      = 120000;  // wander may keep presence this long after an event
     static constexpr uint32_t MOVING_MS      = 5000;    // "moving" = event within this window
+    static constexpr uint8_t  OFF_FRAMES     = 20;      // presence clears only after this many consecutive frames without a reason
     static constexpr float    TAU_FAST_S     = 20.0f;   // baseline tracking while absent and quiet
     static constexpr float    TAU_SLOW_S     = 900.0f;  // otherwise (absorbs a new router regime)
     static constexpr float    QUIET_RATIO    = 2.0f;
@@ -192,7 +193,9 @@ private:
     float    _bj = 0, _bw = 0;            // tracked baselines (0 = unknown)
     float    _rj = 0, _rw = 0;            // last ratios (0 = unknown)
     bool     _evHist[EV_N] = {false};
+    bool     _wHist[EV_N] = {false};      // wander-over-threshold history (same k-of-n)
     uint8_t  _evPos = 0;
+    uint8_t  _offCount = 0;
     uint32_t _lastEventMs = 0;
     bool     _haveEvent = false;
 

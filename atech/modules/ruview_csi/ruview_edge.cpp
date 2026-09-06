@@ -82,8 +82,8 @@ void RuViewEdge::reset() {
     _primary = -1; _lastMs = 0; _fs = FS; _rateMs = 0; _rateFrames = 0;
     _sj = _sw = 0; _haveS = false;
     _t0Ms = 0; _warm = true; _nWarmJ = _nWarmW = 0; _bj = _bw = 0; _rj = _rw = 0;
-    for (uint8_t i = 0; i < EV_N; ++i) _evHist[i] = false;
-    _evPos = 0; _lastEventMs = 0; _haveEvent = false;
+    for (uint8_t i = 0; i < EV_N; ++i) { _evHist[i] = false; _wHist[i] = false; }
+    _evPos = 0; _offCount = 0; _lastEventMs = 0; _haveEvent = false;
     _presence = false; _moving = false; _onSinceMs = 0;
     // vitals
     _gridValid = false; _nextGridMs = 0;
@@ -204,16 +204,20 @@ void RuViewEdge::push(const int8_t* iq, uint16_t iqLen, uint32_t nowMs) {
         if (haveJ) { if (_bj <= 0) _bj = j > FLOOR_J ? j : FLOOR_J; rj = j / (_bj > FLOOR_J ? _bj : FLOOR_J); }
         if (haveW) { if (_bw <= 0) _bw = w > FLOOR_W ? w : FLOOR_W; rw = w / (_bw > FLOOR_W ? _bw : FLOOR_W); }
         _rj = haveJ ? rj : 0; _rw = haveW ? rw : 0;
-        // motion event: k of the last n frames over R_J x baseline
-        _evHist[_evPos] = haveJ && rj > R_J; _evPos = (uint8_t)((_evPos + 1) % EV_N);
-        uint8_t cnt = 0; for (uint8_t i = 0; i < EV_N; ++i) cnt += _evHist[i] ? 1 : 0;
+        // motion event: k of the last n frames over R_J x baseline; the wander condition uses the same
+        // k-of-n so that frames of different router states cannot flip the verdict frame by frame
+        _evHist[_evPos] = haveJ && rj > R_J;
+        _wHist[_evPos] = haveW && rw > R_W;
+        _evPos = (uint8_t)((_evPos + 1) % EV_N);
+        uint8_t cnt = 0, cw = 0;
+        for (uint8_t i = 0; i < EV_N; ++i) { cnt += _evHist[i] ? 1 : 0; cw += _wHist[i] ? 1 : 0; }
         if (cnt >= EV_K) { _lastEventMs = nowMs; _haveEvent = true; }
         bool moved = _haveEvent && nowMs - _lastEventMs <= HOLD_MS;
         bool remembered = _haveEvent && nowMs - _lastEventMs <= MEMORY_MS;
-        bool stillBody = haveW && rw > R_W && remembered;
-        bool on = moved || stillBody;
-        if (on && !_presence) _onSinceMs = nowMs;
-        _presence = on;
+        bool stillBody = cw >= EV_K && remembered;
+        bool reason = moved || stillBody;
+        if (reason) { _offCount = 0; if (!_presence) { _presence = true; _onSinceMs = nowMs; } }
+        else if (_presence && ++_offCount >= OFF_FRAMES) { _presence = false; _offCount = 0; }
         _moving = _haveEvent && nowMs - _lastEventMs <= MOVING_MS;
         // baseline tracking: jitter fast while absent and quiet, slow otherwise (a noisier router regime
         // is absorbed within minutes); wander only while absent (a still person is never absorbed:

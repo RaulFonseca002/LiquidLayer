@@ -155,7 +155,9 @@ static void testSynthetic() {
     CHECK(e.states(1) >= 2, "two router states discovered (%u)", (unsigned)e.states(1));
     CHECK(fAlt < 0.05f, "alternating router does not fake presence (%.1f%%)", 100 * fAlt);
     room.personWalk(); run(e, room, t, 3.0f, now); room.personStill(0.3f);
-    float fAltStill = run(e, room, t, 90.0f, now);
+    int flips = 0; { bool last = e.presence(); int8_t buf[384]; float tEnd = t + 90; while (t < tEnd) { room.frame(t, buf); e.push(buf, 384, now); if (e.presence() != last) { flips++; last = e.presence(); } t += 0.05f; now += 50; } }
+    CHECK(flips <= 2, "verdict does not flap between router states (%d flips in 90 s)", flips);
+    float fAltStill = run(e, room, t, 30.0f, now);
     std::printf("  alternating antennas, still person: presence %.1f%%  wander x%.1f\n", 100 * fAltStill, e.ratioWander());
     CHECK(fAltStill > 0.9f, "person detected despite alternation (%.1f%%)", 100 * fAltStill);
     room.empty(); run(e, room, t, 90.0f, now); CHECK(!e.presence(), "clears after leaving under alternation");

@@ -38,6 +38,7 @@ HT_BINS = np.array([i for i in list(range(1, 29)) + list(range(36, 64)) if i not
 P = {"R_j": 4.0, "R_w": 6.0, "k": 3, "n": 5, "hold_s": 60.0, "memory_s": 120.0,
      "tau_fast_s": 20.0, "tau_slow_s": 900.0, "tau_template_s": 120.0, "floor_j": 0.003, "floor_w": 0.01,
      "template_frames": 300, "state_ready": 100, "states": 3, "far_d": 0.4, "interleave_n": 20, "interleave_min": 5,
+     "off_frames": 20,
      "warmup_s": 15.0}
 
 
@@ -64,7 +65,7 @@ class Detector:
         self.tpl = {}; self.tpl_sum = {}; self.tpl_n = {}; self.last_used = {}   # keyed by (layout, state)
         self.n_states = {}; self.near_hist = {}; self.far_hist = {}                # keyed by layout
         self.bj = np.nan; self.bw = np.nan
-        self.hist = []; self.last_event = -1e9; self.on = False; self.on_since = 0.0
+        self.hist = []; self.whist = []; self.off_count = 0; self.last_event = -1e9; self.on = False; self.on_since = 0.0
         self.last_t = None
         self.t0 = None   # first frame time: no events during the warm-up, baselines learn from medians
         self.warm_j = []; self.warm_w = []
@@ -136,15 +137,20 @@ class Detector:
             rw = w / max(self.bw, p["floor_w"])
         ev = (not np.isnan(rj)) and rj > p["R_j"]
         self.hist.append(ev); self.hist = self.hist[-p["n"]:]
+        self.whist.append((not np.isnan(rw)) and rw > p["R_w"]); self.whist = self.whist[-p["n"]:]
         if sum(self.hist) >= p["k"]:
             self.last_event = t
         moved = (t - self.last_event) <= p["hold_s"]
         remembered = (t - self.last_event) <= p["memory_s"]
-        still_body = (not np.isnan(rw)) and rw > p["R_w"] and remembered
-        new_on = moved or still_body
-        if new_on and not self.on:
-            self.on_since = t
-        self.on = new_on
+        still_body = sum(self.whist) >= p["k"] and remembered
+        if moved or still_body:
+            self.off_count = 0
+            if not self.on:
+                self.on = True; self.on_since = t
+        elif self.on:
+            self.off_count += 1
+            if self.off_count >= p["off_frames"]:
+                self.on = False; self.off_count = 0
         # baselines and template tracking
         quiet = (not np.isnan(rj)) and rj < 2.0
         tau = p["tau_fast_s"] if (not self.on and quiet) else p["tau_slow_s"]
@@ -173,7 +179,7 @@ def main():
     csv = open(args.csv, "a") if args.csv else None
     if csv and csv.tell() == 0:
         csv.write("t,hms,label,layout,rssi,jitter,wander,ratio_j,ratio_w,baseline_j,baseline_w,present\n")
-    label = 0; rssi = 0; last_status = 0.0; last_csv = 0.0; last_state = None; rev = 0
+    label = 0; rssi = 0; last_status = 0.0; last_csv = 0.0; last_state = None; rev = 0; last_uptime = None
     rec = None; rec_start = 0.0; rec_idx = 0
     def open_rec():
         nonlocal rec, rec_start, rec_idx
@@ -202,6 +208,10 @@ def main():
             continue
         if p["kind"] == "status":
             label = p["segment"]; rssi = p["rssi"]
+            if last_uptime is not None and p["uptime_ms"] < last_uptime:
+                det = Detector(); last_state = None
+                print(f"{time.strftime('%H:%M:%S')}  # board rebooted: detector reset (warm-up)", flush=True)
+            last_uptime = p["uptime_ms"]
             continue
         if p["kind"] != "csi":
             continue
