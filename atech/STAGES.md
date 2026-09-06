@@ -28,7 +28,8 @@ reset shows as 0/UNKNOWN.
 | LCnd | LC without the 2 s boot-card pause | **PASS** | 2026-09-06 00:28 | pause not needed. NOTE: the `st7735_tft` override (extra SWRESET before init) has been active in every build since L3 (created 23:38) — a confound and a fix candidate |
 | LCndno | LCnd built with the STOCK st7735 driver (single SWRESET) — no override | **PASS** | 2026-09-06 00:33 | double SWRESET is NOT the fixer. Left vs S1b: NeoPixel present + blinking from loop, loop WDT, boot card frame/RTC counter |
 | LCndno-noLED | LCndno without the NeoPixel module (= S1b + WDT + boot card) | **PASS** | 2026-09-06 00:38 | the LED is irrelevant |
-| LCndno-noWDT | LCndno without enableLoopWDT (= S1b + LED + boot card) | pending | | |
+| LCndno-noWDT | LCndno without enableLoopWDT (= S1b + LED + boot card) | **FAIL (intermittent)** | 2026-09-06 00:45 | screen sometimes freezes on the boot card right after setup; sometimes runs. → the failure is an early-boot **hang in loop()**; the 5 s loop WDT was masking it by rebooting (a retry usually succeeds). All L0+ "passes" with WDT are therefore suspect |
+| LH | hang locator: stock driver + WDT + RTC progress markers (csi/tpl/loop) shown on the boot card after a reason-6 reboot | pending | | pins the exact step where loop() hangs |
 | L4 | L3 + WiFi station late start + 1 Hz UDP alive beacon from loop | pending | | radio; beacon = loop liveness over the network |
 | L5 | L4 + CSI arm + ring + DSP task (no UDP) | pending | | |
 | L6 | L5 + ADR-018 + vitals UDP; sink ≥15/s, drops <5 % | pending | | |
