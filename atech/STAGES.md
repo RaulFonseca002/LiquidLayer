@@ -109,3 +109,29 @@ PENDING (needs owner / stable WiFi):
        python3 atech/host/csi_sink.py --seconds 60
        python3 atech/host/liquid_bridge.py --seconds 60
 
+## TRUE ROOT CAUSE (2026-09-06 ~10:20): setTxTimeoutMs(0), not CDC-on-boot
+
+Correction to the earlier "CDC-on-boot deadlock" finding. The deeper, proven
+cause of every frozen board is the Atech SDK's generated `Serial.setTxTimeoutMs(0)`.
+HWCDC::write() seeds its unplug-detection counter `tries` from tx_timeout_ms;
+with 0 that counter underflows on the first stalled write, so the built-in
+"host isn't reading -> give up and drop" escape (tries==0 -> connected=false)
+NEVER fires. The instant the firmware writes an event to USB with no host
+draining the buffer, the buffer fills and `while(connected && to_send)` spins
+forever. A monitor attached drains the buffer -> never fills -> never hangs,
+which is why it always looked fine while watching. CDC-on-boot only controlled
+WHEN the first unguarded write happened (boot vs the deferred 2 s bring-up).
+
+PROVEN by isolation: t1 test (display + module, WiFi auto-start disabled, USB
+brought up at 2 s) froze at ~2 s standalone with tx_timeout=0; the ONE change
+tx_timeout 0 -> 10 ms -> runs clean standalone across repeated cold resets.
+
+THE FIX (scripts/atech_usb.h): AtechUsb::update() calls setTxTimeoutMs(10) (a
+bounded value, MUST be > 0) after begin(). Kept alongside CDC_ON_BOOT=0 +
+deferred bring-up (defensive: keeps USB init out of the fragile boot window),
+but the timeout is the operative fix. Applied to the node and every skill build.
+
+Node reflashed 10:19. PENDING: owner runs the >=15 cold-reset gate on the REAL
+node (Restart button, standalone/no monitor, WDT off): counter keeps climbing,
+heartbeat keeps blinking, on-screen "wdt" stays 0, "r" reads 1.
+

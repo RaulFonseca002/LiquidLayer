@@ -41,7 +41,8 @@ inline HardwareSerial& atechUsb() { return Serial; }
 
 class AtechUsb : public Print {
 public:
-    static constexpr uint32_t SETTLE_MS = 2000;   // boot settle before the CDC driver starts
+    static constexpr uint32_t SETTLE_MS = 2000;      // boot settle before the CDC driver starts
+    static constexpr uint32_t TX_TIMEOUT_MS = 10;    // bounded; MUST be > 0 (see setTxTimeoutMs below)
 
     // API-compatible no-ops so the SDK's generated `Serial.begin(115200);
     // Serial.setTxTimeoutMs(0);` compile unchanged once Serial is routed here.
@@ -56,7 +57,12 @@ public:
 #if ATECH_USB_DEFERRED
         if (millis() < SETTLE_MS) return;
         ATECH_USB_DEV.begin();
-        ATECH_USB_DEV.setTxTimeoutMs(0);   // never block when nothing reads the port
+        // NOT zero. The HWCDC write loop seeds its unplug-detection counter from
+        // this value; with 0 the counter underflows and, when the TX buffer fills
+        // because no host is reading, the loop spins forever (the whole "frozen
+        // board" bug — see atech/STAGES.md). A small non-zero value lets the
+        // driver give up after a bounded wait and drop the data instead of hanging.
+        ATECH_USB_DEV.setTxTimeoutMs(TX_TIMEOUT_MS);
 #endif
         _up = true;
     }
