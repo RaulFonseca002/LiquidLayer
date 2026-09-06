@@ -135,3 +135,21 @@ Node reflashed 10:19. PENDING: owner runs the >=15 cold-reset gate on the REAL
 node (Restart button, standalone/no monitor, WDT off): counter keeps climbing,
 heartbeat keeps blinking, on-screen "wdt" stays 0, "r" reads 1.
 
+
+## Sensing fix (2026-09-06): presence never asserted
+
+Symptom: after calibration the presence lamp stayed dark and screen A showed `HR --` /
+`BR --` with the owner in the room. Evidence (scratchpad `follow.log`, `board.log`): 1696
+presence samples, all 0; rate 19.5-20 Hz, RSSI -33..-67 dBm, 192 subcarriers, zero gaps,
+build objects identical to sources. Root cause in `ruview_edge.cpp` (old): motion = mean
+|Δphase| of raw CSI phase, uniformly random per packet on one ESP32 (1.39 rad ≈ π/2);
+threshold learned on the raw value but compared against an EMA (13 σ bar) and above the
+metric's π ceiling. Fix: amplitude-correlation engine (see README, Milestone B).
+
+| Rung | What | Result | When | Evidence |
+|------|------|--------|------|----------|
+| F1 | button segments + edge diagnostics + `.csirec` recorder, old engine | **PASS** | 11:41 | flashed (`9a401aa`); `csi_edge` shows mean 1.26 σ 0.50 after 40 frames (threshold heading above π); recorder labels frames by NodeStatus segment |
+| F2 | amplitude engine, native synthetic tests | **PASS** | 11:55 | `tests/edge/run.sh`: random phase → no motion; still person 99.8 % presence, BR 15.0-15.8 bpm conf ≥0.43; walk 100 %; leaves → off in 2.8 s; AGC ×1.5 → 0 %; button calibration; noise-only HR conf 0.13 |
+| F3 | F2 flashed, first live calibration | pending owner | 12:03 | flashed (`a6d7e6f`, provisional motion threshold 0.05 in flash; 0.20 in git) |
+| F4 | owner runs the button protocol; `.csirec` replay gates (empty <1 %, still >90 %, walk >95 %) | pending owner | | recorder running: `~/.atech/recordings/session-*.csirec` |
+| F5 | hardware acceptance: lamp within 3 s, still 2 min, BR within 45 s, off within ~5 s, no FALL, wdt 0 | pending owner | | |

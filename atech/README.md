@@ -81,17 +81,32 @@ sustained, ADR-018 frames received with 192 subcarriers, zero sequence gaps,
 RSSI about -32 dBm. RuView's own Docker sensing server lists it as a live node
 (`node_id 1`, `present_moving`, `person_count` valid).
 
-**Milestone B** — on-device Tier-2 vitals (`modules/ruview_csi/ruview_edge`,
-ported from RuView `edge_processing.c`): biquad bandpass + zero-crossing BPM for
-heart and breathing, Welford presence with 60 s calibration, fall, motion.
-Validated host-side on a synthetic 72 BPM / 15 BPM signal (recovered 71.8 /
-15.1). Live on hardware: heart-rate events around 70-90 BPM, a byte-correct
-32-byte RuView vitals packet (`0xC5110002`) received and decoded, firmware
-736 KB, free heap ~208 KB. Screen A (HR/BR + presence lamp + fall), the
-NeoPixel heartbeat pulse, the speaker presence tick and the button screen-swap
-are code-complete and validated in the host simulator; they are not yet
-hardware-verified because the display, LED and speaker modules are not plugged
-in. These vitals are RuView's heuristic Tier-2, noisy and not medical.
+**Milestone B** — on-device sensing (`modules/ruview_csi/ruview_edge`). The
+first version was a port of RuView `edge_processing.c` (phase-based Welford
+presence, zero-crossing BPM). It never detected anyone: on a single ESP32 the CSI
+phase is uniformly random between packets (measured mean |Δphase| 1.39 rad, the
+π/2 noise value), and its learned threshold landed above the metric's ceiling, so
+presence stayed 0 in every capture and HR/BR, gated on presence, stayed `--`. The
+"70-90 BPM live" readings of that version were the band-pass centre frequency on
+noise, not a heartbeat. Retired 2026-09-06 (tag `atech-pre-amplitude-rewrite`).
+
+The engine now follows Espressif's esp-radar formulation on subcarrier
+**amplitude**: jitter (`1 − corr` with the previous frame) for motion and wander
+(`1 − corr` with an empty-room template) for presence, thresholds learned as
+mean + 4 σ during an empty-room calibration (60 s automatic at boot, or the
+button-driven "empty" segment), Schmitt trigger with confirmation and hold.
+Breathing comes from band-passed amplitude fused over the best bins with an
+autocorrelation confidence; heart rate is best-effort and is always shown with
+its confidence. Fall detection is disabled (never validated). Validated with the
+native harness `tests/edge/run.sh` (synthetic still/walking/leaving/AGC/button
+scenarios) and by replaying real recordings (`host/csi_sink.py --record`,
+`.csirec`). Hardware acceptance status lives in `STAGES.md` ("Sensing fix").
+
+Button protocol (port 3): press → *empty* (leave; the baseline is relearned for
+as long as the segment lasts, min 30 s after a 10 s leave delay) → press →
+*still* (sit 1-2 m away, breathe normally) → press → *walk* → press → *live*.
+The segment is shown on screen, logged, and carried in the NodeStatus beacon so
+the recorder labels frames without touching USB.
 
 ## Rebuild rules (after the frozen-display incident, 2026-09-05)
 
@@ -148,4 +163,5 @@ builds on Arduino core 2.0.17 (ESP-IDF 4.4) instead of ESP-IDF 5.4:
 - `Speaker::begin()` leaves `mck_io_num` unset (0), so I2S claims GPIO0 as MCLK.
   Harmless for us; worth an upstream report.
 - `(Restart)` on the layout is the chip's EN line: a button module plugged there
-  is only a hardware reset and restarts the presence calibration each press.
+  is only a hardware reset (the sensing calibration survives WiFi re-association
+  but not a reset). The protocol button goes on a real port (3).
