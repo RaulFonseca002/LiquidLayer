@@ -73,8 +73,11 @@ void RuViewEdge::designHighpass(Biquad& bq, float fs, float fc) {
 void RuViewEdge::reset() {
     _frameCount = _layoutDrops = _untemplated = 0;
     for (uint8_t l = 0; l < LAYOUTS; ++l) {
-        _havePrev[l] = false; _prevMs[l] = 0; _haveRef[l] = false; _tplCount[l] = 0;
-        for (uint8_t k = 0; k < MAX_BINS; ++k) { _prev[l][k] = _ref[l][k] = 0; _tplSum[l][k] = 0; }
+        _nStates[l] = 0; _nearHist[l] = _farHist[l] = 0;
+        for (uint8_t s = 0; s < STATES; ++s) {
+            _havePrev[l][s] = false; _prevMs[l][s] = 0; _tplCount[l][s] = 0; _stateLastMs[l][s] = 0;
+            for (uint8_t k = 0; k < MAX_BINS; ++k) { _prev[l][s][k] = _ref[l][s][k] = 0; _tplSum[l][s][k] = 0; }
+        }
     }
     _primary = -1; _lastMs = 0; _fs = FS; _rateMs = 0; _rateFrames = 0;
     _sj = _sw = 0; _haveS = false;
@@ -91,6 +94,43 @@ void RuViewEdge::reset() {
     resetBlock();
     _brBpm = _brConf = _hrBpm = _hrConf = 0; _brCandidate = 0;
     _lastBeatMs = 0; _beat = false;
+}
+
+// ------------------------------------------------------------------ router sub-states
+
+void RuViewEdge::seedState(uint8_t lay, uint8_t s, const float* a, uint32_t nowMs) {
+    for (uint8_t k = 0; k < MAX_BINS; ++k) { _tplSum[lay][s][k] = a[k]; _ref[lay][s][k] = a[k]; }
+    _tplCount[lay][s] = 1; _stateLastMs[lay][s] = nowMs; _havePrev[lay][s] = false;
+    if (s >= _nStates[lay]) _nStates[lay] = (uint8_t)(s + 1);
+}
+
+// Returns the state index for this frame; `d` = 1 - corr to that state's template (0 if just seeded).
+int8_t RuViewEdge::assignState(uint8_t lay, const float* a, uint32_t nowMs, float& d, bool& seeded) {
+    seeded = false; d = 0;
+    if (_nStates[lay] == 0) { seedState(lay, 0, a, nowMs); seeded = true; return 0; }
+    int8_t best = 0; float bestD = 9.0f;
+    for (uint8_t s = 0; s < _nStates[lay]; ++s) {
+        float dd = 1.0f - corr(a, _ref[lay][s], MAX_BINS);
+        if (dd < bestD) { bestD = dd; best = (int8_t)s; }
+    }
+    bool far = bestD > FAR_D;
+    const uint32_t mask = (INTERLEAVE_N >= 32) ? 0xFFFFFFFFu : ((1u << INTERLEAVE_N) - 1u);
+    _farHist[lay] = ((_farHist[lay] << 1) | (far ? 1u : 0u)) & mask;
+    _nearHist[lay] = ((_nearHist[lay] << 1) | (far ? 0u : 1u)) & mask;
+    if (far) {
+        uint8_t nf = (uint8_t)__builtin_popcount(_farHist[lay]), nn = (uint8_t)__builtin_popcount(_nearHist[lay]);
+        if (nf >= INTERLEAVE_MIN && nn >= INTERLEAVE_MIN) {
+            // near and far frames interleave: a router state, not a body. Seed a new state (free slot or LRU).
+            uint8_t slot = _nStates[lay];
+            if (slot >= STATES) { slot = 0; for (uint8_t s = 1; s < STATES; ++s) if (_stateLastMs[lay][s] < _stateLastMs[lay][slot]) slot = s; }
+            seedState(lay, slot, a, nowMs);
+            _farHist[lay] = 0; _nearHist[lay] = 0;
+            seeded = true;
+            return (int8_t)slot;
+        }
+    }
+    d = bestD;
+    return best;
 }
 
 // ------------------------------------------------------------------ per frame
@@ -113,28 +153,34 @@ void RuViewEdge::push(const int8_t* iq, uint16_t iqLen, uint32_t nowMs) {
     float dtS = _lastMs ? (float)(nowMs - _lastMs) / 1000.0f : 0.05f;
     if (dtS > 5.0f) { _bj = _bw = 0; }   // long gap: baselines restart from the next frames
 
-    // jitter: previous frame of the same layout, within 1 s
-    if (_havePrev[lay] && nowMs - _prevMs[lay] > GAP_RESET_MS) _havePrev[lay] = false;
-    bool haveJ = _havePrev[lay];
-    float j = haveJ ? 1.0f - corr(a, _prev[lay], n) : 0.0f; if (j < 0) j = 0;
+    // which router sub-state does this frame belong to?
+    float dState; bool seeded;
+    int8_t st8 = assignState(lay, a, nowMs, dState, seeded);
+    uint8_t st = (uint8_t)st8;
+    _stateLastMs[lay][st] = nowMs;
 
-    // per-layout template: bootstrap from the first TEMPLATE_FRAMES frames of that layout
-    bool haveW = _haveRef[lay];
-    float w = 0.0f;
-    if (!haveW) {
-        for (uint8_t k = 0; k < n; ++k) _tplSum[lay][k] += a[k];
-        if (++_tplCount[lay] >= TEMPLATE_FRAMES) {
-            float norm = 0;
-            for (uint8_t k = 0; k < n; ++k) { _ref[lay][k] = (float)(_tplSum[lay][k] / (double)_tplCount[lay]); norm += _ref[lay][k] * _ref[lay][k]; }
-            norm = norm > 1e-12f ? 1.0f / sqrtf(norm) : 0.0f;
-            for (uint8_t k = 0; k < n; ++k) _ref[lay][k] *= norm;
-            _haveRef[lay] = true;
-            if (_primary < 0) { _primary = (int8_t)lay; _gridValid = false; resetBlock(); }
+    // jitter: previous frame of the same layout and state, within 1 s
+    if (_havePrev[lay][st] && nowMs - _prevMs[lay][st] > GAP_RESET_MS) _havePrev[lay][st] = false;
+    bool haveJ = _havePrev[lay][st];
+    float j = haveJ ? 1.0f - corr(a, _prev[lay][st], n) : 0.0f; if (j < 0) j = 0;
+
+    // state template: running mean over its first TEMPLATE_FRAMES near frames (far frames never enter it)
+    bool nearFrame = seeded || dState <= FAR_D;
+    if (nearFrame && _tplCount[lay][st] < TEMPLATE_FRAMES) {
+        if (!seeded) {
+            for (uint8_t k = 0; k < n; ++k) _tplSum[lay][st][k] += a[k];
+            _tplCount[lay][st]++;
         }
-        if (!_warm) _untemplated++;
-    } else {
-        w = 1.0f - corr(a, _ref[lay], n); if (w < 0) w = 0;
+        float norm = 0;
+        for (uint8_t k = 0; k < n; ++k) { _ref[lay][st][k] = (float)(_tplSum[lay][st][k] / (double)_tplCount[lay][st]); norm += _ref[lay][st][k] * _ref[lay][st][k]; }
+        norm = norm > 1e-12f ? 1.0f / sqrtf(norm) : 0.0f;
+        for (uint8_t k = 0; k < n; ++k) _ref[lay][st][k] *= norm;
+        if (_primary < 0 && _tplCount[lay][st] >= STATE_READY) { _primary = (int8_t)lay; _gridValid = false; resetBlock(); }
     }
+    bool haveW = _tplCount[lay][st] >= STATE_READY;
+    float w = 0.0f;
+    if (haveW) { w = 1.0f - corr(a, _ref[lay][st], n); if (w < 0) w = 0; }
+    else if (!_warm) _untemplated++;
     if (haveJ) {
         if (!_haveS) { _sj = j; _sw = haveW ? w : 0.0f; _haveS = true; }
         else { _sj += ALPHA * (j - _sj); if (haveW) _sw += ALPHA * (w - _sw); }
@@ -181,26 +227,26 @@ void RuViewEdge::push(const int8_t* iq, uint16_t iqLen, uint32_t nowMs) {
         if (haveW && !_presence && quiet) {
             float gt = dtS / TAU_TEMPLATE_S; if (gt > 1.0f) gt = 1.0f;
             float norm = 0;
-            for (uint8_t k = 0; k < n; ++k) { _ref[lay][k] += gt * (a[k] - _ref[lay][k]); norm += _ref[lay][k] * _ref[lay][k]; }
+            for (uint8_t k = 0; k < n; ++k) { _ref[lay][st][k] += gt * (a[k] - _ref[lay][st][k]); norm += _ref[lay][st][k] * _ref[lay][st][k]; }
             norm = norm > 1e-12f ? 1.0f / sqrtf(norm) : 1.0f;
-            for (uint8_t k = 0; k < n; ++k) _ref[lay][k] *= norm;
+            for (uint8_t k = 0; k < n; ++k) _ref[lay][st][k] *= norm;
         }
     }
 
     // Vitals: uniform 20 Hz grid on the primary layout only (linear interpolation between its frames).
-    if ((int8_t)lay == _primary) {
-        if (!_havePrev[lay]) { _gridValid = false; _blockDirty = true; }
+    if ((int8_t)lay == _primary && st == 0) {
+        if (!_havePrev[lay][st]) { _gridValid = false; _blockDirty = true; }
         if (!_gridValid) {
             _gridValid = true; _nextGridMs = nowMs; _blockDirty = true;   // the (re)start transient spoils this block
             for (uint8_t k = 0; k < MAX_BINS; ++k) { _hp[k].x1 = _hp[k].x2 = a[k]; _hp[k].y1 = _hp[k].y2 = 0.0f; _absEma[k] = 0.0f; }
         } else {
-            uint32_t span = nowMs - _prevMs[lay];
+            uint32_t span = nowMs - _prevMs[lay][st];
             float v[MAX_BINS];
             while ((int32_t)(_nextGridMs - nowMs) <= 0) {
-                float f = span ? (float)(_nextGridMs - _prevMs[lay]) / (float)span : 1.0f;
+                float f = span ? (float)(_nextGridMs - _prevMs[lay][st]) / (float)span : 1.0f;
                 if (f < 0) f = 0;
                 if (f > 1) f = 1;
-                for (uint8_t k = 0; k < MAX_BINS; ++k) v[k] = _prev[lay][k] + f * (a[k] - _prev[lay][k]);
+                for (uint8_t k = 0; k < MAX_BINS; ++k) v[k] = _prev[lay][st][k] + f * (a[k] - _prev[lay][st][k]);
                 processGridSample(v);
                 _nextGridMs += GRID_MS;
             }
@@ -210,8 +256,8 @@ void RuViewEdge::push(const int8_t* iq, uint16_t iqLen, uint32_t nowMs) {
     // Heartbeat pulse for the LED: a metronome at the estimated rate while someone is present.
     if (_presence && _hrBpm > 0 && nowMs - _lastBeatMs >= (uint32_t)(60000.0f / _hrBpm)) { _lastBeatMs = nowMs; _beat = true; }
 
-    memcpy(_prev[lay], a, sizeof(float) * n);
-    _havePrev[lay] = true; _prevMs[lay] = nowMs; _lastMs = nowMs;
+    memcpy(_prev[lay][st], a, sizeof(float) * n);
+    _havePrev[lay][st] = true; _prevMs[lay][st] = nowMs; _lastMs = nowMs;
 }
 
 // ------------------------------------------------------------------ vitals

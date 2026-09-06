@@ -37,7 +37,8 @@ HT_BINS = np.array([i for i in list(range(1, 29)) + list(range(36, 64)) if i not
 
 P = {"R_j": 4.0, "R_w": 6.0, "k": 3, "n": 5, "hold_s": 60.0, "memory_s": 120.0,
      "tau_fast_s": 20.0, "tau_slow_s": 900.0, "tau_template_s": 120.0, "floor_j": 0.003, "floor_w": 0.01,
-     "template_frames": 300, "warmup_s": 15.0}
+     "template_frames": 300, "state_ready": 100, "states": 3, "far_d": 0.4, "interleave_n": 20, "interleave_min": 5,
+     "warmup_s": 15.0}
 
 
 def amp_vector(iq: bytes):
@@ -59,8 +60,9 @@ def corr(a, b):
 class Detector:
     def __init__(self, p=P):
         self.p = p
-        self.prev = {}; self.prev_t = {}
-        self.tpl = {}; self.tpl_n = {}
+        self.prev = {}; self.prev_t = {}          # keyed by (layout, state)
+        self.tpl = {}; self.tpl_sum = {}; self.tpl_n = {}; self.last_used = {}   # keyed by (layout, state)
+        self.n_states = {}; self.near_hist = {}; self.far_hist = {}                # keyed by layout
         self.bj = np.nan; self.bw = np.nan
         self.hist = []; self.last_event = -1e9; self.on = False; self.on_since = 0.0
         self.last_t = None
@@ -68,26 +70,51 @@ class Detector:
         self.warm_j = []; self.warm_w = []
         self.rj = np.nan; self.rw = np.nan; self.j = np.nan; self.w = np.nan
 
+    def seed_state(self, lay, s, a, t):
+        key = (lay, s)
+        self.tpl[key] = a.copy(); self.tpl_sum[key] = a.astype(np.float64).copy(); self.tpl_n[key] = 1; self.last_used[key] = t
+        self.prev.pop(key, None)
+        self.n_states[lay] = max(self.n_states.get(lay, 0), s + 1)
+
+    def assign_state(self, lay, a, t):
+        p = self.p
+        n = self.n_states.get(lay, 0)
+        if n == 0:
+            self.seed_state(lay, 0, a, t); self.near_hist[lay] = []; self.far_hist[lay] = []
+            return 0, 0.0, True
+        ds = [1.0 - corr(a, self.tpl[(lay, s)]) for s in range(n)]
+        best = int(np.argmin(ds)); d = ds[best]
+        far = d > p["far_d"]
+        self.far_hist[lay] = (self.far_hist[lay] + [far])[-p["interleave_n"]:]
+        self.near_hist[lay] = (self.near_hist[lay] + [not far])[-p["interleave_n"]:]
+        if far and sum(self.far_hist[lay]) >= p["interleave_min"] and sum(self.near_hist[lay]) >= p["interleave_min"]:
+            slot = n if n < p["states"] else min(range(n), key=lambda s: self.last_used.get((lay, s), 0))
+            self.seed_state(lay, slot, a, t); self.far_hist[lay] = []; self.near_hist[lay] = []
+            return slot, 0.0, True
+        return best, d, False
+
     def push(self, a, lay, t):
         p = self.p
         dt = (t - self.last_t) if self.last_t is not None else 0.05
         if dt > 5.0:
             self.bj = self.bw = np.nan
         self.last_t = t
-        # jitter against the previous frame of the same layout (within 1 s)
+        # router sub-state: nearest template of this layout; seed a new one only when near and far frames interleave
+        st, d, seeded = self.assign_state(lay, a, t)
+        key = (lay, st); self.last_used[key] = t
+        # jitter against the previous frame of the same layout and state (within 1 s)
         j = np.nan
-        if lay in self.prev and t - self.prev_t[lay] <= 1.0:
-            j = max(0.0, 1.0 - corr(a, self.prev[lay]))
-        self.prev[lay] = a; self.prev_t[lay] = t
-        # per-layout template: bootstrap from the first frames of that layout, then learn only while absent and quiet
+        if key in self.prev and t - self.prev_t[key] <= 1.0:
+            j = max(0.0, 1.0 - corr(a, self.prev[key]))
+        self.prev[key] = a; self.prev_t[key] = t
+        # state template: running mean over its first frames (far frames never enter it)
+        if (seeded or d <= p["far_d"]) and self.tpl_n[key] < p["template_frames"]:
+            if not seeded:
+                self.tpl_sum[key] += a; self.tpl_n[key] += 1
+            T = self.tpl_sum[key] / self.tpl_n[key]; self.tpl[key] = T / np.linalg.norm(T)
         w = np.nan
-        if lay not in self.tpl:
-            self.tpl[lay] = a.copy(); self.tpl_n[lay] = 1
-        else:
-            T = self.tpl[lay]
-            if self.tpl_n[lay] >= 30:
-                w = max(0.0, 1.0 - corr(a, T))
-            self.tpl_n[lay] += 1
+        if self.tpl_n[key] >= p["state_ready"]:
+            w = max(0.0, 1.0 - corr(a, self.tpl[key]))
         # warm-up: collect, learn robust baselines, decide nothing
         if self.t0 is None:
             self.t0 = t
@@ -124,15 +151,9 @@ class Detector:
         g = min(1.0, dt / tau)
         if not np.isnan(j): self.bj += g * (j - self.bj)
         if not np.isnan(w) and not self.on: self.bw += g * (w - self.bw)   # wander baseline only while absent
-        n = self.tpl_n[lay]
-        if n < p["template_frames"]:
-            gt = 1.0 / n
-        elif not self.on and quiet:
+        if self.tpl_n[key] >= p["template_frames"] and not self.on and quiet:
             gt = min(1.0, dt / p["tau_template_s"])
-        else:
-            gt = 0.0
-        if gt > 0:
-            T = self.tpl[lay] + gt * (a - self.tpl[lay]); self.tpl[lay] = T / np.linalg.norm(T)
+            T = self.tpl[key] + gt * (a - self.tpl[key]); self.tpl[key] = T / np.linalg.norm(T)
         self.j, self.w, self.rj, self.rw = j, w, rj, rw
         return self.on
 
@@ -199,7 +220,7 @@ def main():
             last_state = on
         if now - last_status >= 5.0:
             last_status = now
-            print(f"{hms}  {'in ' if on else 'out'}  j {det.j if not np.isnan(det.j) else 0:.3f}/{det.bj if not np.isnan(det.bj) else 0:.3f}  w {det.w if not np.isnan(det.w) else 0:.3f}/{det.bw if not np.isnan(det.bw) else 0:.3f}  lay {lay} rssi {rssi} label {label}", flush=True)
+            print(f"{hms}  {'in ' if on else 'out'}  j {det.j if not np.isnan(det.j) else 0:.3f}/{det.bj if not np.isnan(det.bj) else 0:.3f}  w {det.w if not np.isnan(det.w) else 0:.3f}/{det.bw if not np.isnan(det.bw) else 0:.3f}  lay {lay} states {det.n_states.get(lay, 0)} rssi {rssi} label {label}", flush=True)
         if csv and now - last_csv >= 1.0:
             last_csv = now
             csv.write(f"{now:.3f},{hms},{label},{lay},{rssi},{det.j:.5f},{det.w:.5f},{det.rj:.3f},{det.rw:.3f},{det.bj:.5f},{det.bw:.5f},{int(on)}\n"); csv.flush()

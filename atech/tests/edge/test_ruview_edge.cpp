@@ -26,12 +26,14 @@ struct Room {
     float breathDepth[64] = {0};   // per-bin modulation depth (signed): a chest reflection touches the whole band
     float gain = 1.0f;         // AGC step
     bool walking = false;      // channel changes every frame (random walk of delta)
+    bool altAntenna = false;   // router alternates between two channels almost every frame (256-byte mode seen live)
+    float base2[64];           // the second antenna's channel
     float fidgetEvery = 0.0f;  // seated person: a 0.5 s movement burst every N seconds (0 = none)
     float noise = 1.0f;        // I/Q noise sigma (LSB)
     Room() {
         std::uniform_real_distribution<float> u(20.0f, 60.0f), ph(0.0f, 6.283f);
         std::uniform_real_distribution<float> depth(0.02f, 0.05f);
-        for (int k = 0; k < 64; ++k) { base[k] = u(rng); phase[k] = ph(rng); breathDepth[k] = (k % 2) ? depth(rng) * ((k / 2) % 2 ? 1.0f : -1.0f) : 0.0f; }
+        for (int k = 0; k < 64; ++k) { base[k] = u(rng); phase[k] = ph(rng); breathDepth[k] = (k % 2) ? depth(rng) * ((k / 2) % 2 ? 1.0f : -1.0f) : 0.0f; base2[k] = u(rng); }
     }
     void personStill(float strength) {   // channel changed by a body; breathing modulates some bins; fidgets now and then
         std::uniform_real_distribution<float> u(-strength, strength);
@@ -51,8 +53,9 @@ struct Room {
             for (int k = 0; k < 64; ++k) delta[k] += -0.1f * delta[k] + step(rng);   // mean-reverting random walk: keeps changing, never saturates
         }
         float common = ph(rng);   // random per-packet phase offset (CFO), as on real hardware
+        bool second = altAntenna && (rng() & 1);
         for (int k = 0; k < 64; ++k) {
-            float a = base[k] * (1.0f + delta[k]) * gain;
+            float a = (second ? base2[k] : base[k]) * (1.0f + delta[k]) * gain;
             if (breathAmp > 0 && breathDepth[k] != 0.0f)          // about half the bins see the chest, with varying depth and sign
                 a *= 1.0f + breathDepth[k] * std::sin(6.283f * breathHz * tS);
             if (k == 0 || (k >= 29 && k <= 35)) a = 0;        // DC and guards
@@ -144,6 +147,19 @@ static void testSynthetic() {
     e.push(small, 128, now + 50);
     CHECK(e.layoutDrops() == drops + 1, "LLTF-only frame dropped and counted");
     { int8_t full[384]; room.frame(t, full); uint32_t fr = e.frames(); e.push(full, 256, now + 100); CHECK(e.frames() == fr + 1, "256-byte frames processed as their own layout"); }
+    // (i) router antenna alternation (the live 256-byte mode): empty room must read OUT, a person must still be seen
+    room.noise = 1.0f; room.empty(); room.altAntenna = true;
+    run(e, room, t, 30.0f, now);                     // states get discovered and bootstrapped
+    float fAlt = run(e, room, t, 120.0f, now);
+    std::printf("  alternating antennas, empty: presence %.1f%%  jitter %.4f base %.4f  states %u\n", 100 * fAlt, e.jitter(), e.baselineJitter(), (unsigned)e.states(1));
+    CHECK(e.states(1) >= 2, "two router states discovered (%u)", (unsigned)e.states(1));
+    CHECK(fAlt < 0.05f, "alternating router does not fake presence (%.1f%%)", 100 * fAlt);
+    room.personWalk(); run(e, room, t, 3.0f, now); room.personStill(0.3f);
+    float fAltStill = run(e, room, t, 90.0f, now);
+    std::printf("  alternating antennas, still person: presence %.1f%%  wander x%.1f\n", 100 * fAltStill, e.ratioWander());
+    CHECK(fAltStill > 0.9f, "person detected despite alternation (%.1f%%)", 100 * fAltStill);
+    room.empty(); run(e, room, t, 90.0f, now); CHECK(!e.presence(), "clears after leaving under alternation");
+    room.altAntenna = false;
     // (h) restart warms up again
     e.restart();
     CHECK(e.calibrating() && !e.presence(), "restart clears state");

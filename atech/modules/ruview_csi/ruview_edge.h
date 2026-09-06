@@ -71,7 +71,12 @@ public:
     static constexpr float    FLOOR_W        = 0.01f;    // empty rooms measure 0.003-0.02; a template built with a person
                                                         // present would otherwise learn a near-zero baseline against itself
     static constexpr float    TAU_TEMPLATE_S = 120.0f;  // template drift while absent and quiet (converges to the empty room in minutes)
-    static constexpr uint16_t TEMPLATE_FRAMES = 300;    // frames of a layout that bootstrap its template
+    static constexpr uint16_t TEMPLATE_FRAMES = 300;    // frames that bootstrap a state's template
+    static constexpr uint16_t STATE_READY    = 100;     // frames before a state's template is used for wander
+    static constexpr uint8_t  STATES         = 3;       // sub-states per layout (router antenna alternation: 2 seen)
+    static constexpr float    FAR_D          = 0.4f;    // 1 - corr beyond which a frame belongs to no known state
+    static constexpr uint8_t  INTERLEAVE_N   = 20;      // a new state is seeded only when near and far frames interleave
+    static constexpr uint8_t  INTERLEAVE_MIN = 5;
     static constexpr uint32_t WARMUP_MS      = 15000;   // no decisions; baselines = medians of the warm-up
     static constexpr uint16_t WARM_N         = 200;
     static constexpr uint32_t GAP_RESET_MS   = 1000;
@@ -132,7 +137,8 @@ public:
     float    sampleRateHz() const { return _fs; }
     uint32_t frames() const { return _frameCount; }
     uint8_t  layout() const { return _primary < 0 ? 0 : (uint8_t)(_primary + 2); }   // bytes/128 of the vitals layout (2 or 3), 0 none yet
-    uint8_t  templates() const { return (uint8_t)((_haveRef[0] ? 1 : 0) | (_haveRef[1] ? 2 : 0)); }  // bit0 256-byte, bit1 384-byte
+    uint8_t  templates() const { return (uint8_t)((_nStates[0] ? 1 : 0) | (_nStates[1] ? 2 : 0)); }  // bit0 256-byte, bit1 384-byte layouts have states
+    uint8_t  states(uint8_t layout) const { return layout < LAYOUTS ? _nStates[layout] : 0; }        // sub-states discovered (router antenna alternation)
     uint32_t layoutDrops() const { return _layoutDrops; }     // frames of unsupported layouts (128-byte LLTF-only)
     uint32_t untemplated() const { return _untemplated; }     // frames whose layout had no template yet
     uint16_t vitalsSamples() const { return _blockN; }
@@ -158,9 +164,11 @@ private:
 
     // ---- per-frame state
     uint32_t _frameCount = 0, _layoutDrops = 0, _untemplated = 0;
-    float    _prev[LAYOUTS][MAX_BINS] = {};
-    bool     _havePrev[LAYOUTS] = {false, false};
-    uint32_t _prevMs[LAYOUTS] = {0, 0};
+    float    _prev[LAYOUTS][STATES][MAX_BINS] = {};
+    bool     _havePrev[LAYOUTS][STATES] = {};
+    uint32_t _prevMs[LAYOUTS][STATES] = {};
+    int8_t   assignState(uint8_t lay, const float* a, uint32_t nowMs, float& d, bool& seeded);
+    void     seedState(uint8_t lay, uint8_t s, const float* a, uint32_t nowMs);
     int8_t   _primary = -1;               // layout used for vitals (most calibration frames)
     uint32_t _lastMs = 0;
     float    _fs = FS;
@@ -170,10 +178,13 @@ private:
     // ---- features and adaptive baselines
     float    _sj = 0, _sw = 0;            // EMA-smoothed jitter / wander (diagnostics)
     bool     _haveS = false;
-    float    _ref[LAYOUTS][MAX_BINS] = {};
-    bool     _haveRef[LAYOUTS] = {false, false};
-    double   _tplSum[LAYOUTS][MAX_BINS] = {};
-    uint16_t _tplCount[LAYOUTS] = {0, 0};
+    // per layout, per sub-state: template (running mean during bootstrap), previous frame, bookkeeping
+    float    _ref[LAYOUTS][STATES][MAX_BINS] = {};
+    double   _tplSum[LAYOUTS][STATES][MAX_BINS] = {};
+    uint16_t _tplCount[LAYOUTS][STATES] = {};
+    uint8_t  _nStates[LAYOUTS] = {0, 0};
+    uint32_t _stateLastMs[LAYOUTS][STATES] = {};
+    uint32_t _nearHist[LAYOUTS] = {0, 0}, _farHist[LAYOUTS] = {0, 0};   // INTERLEAVE_N-bit shift registers
     uint32_t _t0Ms = 0;
     bool     _warm = true;
     float    _warmJ[WARM_N] = {0}, _warmW[WARM_N] = {0};
