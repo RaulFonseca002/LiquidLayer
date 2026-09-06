@@ -18,7 +18,7 @@ reset shows as 0/UNKNOWN.
 | S1b | S1a + all module serial I/O gated on `if (Serial)` (host actually reading) | **FAIL** | 2026-09-05 23:15 | still dies. Serial *output* is not it, but `if (Serial)` still pokes the USB driver every loop |
 | — | **Rebuild v2 ladder** (one change per rung; L0 baseline carries WDT, RTC boot counter, boot card, NeoPixel loop heartbeat) | | | |
 | L0 | S0 + instrumentation (WDT 5 s, boot counter, boot card, NeoPixel blink from loop) | **PASS** | 2026-09-05 23:30 | reboots cleanly on the button. Finding: the Restart-slot button pulls chip EN → chip fully powers down (RTC memory cleared, card says "COLD") while the **panel keeps power**. So RTC counter cannot tell EN-reset from power-cycle; the panel-side distinction (panel kept power) is what matters |
-| L1 | L0 + `Serial.println("tick")` every 200 ms, nothing else (~272 KB) | pending | | USB-CDC activity from loop is the top suspect (only thing shared by S1/S1a/S1b and absent in S0) |
+| L1 | L0 + `Serial.println("tick")` every 200 ms, nothing else (280 KB) | **PASS** | 2026-09-05 23:40 | serial output with no reader is innocent. Remaining: per-loop HWCDC polling (`available()`/`if (Serial)`) vs the big WiFi-linked binary — L2 first (shared by every failing build) |
 | L1' | L0 + `if (Serial) {}` every loop, no prints | pending | | isCDC_Connected() pokes the USB FIFO on every call |
 | L2 | L0 + empty module that only `#include <WiFi.h>` | pending | | binary size / boot-time / linked libs |
 | L3 | L2 + Preferences read at boot | pending | | NVS |

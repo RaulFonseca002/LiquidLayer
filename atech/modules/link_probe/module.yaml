@@ -1,0 +1,27 @@
+id: link_probe
+name: "Link probe (rebuild instrument)"
+category: connectivity
+interface: gpio
+size: 1
+description: |
+  Rebuild-ladder instrument, not a product module. Its only effect is to link
+  the WiFi/lwIP libraries into the firmware (bigger binary, longer boot, more
+  static RAM) while doing nothing at runtime. Used to test whether merely
+  linking those libraries breaks the display after a warm reset.
+driver:
+  header: link_probe.h
+  source: link_probe.cpp
+  class_name: LinkProbe
+templates:
+  globals: |
+    LinkProbe {{ instance }};
+  setup: |
+    {{ instance }}.begin();
+  loop: |
+    {{ instance }}.update();
+events: []
+actions: []
+lib_deps: []
+usage: |
+  // LinkProbe does nothing. sketchKB() returns the running sketch size in KB.
+  uint32_t kb = {{ instance }}.sketchKB();
