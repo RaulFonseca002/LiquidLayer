@@ -59,7 +59,7 @@ public:
     static constexpr float    FLOOR_W        = 0.005f;
     static constexpr float    CAP_THR        = 1.5f;    // metric is 1 - corr in [0, 2]; keep thresholds reachable
     static constexpr float    PLAUSIBLE_THR_W = 0.25f;  // an empty room learns thr_w ~0.04-0.06; a person in the room ~1.2
-    static constexpr float    PLAUSIBLE_THR_J = 0.60f;
+    static constexpr float    PLAUSIBLE_THR_J = 1.0f;   // jitter is only the secondary detector; mixed frame layouts inflate its sigma (0.49 seen)
     static constexpr uint8_t  ON_FRAMES      = 3;
     static constexpr uint8_t  OFF_FRAMES     = 20;
     static constexpr uint32_t HOLD_MS        = 3000;
@@ -72,6 +72,9 @@ public:
     static constexpr uint32_t STATS_MIN_MS   = 15000;   // minimum noise-statistics phase
     static constexpr uint32_t CALIB_AUTO_MS  = 60000;   // total for the automatic (boot) calibration
     static constexpr uint32_t CALIB_MAX_MS   = 600000;  // safety cap for an open-ended one
+    static constexpr float    RETURN_K_SIGMA = 6.0f;    // wander above mean + 6 sigma (and above RETURN_MIN_W) during stats = someone came back
+    static constexpr float    RETURN_MIN_W   = 0.05f;   // a real body gives 0.7-1.4, an empty room 0.02; primary-layout frames only
+    static constexpr uint8_t  RETURN_FRAMES  = 5;
     // ---- vitals
     static constexpr uint8_t  BR_BINS = 33;   // 0.100 .. 0.500 Hz step 0.0125 (6 .. 30 bpm, 0.75 bpm)
     static constexpr uint8_t  HR_BINS = 37;   // 0.70 .. 2.50 Hz step 0.05 (42 .. 150 bpm, 3 bpm)
@@ -108,6 +111,7 @@ public:
     bool     calibrated() const { return _calibrated; }
     // False when the learned thresholds say the room was not empty during calibration (do not persist).
     bool     calibrationPlausible() const { return _calibrated && _thrW <= PLAUSIBLE_THR_W && _thrJ <= PLAUSIBLE_THR_J; }
+    bool     calibrationClosedByReturn() const { return _closedByReturn; }   // the last calibration ended because someone re-entered
     Phase    phase() const { return _phase; }
     const char* phaseName() const;
     uint32_t calibSecondsLeft(uint32_t nowMs) const;   // 0 while open-ended past its minimum, or done
@@ -195,6 +199,8 @@ private:
     Phase    _phase = Phase::Idle;
     bool     _calibrated = false, _openEnded = false, _closeRequested = false;
     uint32_t _calibStartMs = 0, _phaseStartMs = 0, _leaveMs = 0;
+    uint8_t  _returnFrames = 0;
+    bool     _closedByReturn = false;
     double   _tplSum[LAYOUTS][MAX_BINS] = {};
     uint32_t _tplCount[LAYOUTS] = {0, 0};
     Welford  _statJ{}, _statW{};

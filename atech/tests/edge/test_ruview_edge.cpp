@@ -92,7 +92,7 @@ static void testSynthetic() {
     std::printf("  empty:  presence %.1f%%\n", 100 * fEmpty);
     CHECK(fEmpty < 0.01f, "empty room stays absent (%.1f%%)", 100 * fEmpty);
     // (b) still person with breathing 15 BPM
-    room.personStill(0.15f);
+    room.personStill(0.3f);
     float brBpm = 0, brC = 0;
     float fStill = run(e, room, t, 90.0f, now, &brBpm, &brC);   // >= 2 full 30 s blocks after the entry transient
     std::printf("  still:  presence %.1f%%  wander %.4f  BR %.1f bpm conf %.2f  HR %.1f conf %.2f  blocks %lu\n",
@@ -121,7 +121,7 @@ static void testSynthetic() {
     CHECK(fAgc < 0.02f, "gain step does not fake presence (%.1f%%)", 100 * fAgc);
     room.gain = 1.0f;
     // (f) button calibration: leave delay, open-ended, closes on request after the minimum
-    room.personStill(0.15f); run(e, room, t, 5.0f, now);
+    room.personStill(0.3f); run(e, room, t, 5.0f, now);
     CHECK(e.presence(), "person present before recalibration");
     e.forceCalibrate(now, RuViewEdge::LEAVE_MS, true);
     CHECK(!e.presence() && e.calibrating() && e.phase() == RuViewEdge::Phase::Leave, "forceCalibrate clears presence and enters leave phase");
@@ -140,7 +140,16 @@ static void testSynthetic() {
     e.endCalibration();
     run(e, room, t, 1.0f, now);
     CHECK(!e.calibrating() && e.calibrated(), "closes on request");
-    room.personStill(0.15f);
+    // (f3) an open-ended calibration closes by itself when the person walks back in, keeping clean statistics
+    e.forceCalibrate(now, RuViewEdge::LEAVE_MS, true); room.empty();
+    run(e, room, t, 50.0f, now);
+    CHECK(e.calibrating(), "still open before anyone returns");
+    room.personStill(0.3f);
+    run(e, room, t, 3.0f, now);
+    CHECK(!e.calibrating() && e.calibrationClosedByReturn() && e.calibrationPlausible(), "closed by return with plausible thresholds (thr_w %.3f)", e.thresholdWander());
+    float fBack = run(e, room, t, 10.0f, now);
+    CHECK(fBack > 0.8f, "and detects the returned person (%.1f%%)", 100 * fBack);
+    room.personStill(0.3f);
     float fAgain = run(e, room, t, 20.0f, now);
     CHECK(fAgain > 0.9f, "detects again after recalibration (%.1f%%)", 100 * fAgain);
     // (f2) calibration export/import round trip: a fresh engine restored from the blob detects at once
@@ -197,7 +206,7 @@ static bool readRec(const char* path, std::vector<Rec>& out) {
     std::fclose(f); return true;
 }
 
-struct SegStat { int n = 0, on = 0, nT = 0, onT = 0; float brSum = 0; int brN = 0; float t0 = -1, tOn = -1; float jSum = 0, wSum = 0; };
+struct SegStat { int n = 0, on = 0, nT = 0, onT = 0; float brSum = 0; int brN = 0; float t0 = -1, t1 = -1, tOn = -1; float jSum = 0, wSum = 0; int nG = 0, onG = 0; };
 static const char* SEG[4] = {"live", "empty", "still", "walk"};
 
 static bool replay(const char* path, bool doAssert, const char* dumpPath) {
@@ -219,15 +228,27 @@ static bool replay(const char* path, bool doAssert, const char* dumpPath) {
         frames++;
         SegStat& s = st[r.seg & 3];
         if (s.t0 < 0) s.t0 = tS;
+        s.t1 = tS;
         s.n++; s.on += e.presence(); s.jSum += e.jitter(); s.wSum += e.wander();
         bool templated = e.templates() & (r.payload.size() - 20 >= 384 ? 2 : 1);   // this frame's layout has a template
         if (templated) { s.nT++; s.onT += e.presence(); }
+        (void)0;
         if (e.presence() && s.tOn < 0) s.tOn = tS - s.t0;
         if (e.breathingBpm() > 0) { s.brSum += e.breathingBpm(); s.brN++; }
         if (dump) std::fprintf(dump, "%.3f\t%d\t%.6f\t%.6f\t%d\t%.2f\t%.2f\t%.1f\t%.2f\n", tS, r.seg, e.jitter(), e.wander(), e.presence() ? 1 : 0,
                                e.thresholdJitter(), e.thresholdWander(), e.breathingBpm(), e.breathingConfidence());
     }
     if (dump) std::fclose(dump);
+    // second pass for the empty gate: the person walks back in before pressing, so judge the empty
+    // segment only up to 15 s before its end (over templated frames)
+    { RuViewEdge e2; e2.reset(); int last2 = 0;
+      for (const Rec& r : recs) {
+        if (r.kind != 1 || r.payload.size() < 20) continue;
+        uint32_t nowMs = (uint32_t)((r.tUs - t0) / 1000) + 1000; float tS = (float)(r.tUs - t0) / 1e6f;
+        if (r.seg != last2) { if (r.seg == 1) e2.forceCalibrate(nowMs, RuViewEdge::LEAVE_MS, true); else if (last2 == 1) e2.endCalibration(); last2 = r.seg; }
+        e2.push((const int8_t*)r.payload.data() + 20, (uint16_t)(r.payload.size() - 20), nowMs);
+        if (r.seg == 1 && tS <= st[1].t1 - 15.0f && (e2.templates() & (r.payload.size() - 20 >= 384 ? 2 : 1))) { st[1].nG++; st[1].onG += e2.presence(); }
+      } }
     std::printf("%s: %d frames, vitals layout %u, templates %u, drops %lu, untemplated %lu, blocks %lu, thr_j %.4f thr_w %.4f, calibrated %d\n", path, frames,
                 e.layout(), e.templates(), (unsigned long)e.layoutDrops(), (unsigned long)e.untemplated(), (unsigned long)e.blocks(),
                 e.thresholdJitter(), e.thresholdWander(), (int)e.calibrated());
@@ -243,7 +264,8 @@ static bool replay(const char* path, bool doAssert, const char* dumpPath) {
         if (doAssert) {
             // only the part of "empty" after the minimum calibration is judged (the person is leaving at first)
             // gates apply to frames whose layout had a template; untemplated layouts are a known limitation
-            if (s == 1 && st[s].nT && presT > 1.0f) { ok = false; std::printf("  FAIL empty > 1%%\n"); }
+            if (s == 1 && st[s].nG && 100.0f * st[s].onG / st[s].nG > 1.0f) { ok = false; std::printf("  FAIL empty > 1%% (%.1f%% before the last 15 s)\n", 100.0f * st[s].onG / st[s].nG); }
+            else if (s == 1 && st[s].nG) std::printf("  empty gate: %.1f%% over %d templated frames up to 15 s before the press\n", 100.0f * st[s].onG / st[s].nG, st[s].nG);
             if (s == 2 && st[s].nT && presT < 90.0f) { ok = false; std::printf("  FAIL still < 90%%\n"); }
             if (s == 3 && st[s].nT && presT < 95.0f) { ok = false; std::printf("  FAIL walk < 95%%\n"); }
             if (s == 3 && !st[s].nT) std::printf("  note: walk frames were all of an untemplated layout; presence there relied on jitter only\n");

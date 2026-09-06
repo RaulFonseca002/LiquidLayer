@@ -202,7 +202,10 @@ void RuViewCsi::_dspLoop() {
         if (_probeInject && now - _lastProbeMs >= PROBE_INTERVAL_MS) { _lastProbeMs = now; injectProbe(); }
         if (_streaming && _sinkValid && now - _lastVitalsMs >= 1000) { _lastVitalsMs = now; sendVitalsPacket(now); }
         bool cal = _edge.calibrating();
-        if (_wasCalibrating && !cal && _edge.calibrated()) _calSaveRequest = true;   // just finished: persist
+        if (_wasCalibrating && !cal && _edge.calibrated()) {
+            _calSaveRequest = true;   // just finished: persist (loop side checks plausibility)
+            if (_edge.calibrationClosedByReturn() && _segment == 1) { _segment = 2; _segmentStartMs = millis(); }   // the person is back: on to "still"
+        }
         _wasCalibrating = cal;
         publish();
         vTaskDelay(pdMS_TO_TICKS(5));

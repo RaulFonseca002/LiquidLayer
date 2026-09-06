@@ -86,7 +86,7 @@ void RuViewEdge::reset() {
     _primary = -1; _lastMs = 0; _fs = FS; _rateMs = 0; _rateFrames = 0;
     _sj = _sw = 0; _haveS = false; _lastTemplatedMs = 0; _lastTemplatedW = 0;
     _phase = Phase::Idle; _calibrated = _openEnded = _closeRequested = false;
-    _calibStartMs = _phaseStartMs = _leaveMs = 0;
+    _calibStartMs = _phaseStartMs = _leaveMs = 0; _returnFrames = 0; _closedByReturn = false;
     welfordReset(_statJ); welfordReset(_statW);
     _thrJ = _thrW = _offJ = _offW = 0; _meanJ = _sigJ = _meanW = _sigW = 0;
     _presence = false; _above = _below = 0; _onSinceMs = 0;
@@ -121,6 +121,7 @@ void RuViewEdge::forceCalibrate(uint32_t nowMs, uint32_t leaveDelayMs, bool open
 void RuViewEdge::startCalibration(uint32_t nowMs, uint32_t leaveDelayMs, bool openEnded) {
     _phase = leaveDelayMs ? Phase::Leave : Phase::Template;
     _openEnded = openEnded; _closeRequested = false; _leaveMs = leaveDelayMs;
+    _returnFrames = 0; _closedByReturn = false;
     _calibStartMs = _phaseStartMs = nowMs;
     for (uint8_t l = 0; l < LAYOUTS; ++l) {
         _tplCount[l] = 0; _lazyCount[l] = 0; _haveRef[l] = false;   // wander is meaningless until the new templates exist
@@ -160,9 +161,17 @@ void RuViewEdge::updateCalibration(uint32_t nowMs, uint8_t lay, const float* a) 
             return;
         }
         case Phase::Stats: {
-            if (_haveS && _haveRef[lay]) { welfordUpdate(_statJ, _sj); welfordUpdate(_statW, _sw); }
             uint32_t inStats = nowMs - _phaseStartMs;
             uint32_t total = nowMs - _calibStartMs;
+            // Someone re-entering ends the window at once (an open-ended calibration would otherwise
+            // absorb their return and learn a ceiling threshold). Needs the minimum statistics first.
+            if (_haveS && _haveRef[lay] && (int8_t)lay == _primary && inStats >= STATS_MIN_MS && _statW.count > 100) {
+                float mw = (float)_statW.mean, sw = sqrtf((float)welfordVar(_statW));
+                if (_sw > mw + RETURN_K_SIGMA * sw && _sw > RETURN_MIN_W) {
+                    if (++_returnFrames >= RETURN_FRAMES) { _closedByReturn = true; finishCalibration(); return; }
+                } else _returnFrames = 0;
+            }
+            if (_haveS && _haveRef[lay]) { welfordUpdate(_statJ, _sj); welfordUpdate(_statW, _sw); }
             bool done;
             if (_openEnded) done = (inStats >= STATS_MIN_MS && _closeRequested) || total >= CALIB_MAX_MS;
             else done = total >= CALIB_AUTO_MS && inStats >= STATS_MIN_MS;
@@ -196,7 +205,7 @@ bool RuViewEdge::exportCalibration(Calibration& out) const {
 }
 
 bool RuViewEdge::importCalibration(const Calibration& in) {
-    if (in.magic != CAL_MAGIC || !(in.haveRef & 3) || !(in.thrJ > 0.0f) || !(in.thrW > 0.0f) || in.thrJ > PLAUSIBLE_THR_J || in.thrW > PLAUSIBLE_THR_W) return false;
+    if (in.magic != CAL_MAGIC || !(in.haveRef & 3) || !(in.thrJ > 0.0f) || !(in.thrW > 0.0f) || in.thrJ > CAP_THR || in.thrW > PLAUSIBLE_THR_W) return false;
     if (in.primary < 0 || in.primary >= (int8_t)LAYOUTS || !(in.haveRef & (1 << in.primary))) return false;
     memcpy(_ref, in.ref, sizeof _ref);
     for (uint8_t l = 0; l < LAYOUTS; ++l) { _haveRef[l] = (in.haveRef >> l) & 1; _lazyCount[l] = 0; }
