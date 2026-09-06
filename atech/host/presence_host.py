@@ -185,7 +185,8 @@ def main():
         nonlocal rec, rec_start, rec_idx
         if rec: rec.close()
         base = Path(args.record)
-        path = base.with_name(f"{base.stem}_{rec_idx:03d}{base.suffix or '.csirec'}")
+        # timestamped: a restart must never overwrite an earlier recording (it did on 2026-09-06 and cost 90 min of raw CSI)
+        path = base.with_name(f"{base.stem}_{time.strftime('%H%M%S')}_{rec_idx:03d}{base.suffix or '.csirec'}")
         rec = Recorder(str(path)); rec_start = time.time(); rec_idx += 1
         print(f"# recording -> {path}", flush=True)
     if args.record:
