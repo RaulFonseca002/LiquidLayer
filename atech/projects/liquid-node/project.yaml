@@ -1,5 +1,5 @@
 # Liquid node — ground-up rebuild v2 (see ../../STAGES.md).
-# RUNG L3s: L3 + per-loop `if (Serial)` + Serial.available()/read() polling. Nothing else. Loop watchdog, RTC boot counter + boot card,
+# RUNG L3g: L3 + bulk_probe (27 KB statics + WiFiUDP/Preferences global ctors, idle). Nothing else. Loop watchdog, RTC boot counter + boot card,
 # NeoPixel loop heartbeat (off-panel liveness), reset reason on screen.
 # The ONLY change vs L0 is the paced serial print below.
 name: liquid-node
@@ -9,6 +9,7 @@ modules:
   - {id: st7735_tft, instance: tftA, ports: [1, 2]}
   - {id: neopixel,   instance: led,  port: 10}
   - {id: link_probe, instance: lp,   port: 11}
+  - {id: bulk_probe, instance: bp,   port: 7}
 code:
   setup: |
     // --- instrumentation -------------------------------------------------
@@ -35,7 +36,7 @@ code:
 
     // --- boot card: 2 s, so the owner can read it after each press ---------
     tftA.clear();
-    tftA.displayText("L3s boot card", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
+    tftA.displayText("L3g boot card", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
     char line[40];
     snprintf(line, sizeof line, "boot #%lu  %s", (unsigned long)bootCount, coldBoot ? "rtc cleared" : "rtc kept");
     tftA.displayText(line, 2, 16, 2, coldBoot ? ST7735_TFT::COLOR_ORANGE : ST7735_TFT::COLOR_WHITE);
@@ -51,11 +52,6 @@ code:
     // module's paced event stream. Nothing reads it unless a host is attached.
     // L2: no serial, no radio; the link_probe module merely links WiFi/lwIP.
 
-    // L3s probe: the per-loop USB-CDC polling the old module did.
-    static volatile uint32_t pollHits = 0;
-    if (Serial) pollHits++;
-    while (Serial.available() > 0) { (void)Serial.read(); }
-
     // render() at 2 Hz is the ONLY thing that touches the panel; the NeoPixel
     // blink right after it is the off-panel loop heartbeat.
     static uint32_t lastDraw = 0;
@@ -65,7 +61,7 @@ code:
     static bool hb = false; hb = !hb;
 
     tftA.clear();
-    tftA.displayText("L3s + serial poll", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
+    tftA.displayText("L3g + bulk statics", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
     char line[40];
     snprintf(line, sizeof line, "frame %lu", (unsigned long)frames);
     tftA.displayText(line, 2, 18, 2, ST7735_TFT::COLOR_WHITE);

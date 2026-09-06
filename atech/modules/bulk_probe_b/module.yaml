@@ -1,0 +1,24 @@
+id: bulk_probe_b
+name: "Bulk probe B: WiFiUDP+Preferences global ctors only"
+category: connectivity
+interface: gpio
+size: 1
+description: |
+  Rebuild-ladder instrument. A global object with the same static footprint and
+  member constructors as the old sensing module (16 x 1 KB ring, DSP buffers,
+  WiFiUDP, Preferences) that never does anything. Tests whether large statics /
+  global constructors break the display after a warm reset.
+driver: {header: bulk_probe_b.h, source: bulk_probe_b.cpp, class_name: BulkProbeB}
+templates:
+  globals: |
+    BulkProbeB {{ instance }};
+  setup: |
+    {{ instance }}.begin();
+  loop: |
+    {{ instance }}.update();
+events: []
+actions: []
+lib_deps: []
+usage: |
+  // BulkProbe does nothing. footprintKB() reports its static size.
+  uint32_t kb = {{ instance }}.footprintKB();
