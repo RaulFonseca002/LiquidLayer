@@ -30,6 +30,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ruview_packets import MAGIC_CSI, MAGIC_STATUS, parse  # noqa: E402
+from csirec import Recorder  # noqa: E402
 
 PILOTS = {7, 21, 43, 57}
 HT_BINS = np.array([i for i in list(range(1, 29)) + list(range(36, 64)) if i not in PILOTS])
@@ -129,6 +130,8 @@ def main():
     ap.add_argument("--csv", default="")
     ap.add_argument("--liquid", action="store_true", help="emit ExternalObservation NDJSON on stdout")
     ap.add_argument("--node", type=int, default=1)
+    ap.add_argument("--record", default="", help="also write every packet to this .csirec (replaces csi_sink --record; one UDP port)")
+    ap.add_argument("--rotate-s", type=float, default=3600.0, help="start a new .csirec every N seconds (suffix _NNN)")
     args = ap.parse_args()
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", args.port)); sock.settimeout(0.5)
@@ -137,6 +140,16 @@ def main():
     if csv and csv.tell() == 0:
         csv.write("t,hms,label,layout,rssi,jitter,wander,ratio_j,ratio_w,baseline_j,baseline_w,present\n")
     label = 0; rssi = 0; last_status = 0.0; last_csv = 0.0; last_state = None; rev = 0
+    rec = None; rec_start = 0.0; rec_idx = 0
+    def open_rec():
+        nonlocal rec, rec_start, rec_idx
+        if rec: rec.close()
+        base = Path(args.record)
+        path = base.with_name(f"{base.stem}_{rec_idx:03d}{base.suffix or '.csirec'}")
+        rec = Recorder(str(path)); rec_start = time.time(); rec_idx += 1
+        print(f"# recording -> {path}", flush=True)
+    if args.record:
+        open_rec()
     print(f"# presence_host listening on udp/{args.port}; adaptive-ratio detector; Ctrl-C to stop", flush=True)
     while True:
         try:
@@ -145,10 +158,14 @@ def main():
             continue
         except KeyboardInterrupt:
             break
+        now = time.time()
+        if rec:
+            rec.write(data, label)
+            if now - rec_start >= args.rotate_s:
+                open_rec()
         p = parse(data)
         if not p:
             continue
-        now = time.time()
         if p["kind"] == "status":
             label = p["segment"]; rssi = p["rssi"]
             continue
@@ -175,6 +192,8 @@ def main():
             csv.write(f"{now:.3f},{hms},{label},{lay},{rssi},{det.j:.5f},{det.w:.5f},{det.rj:.3f},{det.rw:.3f},{det.bj:.5f},{det.bw:.5f},{int(on)}\n"); csv.flush()
     if csv:
         csv.close()
+    if rec:
+        rec.close()
 
 
 if __name__ == "__main__":
