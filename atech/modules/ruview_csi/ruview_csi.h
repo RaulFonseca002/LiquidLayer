@@ -219,6 +219,7 @@ private:
     volatile bool _calSaveRequest = false; // task -> loop: a calibration just completed, persist it
     bool        _wasCalibrating = false;   // task-side edge detector
     bool        _calRestored = false;
+    uint32_t    _calSavedUptimeS = 0;   // when the stored calibration was written (board uptime, s), from the blob
     bool        tryRestoreCalibration();
     void        saveCalibration();
     volatile bool _beatPending = false;    // task -> loop

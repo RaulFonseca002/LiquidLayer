@@ -55,8 +55,12 @@ public:
     static constexpr float    ALPHA          = 0.2f;    // EMA of jitter/wander (~250 ms at 20 Hz)
     static constexpr float    K_SIGMA        = 4.0f;    // on threshold  = mean + K*sigma
     static constexpr float    K_OFF          = 2.0f;    // off threshold = mean + K_OFF*sigma
-    static constexpr float    FLOOR_J        = 0.002f;
-    static constexpr float    FLOOR_W        = 0.005f;
+    // Floors from real rooms: empty wander 0.02 +- 0.009 (p95 0.04), jitter 0.037 +- 0.013. A single very
+    // quiet window learned thr_w 0.012 and then flickered on normal room noise; a still person 1-2 m
+    // away gives 0.7-1.1, a person at a desk off the router-board path ~0.06.
+    static constexpr float    FLOOR_J        = 0.08f;
+    static constexpr float    FLOOR_W        = 0.04f;
+    static constexpr float    MEAN_RATIO     = 1.75f;   // on threshold also >= MEAN_RATIO * ambient mean
     static constexpr float    CAP_THR        = 1.5f;    // metric is 1 - corr in [0, 2]; keep thresholds reachable
     static constexpr float    PLAUSIBLE_THR_W = 0.25f;  // an empty room learns thr_w ~0.04-0.06; a person in the room ~1.2
     static constexpr float    PLAUSIBLE_THR_J = 1.0f;   // jitter is only the secondary detector; mixed frame layouts inflate its sigma (0.49 seen)

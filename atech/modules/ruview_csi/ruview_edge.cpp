@@ -184,12 +184,14 @@ void RuViewEdge::updateCalibration(uint32_t nowMs, uint8_t lay, const float* a) 
 void RuViewEdge::finishCalibration() {
     _meanJ = (float)_statJ.mean; _sigJ = sqrtf((float)welfordVar(_statJ));
     _meanW = (float)_statW.mean; _sigW = sqrtf((float)welfordVar(_statW));
-    _thrJ = _meanJ + K_SIGMA * _sigJ; if (_thrJ < FLOOR_J) _thrJ = FLOOR_J; if (_thrJ > CAP_THR) _thrJ = CAP_THR;
-    _thrW = _meanW + K_SIGMA * _sigW; if (_thrW < FLOOR_W) _thrW = FLOOR_W; if (_thrW > CAP_THR) _thrW = CAP_THR;
+    _thrJ = _meanJ + K_SIGMA * _sigJ; if (_thrJ < MEAN_RATIO * _meanJ) _thrJ = MEAN_RATIO * _meanJ; if (_thrJ < FLOOR_J) _thrJ = FLOOR_J; if (_thrJ > CAP_THR) _thrJ = CAP_THR;
+    _thrW = _meanW + K_SIGMA * _sigW; if (_thrW < MEAN_RATIO * _meanW) _thrW = MEAN_RATIO * _meanW; if (_thrW < FLOOR_W) _thrW = FLOOR_W; if (_thrW > CAP_THR) _thrW = CAP_THR;
     // Off levels sit between the ambient mean and the on level (mean + 2 sigma); with a degenerate
     // sigma they fall back to the midpoint so the trigger still has a dead band.
-    _offJ = _meanJ + K_OFF * _sigJ; if (_offJ >= _thrJ) _offJ = 0.5f * (_meanJ + _thrJ);
-    _offW = _meanW + K_OFF * _sigW; if (_offW >= _thrW) _offW = 0.5f * (_meanW + _thrW);
+    // ... and never below 60 % of the on level: when the floor lifted the on level far above a very
+    // quiet calibration, mean + 2 sigma would sit under normal room noise and presence could never clear.
+    _offJ = _meanJ + K_OFF * _sigJ; if (_offJ < 0.6f * _thrJ) _offJ = 0.6f * _thrJ; if (_offJ >= _thrJ) _offJ = 0.5f * (_meanJ + _thrJ);
+    _offW = _meanW + K_OFF * _sigW; if (_offW < 0.6f * _thrW) _offW = 0.6f * _thrW; if (_offW >= _thrW) _offW = 0.5f * (_meanW + _thrW);
     _phase = Phase::Idle; _calibrated = true; _closeRequested = false;
     _presence = false; _above = _below = 0;
 }

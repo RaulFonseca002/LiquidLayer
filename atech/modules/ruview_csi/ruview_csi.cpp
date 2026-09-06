@@ -372,18 +372,28 @@ void RuViewCsi::update() {
 
 // ---- calibration persistence: blob = 6-byte BSSID + channel + RuViewEdge::Calibration
 bool RuViewCsi::tryRestoreCalibration() {
-    struct __attribute__((packed)) Blob { uint8_t bssid[6]; uint8_t channel; RuViewEdge::Calibration cal; } b;
+    struct __attribute__((packed)) Blob { uint8_t bssid[6]; uint8_t channel; uint32_t savedUptimeS; RuViewEdge::Calibration cal; } b;
     size_t n = _prefs.getBytesLength("cal");
-    if (n != sizeof b) return false;
+    if (n != sizeof b) { if (n) logEvent("stored calibration has another format: ignored"); return false; }
     if (_prefs.getBytes("cal", &b, sizeof b) != sizeof b) return false;
+    _calSavedUptimeS = b.savedUptimeS;
     uint8_t* cur = WiFi.BSSID();
-    if (!cur || memcmp(cur, b.bssid, 6) != 0 || b.channel != (uint8_t)WiFi.channel()) return false;
-    return _edge.importCalibration(b.cal);
+    char m[96];
+    if (!cur || memcmp(cur, b.bssid, 6) != 0 || b.channel != (uint8_t)WiFi.channel()) {
+        snprintf(m, sizeof m, "stored calibration is for channel %u, now on %u: not restored", (unsigned)b.channel, (unsigned)WiFi.channel());
+        logEvent(m);
+        return false;
+    }
+    bool ok = _edge.importCalibration(b.cal);
+    snprintf(m, sizeof m, "stored calibration (saved at uptime %lus, thr_w=%.4f thr_j=%.3f): %s", (unsigned long)b.savedUptimeS, b.cal.thrW, b.cal.thrJ, ok ? "restored" : "rejected as implausible");
+    logEvent(m);
+    return ok;
 }
 
 void RuViewCsi::saveCalibration() {
-    struct __attribute__((packed)) Blob { uint8_t bssid[6]; uint8_t channel; RuViewEdge::Calibration cal; } b;
+    struct __attribute__((packed)) Blob { uint8_t bssid[6]; uint8_t channel; uint32_t savedUptimeS; RuViewEdge::Calibration cal; } b;
     if (!_edge.exportCalibration(b.cal)) return;
+    b.savedUptimeS = millis() / 1000;
     if (!_edge.calibrationPlausible()) {
         char m[96];
         snprintf(m, sizeof m, "calibration NOT stored: room was not empty (thr_w=%.3f > %.2f); press the button and leave", b.cal.thrW, RuViewEdge::PLAUSIBLE_THR_W);
@@ -394,9 +404,10 @@ void RuViewCsi::saveCalibration() {
     if (!cur) return;
     memcpy(b.bssid, cur, 6); b.channel = (uint8_t)WiFi.channel();
     bool ok = _prefs.putBytes("cal", &b, sizeof b) == sizeof b;
+    if (ok) _calSavedUptimeS = b.savedUptimeS;
     char msg[96];
-    snprintf(msg, sizeof msg, "calibration %s to flash: thr_j=%.4f thr_w=%.4f templates=%u (%u bytes)",
-             ok ? "saved" : "NOT saved", b.cal.thrJ, b.cal.thrW, (unsigned)b.cal.haveRef, (unsigned)sizeof b);
+    snprintf(msg, sizeof msg, "calibration %s to flash at uptime %lus: thr_j=%.4f thr_w=%.4f templates=%u",
+             ok ? "saved" : "NOT saved", (unsigned long)b.savedUptimeS, b.cal.thrJ, b.cal.thrW, (unsigned)b.cal.haveRef);
     logEvent(msg);
 }
 
@@ -629,9 +640,9 @@ void RuViewCsi::onAction(const char* action, const char* value) {
                  s.jitter, s.thrJ, s.wander, s.thrW, s.fs, calibPhaseName(), (unsigned long)s.calibLeft, (unsigned)s.layout, segmentName(),
                  (int)s.presence, s.hr, s.hrConf, s.br, s.brConf);
         logEvent(msg);
-        snprintf(msg, sizeof msg, "diag: edge templates=%u untemplated=%lu lltf_drops=%lu blocks=%lu restored=%d stored=%d",
+        snprintf(msg, sizeof msg, "diag: edge templates=%u untemplated=%lu lltf_drops=%lu blocks=%lu restored=%d stored=%d stored_at=%lus up=%lus",
                  (unsigned)_edge.templates(), (unsigned long)_edge.untemplated(), (unsigned long)_edge.layoutDrops(), (unsigned long)_edge.blocks(),
-                 (int)_calRestored, (int)(_prefs.getBytesLength("cal") > 0));
+                 (int)_calRestored, (int)(_prefs.getBytesLength("cal") > 0), (unsigned long)_calSavedUptimeS, (unsigned long)(millis() / 1000));
         logEvent(msg);
     } else if (strcmp(sub, "segment") == 0) {
         setSegment((uint8_t)strtod(value, nullptr));
