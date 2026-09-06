@@ -13,7 +13,7 @@ Little-endian, no compression, ~400 bytes per CSI frame at 192 subcarriers, so 6
 20 Hz is under 3 MB. Stdlib only.
 
     python3 csirec.py FILE.csirec            # summary per segment
-    python3 csirec.py FILE.csirec --trim OUT --keep 90   # first 90 s of every protocol segment run (>= 30 s), +30 s of the final live
+    python3 csirec.py FILE.csirec --trim OUT --keep 90 [--from 2500]   # first 90 s of every protocol segment run (>= 30 s) after --from seconds, +30 s of the final live
 """
 from __future__ import annotations
 
@@ -101,11 +101,14 @@ def summary(path: str) -> str:
     return "\n".join(lines)
 
 
-def trim(src: str, dst: str, keep_s: float, min_run_s: float = 30.0, live_keep_s: float = 30.0) -> int:
+def trim(src: str, dst: str, keep_s: float, min_run_s: float = 30.0, live_keep_s: float = 30.0, from_s: float = 0.0) -> int:
     """Copy src to dst keeping, for every contiguous run of a non-live segment longer than
     min_run_s (shorter runs are button false starts), its first keep_s seconds, plus the first
     live_keep_s seconds of the live run that follows the protocol. Frames keep their timestamps."""
     recs = list(read(src))
+    if from_s > 0 and recs:
+        t_first = recs[0][1]
+        recs = [r for r in recs if (r[1] - t_first) / 1e6 >= from_s]
     runs = []            # (seg, start_idx, end_idx_exclusive, t0_us, t1_us)
     for i, (kind, t_us, seg, payload) in enumerate(recs):
         if runs and runs[-1][0] == seg:
@@ -144,7 +147,8 @@ def main(argv: list[str]) -> None:
     if "--trim" in argv:
         dst = argv[argv.index("--trim") + 1]
         keep = float(argv[argv.index("--keep") + 1]) if "--keep" in argv else 90.0
-        n = trim(path, dst, keep)
+        frm = float(argv[argv.index("--from") + 1]) if "--from" in argv else 0.0
+        n = trim(path, dst, keep, from_s=frm)
         print(f"wrote {n} records to {dst}")
         print(summary(dst))
     else:
