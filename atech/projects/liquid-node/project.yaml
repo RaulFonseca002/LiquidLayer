@@ -1,5 +1,5 @@
 # Liquid node — ground-up rebuild v2 (see ../../STAGES.md).
-# CONTROL LC: instrumented base + the old ruview_csi module exactly as in S1b (radio off, serial gated). Loop watchdog, RTC boot counter + boot card,
+# CONTROL LC-nodelay: same as LC but without the 2 s boot-card pause. instrumented base + the old ruview_csi module exactly as in S1b (radio off, serial gated). Loop watchdog, RTC boot counter + boot card,
 # NeoPixel loop heartbeat (off-panel liveness), reset reason on screen.
 # The ONLY change vs L0 is the paced serial print below.
 name: liquid-node
@@ -42,7 +42,7 @@ code:
     snprintf(line, sizeof line, "sketch %luK", (unsigned long)(ESP.getSketchSize() / 1024));
     tftA.displayText(line, 2, 54, 1, ST7735_TFT::COLOR_YELLOW);
     tftA.display();
-    delay(2000);
+    // LC-nodelay: no boot-card pause; loop starts right after init (as in S1b).
     led.setBrightness(30);
   loop: |
     // L1 probe: one short line to USB serial every 200 ms, exactly like a
@@ -58,7 +58,7 @@ code:
     static bool hb = false; hb = !hb;
 
     tftA.clear();
-    tftA.displayText("LC  control: old module", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
+    tftA.displayText("LCnd old module, no pause", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
     char line[40];
     snprintf(line, sizeof line, "frame %lu", (unsigned long)frames);
     tftA.displayText(line, 2, 18, 2, ST7735_TFT::COLOR_WHITE);
