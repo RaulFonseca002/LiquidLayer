@@ -108,7 +108,11 @@ void RuViewCsi::enableCsi() {
     // Reset consumer-side state before the task exists (no race). The edge engine keeps its
     // calibration across re-arms (a WiFi blip must not restart the 60 s window); it is reset once.
     _tail = _head;
-    if (!_edgeInit) { _edge.reset(); _edgeInit = true; }
+    if (!_edgeInit) {
+        _edge.reset(); _edgeInit = true;
+        _calRestored = tryRestoreCalibration();
+        logEvent(_calRestored ? "calibration restored from flash (same AP + channel)" : "no stored calibration for this AP: learning (60 s)");
+    }
     _rateWindowStartMs = millis();
     _framesAtWindowStart = _framesTotal;
     _lastVitalsMs = 0;
@@ -197,6 +201,9 @@ void RuViewCsi::_dspLoop() {
         }
         if (_probeInject && now - _lastProbeMs >= PROBE_INTERVAL_MS) { _lastProbeMs = now; injectProbe(); }
         if (_streaming && _sinkValid && now - _lastVitalsMs >= 1000) { _lastVitalsMs = now; sendVitalsPacket(now); }
+        bool cal = _edge.calibrating();
+        if (_wasCalibrating && !cal && _edge.calibrated()) _calSaveRequest = true;   // just finished: persist
+        _wasCalibrating = cal;
         publish();
         vTaskDelay(pdMS_TO_TICKS(5));
     }
@@ -357,6 +364,38 @@ void RuViewCsi::update() {
         _snap.rateHz = 0;
     }
     sendStatus(now);
+    if (_calSaveRequest) { _calSaveRequest = false; saveCalibration(); }
+}
+
+// ---- calibration persistence: blob = 6-byte BSSID + channel + RuViewEdge::Calibration
+bool RuViewCsi::tryRestoreCalibration() {
+    struct __attribute__((packed)) Blob { uint8_t bssid[6]; uint8_t channel; RuViewEdge::Calibration cal; } b;
+    size_t n = _prefs.getBytesLength("cal");
+    if (n != sizeof b) return false;
+    if (_prefs.getBytes("cal", &b, sizeof b) != sizeof b) return false;
+    uint8_t* cur = WiFi.BSSID();
+    if (!cur || memcmp(cur, b.bssid, 6) != 0 || b.channel != (uint8_t)WiFi.channel()) return false;
+    return _edge.importCalibration(b.cal);
+}
+
+void RuViewCsi::saveCalibration() {
+    struct __attribute__((packed)) Blob { uint8_t bssid[6]; uint8_t channel; RuViewEdge::Calibration cal; } b;
+    if (!_edge.exportCalibration(b.cal)) return;
+    uint8_t* cur = WiFi.BSSID();
+    if (!cur) return;
+    memcpy(b.bssid, cur, 6); b.channel = (uint8_t)WiFi.channel();
+    bool ok = _prefs.putBytes("cal", &b, sizeof b) == sizeof b;
+    char msg[96];
+    snprintf(msg, sizeof msg, "calibration %s to flash: thr_j=%.4f thr_w=%.4f templates=%u (%u bytes)",
+             ok ? "saved" : "NOT saved", b.cal.thrJ, b.cal.thrW, (unsigned)b.cal.haveRef, (unsigned)sizeof b);
+    logEvent(msg);
+}
+
+void RuViewCsi::forgetCalibration() {
+    _prefs.remove("cal");
+    _calRestored = false;
+    _calibCmd = 1;   // relearn now
+    logEvent("stored calibration cleared; relearning (60 s)");
 }
 
 void RuViewCsi::sendStatus(uint32_t now) {
@@ -580,8 +619,9 @@ void RuViewCsi::onAction(const char* action, const char* value) {
                  s.jitter, s.thrJ, s.wander, s.thrW, s.fs, calibPhaseName(), (unsigned long)s.calibLeft, (unsigned)s.layout, segmentName(),
                  (int)s.presence, s.hr, s.hrConf, s.br, s.brConf);
         logEvent(msg);
-        snprintf(msg, sizeof msg, "diag: edge templates=%u untemplated=%lu lltf_drops=%lu blocks=%lu",
-                 (unsigned)_edge.templates(), (unsigned long)_edge.untemplated(), (unsigned long)_edge.layoutDrops(), (unsigned long)_edge.blocks());
+        snprintf(msg, sizeof msg, "diag: edge templates=%u untemplated=%lu lltf_drops=%lu blocks=%lu restored=%d stored=%d",
+                 (unsigned)_edge.templates(), (unsigned long)_edge.untemplated(), (unsigned long)_edge.layoutDrops(), (unsigned long)_edge.blocks(),
+                 (int)_calRestored, (int)(_prefs.getBytesLength("cal") > 0));
         logEvent(msg);
     } else if (strcmp(sub, "segment") == 0) {
         setSegment((uint8_t)strtod(value, nullptr));
@@ -596,6 +636,8 @@ void RuViewCsi::onAction(const char* action, const char* value) {
         logEvent(_probeForce < 0 ? "probe: auto" : (_probeForce ? "probe: forced on" : "probe: forced off"));
     } else if (strcmp(sub, "calibrate") == 0) {
         calibrate();
+    } else if (strcmp(sub, "forget") == 0) {
+        forgetCalibration();
     } else if (strcmp(sub, "stream") == 0) {
         setStreaming(strtod(value, nullptr) != 0);
     }

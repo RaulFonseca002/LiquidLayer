@@ -185,6 +185,32 @@ void RuViewEdge::finishCalibration() {
     _presence = false; _above = _below = 0;
 }
 
+bool RuViewEdge::exportCalibration(Calibration& out) const {
+    if (!_calibrated) return false;
+    out.magic = CAL_MAGIC;
+    memcpy(out.ref, _ref, sizeof out.ref);
+    out.haveRef = templates(); out.primary = _primary;
+    out.thrJ = _thrJ; out.thrW = _thrW; out.offJ = _offJ; out.offW = _offW;
+    out.meanJ = _meanJ; out.sigJ = _sigJ; out.meanW = _meanW; out.sigW = _sigW;
+    return true;
+}
+
+bool RuViewEdge::importCalibration(const Calibration& in) {
+    if (in.magic != CAL_MAGIC || !(in.haveRef & 3) || !(in.thrJ > 0.0f) || !(in.thrW > 0.0f) || in.thrJ > CAP_THR || in.thrW > CAP_THR) return false;
+    if (in.primary < 0 || in.primary >= (int8_t)LAYOUTS || !(in.haveRef & (1 << in.primary))) return false;
+    memcpy(_ref, in.ref, sizeof _ref);
+    for (uint8_t l = 0; l < LAYOUTS; ++l) { _haveRef[l] = (in.haveRef >> l) & 1; _lazyCount[l] = 0; }
+    _primary = in.primary;
+    _thrJ = in.thrJ; _thrW = in.thrW; _offJ = in.offJ; _offW = in.offW;
+    _meanJ = in.meanJ; _sigJ = in.sigJ; _meanW = in.meanW; _sigW = in.sigW;
+    if (!(_offJ > 0.0f) || _offJ >= _thrJ) _offJ = 0.5f * (_meanJ + _thrJ);
+    if (!(_offW > 0.0f) || _offW >= _thrW) _offW = 0.5f * (_meanW + _thrW);
+    _phase = Phase::Idle; _calibrated = true; _openEnded = _closeRequested = false;
+    _presence = false; _above = _below = 0; _haveS = false;
+    _gridValid = false; resetBlock();
+    return true;
+}
+
 // ------------------------------------------------------------------ presence
 
 void RuViewEdge::updatePresence(uint32_t nowMs) {

@@ -112,6 +112,10 @@ public:
     // Entering EMPTY relearns the ambient baseline. The segment rides in NodeStatus so the host recorder
     // can label CSI frames without touching USB.
     void        setSegment(uint8_t s);
+    // Calibration persistence (NVS blob "cal", tagged with the AP BSSID + channel): restored on the
+    // first CSI arm when the tag matches, saved whenever a calibration completes, cleared by forget.
+    void        forgetCalibration();
+    bool        calibrationRestored() const { return _calRestored; }
     void        nextSegment() { setSegment((uint8_t)((_segment + 1) & 3)); }
     uint8_t     segment() const { return _segment; }
     const char* segmentName() const;
@@ -212,6 +216,11 @@ private:
     uint8_t     _txBuf[ruview_wire::CSI_HEADER + ruview_wire::MAX_IQ_BYTES];
     volatile uint8_t _calibCmd = 0;        // loop -> task: 1 auto recalibrate, 2 button start (leave delay, open-ended), 3 end
     bool        _edgeInit = false;
+    volatile bool _calSaveRequest = false; // task -> loop: a calibration just completed, persist it
+    bool        _wasCalibrating = false;   // task-side edge detector
+    bool        _calRestored = false;
+    bool        tryRestoreCalibration();
+    void        saveCalibration();
     volatile bool _beatPending = false;    // task -> loop
 
     // published results

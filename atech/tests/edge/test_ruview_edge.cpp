@@ -143,6 +143,13 @@ static void testSynthetic() {
     room.personStill(0.15f);
     float fAgain = run(e, room, t, 20.0f, now);
     CHECK(fAgain > 0.9f, "detects again after recalibration (%.1f%%)", 100 * fAgain);
+    // (f2) calibration export/import round trip: a fresh engine restored from the blob detects at once
+    { RuViewEdge::Calibration cal; CHECK(e.exportCalibration(cal), "export while calibrated");
+      RuViewEdge e2; e2.reset(); RuViewEdge::Calibration bad = cal; bad.magic = 1; CHECK(!e2.importCalibration(bad), "bad magic rejected");
+      CHECK(e2.importCalibration(cal) && e2.calibrated() && !e2.calibrating(), "import makes the engine calibrated");
+      CHECK(e2.thresholdWander() == e.thresholdWander() && e2.templates() == e.templates(), "thresholds/templates restored");
+      float f2 = run(e2, room, t, 10.0f, now);
+      CHECK(f2 > 0.8f, "restored engine detects the present person without recalibrating (%.1f%%)", 100 * f2); }
     // (g) 128-byte LLTF-only frames are dropped (counted); 256-byte HT frames are a second layout
     //     with no template yet: processed for jitter, counted as untemplated, no presence flip
     int8_t small[128]; for (int i = 0; i < 128; ++i) small[i] = (int8_t)(10 + (i % 7)); uint32_t drops = e.layoutDrops();

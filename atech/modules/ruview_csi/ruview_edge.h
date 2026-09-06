@@ -81,6 +81,18 @@ public:
 
     enum class Phase : uint8_t { Idle, Leave, Template, Stats };
 
+    // Everything a learned calibration consists of, so it can be persisted (NVS) and restored at boot.
+    struct __attribute__((packed)) Calibration {
+        uint32_t magic;                 // CAL_MAGIC
+        float    ref[LAYOUTS][MAX_BINS];
+        uint8_t  haveRef;               // bit per layout
+        int8_t   primary;
+        float    thrJ, thrW, offJ, offW, meanJ, sigJ, meanW, sigW;
+    };
+    static constexpr uint32_t CAL_MAGIC = 0xCA11B002u;
+    bool exportCalibration(Calibration& out) const;   // false if not calibrated
+    bool importCalibration(const Calibration& in);    // validates and makes the engine calibrated
+
     void reset();
     // One CSI frame: raw int8 (imag, real) pairs, `iqLen` bytes, arrival time `nowMs`.
     void push(const int8_t* iq, uint16_t iqLen, uint32_t nowMs);
