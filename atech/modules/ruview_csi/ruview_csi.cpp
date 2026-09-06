@@ -170,6 +170,7 @@ void RuViewCsi::_onCsi(const wifi_csi_info_t* info) {
     uint16_t len = info->len;
     if (len > ruview_wire::MAX_IQ_BYTES) len = ruview_wire::MAX_IQ_BYTES;
     memcpy(s.iq, info->buf, len);
+    s.tMs = (uint32_t)(now / 1000);
     s.len = len;
     s.rssi = (int8_t)info->rx_ctrl.rssi;
     s.noise = (int8_t)info->rx_ctrl.noise_floor;
@@ -201,7 +202,8 @@ void RuViewCsi::drainRing(uint32_t now) {
     int budget = RING_SLOTS;
     while (_tail != _head && budget-- > 0) {
         Slot& s = _ring[_tail];
-        _edge.push(s.iq, s.len, now);
+        _edge.push(s.iq, s.len, s.tMs);
+        _layout = (uint8_t)(s.len / 128);
         if (_edge.consumeBeat()) _beatPending = true;
         if (_streaming && _sinkValid) {
             size_t n = ruview_wire::serializeCsi(_txBuf, sizeof _txBuf, _nodeId, s.nAnt, s.channel,
@@ -251,6 +253,12 @@ void RuViewCsi::publish() {
     s.presence = _edge.presence();
     s.fall = _edge.fall() && _edge.presence();   // a fall needs a person: never flag an empty room
     s.calibrating = _edge.calibrating();
+    s.thr = _edge.threshold();
+    s.ambMean = _edge.ambientMean();
+    s.ambSigma = _edge.ambientSigma();
+    s.fs = _edge.sampleRateHz();
+    s.calibLeft = _edge.calibFramesLeft();
+    s.layout = _layout;
     s.frames = _framesTotal;
     s.gateDrops = _gateDrops;
     s.ringDrops = _ringDrops;
@@ -347,7 +355,7 @@ void RuViewCsi::sendStatus(uint32_t now) {
     ruview_wire::NodeStatus st;
     ruview_wire::fillStatus(st, _nodeId, (uint8_t)_state, _snap.presence, _snap.fall, _snap.calibrating,
                             _csiOn, (uint8_t)esp_reset_reason(), _statusSeq++, now, (uint32_t)ESP.getFreeHeap(),
-                            _snap.rateHz, _snap.hr, _snap.br, _snap.motion, (int8_t)_snap.rssi);
+                            _snap.rateHz, _snap.hr, _snap.br, _snap.motion, (int8_t)_snap.rssi, _segment, _snap.layout);
     bool ok = _statusUdp.beginPacket(_sinkAddr, _sinkPort)
               && _statusUdp.write((const uint8_t*)&st, sizeof st) == sizeof st
               && _statusUdp.endPacket();
@@ -371,7 +379,7 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
         _logCount--;
         return n > 0 && (size_t)n < cap;
     }
-    static const char* keys[8] = {"frame_rate", "rssi", "heart_rate", "breathing_rate", "activity", "presence", "link", "health"};
+    static const char* keys[9] = {"frame_rate", "rssi", "heart_rate", "breathing_rate", "activity", "presence", "link", "health", "edge"};
     const char* type = (_evIdx >= 5) ? "state" : "sensor";
     int n = snprintf(out, cap, "{\"type\":\"event\",\"payload\":{\"event_type\":\"%s\",\"key\":\"%s_%s\",\"value\":",
                      type, _name, keys[_evIdx]);
@@ -386,15 +394,32 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
         case 4: m = snprintf(out + n, left, "%.3f", _snap.motion); break;
         case 5: m = snprintf(out + n, left, "%d", _snap.presence ? 1 : 0); break;
         case 6: m = snprintf(out + n, left, "\"%s\"", stateName()); break;
-        default: m = snprintf(out + n, left, "\"status_tx=%lu status_fail=%lu usb_up=%d usb_host=%d heap=%u reset=%d\"",
+        case 7: m = snprintf(out + n, left, "\"status_tx=%lu status_fail=%lu usb_up=%d usb_host=%d heap=%u reset=%d\"",
                               (unsigned long)_statusTx, (unsigned long)_statusFail, (int)atechUsb().ready(), (int)(bool)atechUsb(),
                               (unsigned)ESP.getFreeHeap(), (int)esp_reset_reason()); break;
+        default: m = snprintf(out + n, left, "\"motion=%.3f thr=%.3f mean=%.3f sigma=%.3f fs=%.1f calib_left=%lu layout=%u seg=%s\"",
+                              _snap.motion, _snap.thr, _snap.ambMean, _snap.ambSigma, _snap.fs, (unsigned long)_snap.calibLeft,
+                              (unsigned)_snap.layout, segmentName()); break;
     }
     if (m < 0 || (size_t)m >= left) return false;
     n += m; left = cap - (size_t)n;
     m = snprintf(out + n, left, ",\"source\":\"ruview_csi\"}}");
-    _evIdx = (uint8_t)((_evIdx + 1) % 8);
+    _evIdx = (uint8_t)((_evIdx + 1) % 9);
     return m > 0 && (size_t)m < left;
+}
+
+void RuViewCsi::setSegment(uint8_t s) {
+    s &= 3;
+    _segment = s;
+    _segmentStartMs = millis();
+    if (s == 1) calibrate();   // empty room: relearn the ambient baseline
+    char msg[48];
+    snprintf(msg, sizeof msg, "segment: %u %s", (unsigned)s, segmentName());
+    logEvent(msg);
+}
+
+const char* RuViewCsi::segmentName() const {
+    switch (_segment) { case 1: return "empty"; case 2: return "still"; case 3: return "walk"; default: return "live"; }
 }
 
 const char* RuViewCsi::stateName() const {
@@ -532,6 +557,11 @@ void RuViewCsi::onAction(const char* action, const char* value) {
                  WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), _sinkIp,
                  (unsigned)_sinkPort, (unsigned)ESP.getFreeHeap(), stateName(), (int)WiFi.RSSI());
         logEvent(msg);
+        snprintf(msg, sizeof msg, "diag: motion=%.3f thr=%.3f mean=%.3f sigma=%.3f fs=%.1f calib_left=%lu layout=%u seg=%s presence=%d",
+                 s.motion, s.thr, s.ambMean, s.ambSigma, s.fs, (unsigned long)s.calibLeft, (unsigned)s.layout, segmentName(), (int)s.presence);
+        logEvent(msg);
+    } else if (strcmp(sub, "segment") == 0) {
+        setSegment((uint8_t)strtod(value, nullptr));
     } else if (strcmp(sub, "promisc") == 0) {
         bool want = strtod(value, nullptr) != 0;
         if (_csiOn) { disableCsi(); _promisc = want; enableCsi(); }

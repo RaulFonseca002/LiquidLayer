@@ -52,6 +52,9 @@ public:
     // What the DSP task publishes and loop() reads (copied under a spinlock).
     struct Snapshot {
         float    hr = 0, br = 0, motion = 0, rateHz = 0;
+        float    thr = 0, ambMean = 0, ambSigma = 0, fs = 0;   // edge diagnostics (learned threshold, ambient stats, DSP sample rate)
+        uint32_t calibLeft = 0;                                // frames still to calibrate
+        uint8_t  layout = 0;                                   // CSI bytes / 128 of the last frame
         int      rssi = 0;
         bool     presence = false, fall = false, calibrating = true;
         uint32_t frames = 0, gateDrops = 0, ringDrops = 0, tx = 0;
@@ -96,6 +99,14 @@ public:
     void setWifiEnabled(bool on);                               // persists; 0 = radio never starts (stage test)
     void setStreaming(bool on) { _streaming = on; }
     void calibrate() { _calibRequest = true; }
+    // Session segments, cycled by the button: 0 live, 1 empty room (calibrating), 2 sitting still, 3 walking.
+    // Entering EMPTY relearns the ambient baseline. The segment rides in NodeStatus so the host recorder
+    // can label CSI frames without touching USB.
+    void        setSegment(uint8_t s);
+    void        nextSegment() { setSegment((uint8_t)((_segment + 1) & 3)); }
+    uint8_t     segment() const { return _segment; }
+    const char* segmentName() const;
+    uint32_t    segmentElapsedS() const { return (millis() - _segmentStartMs) / 1000; }
     void scanNetworks();   // list 2.4 GHz networks as log events (blocking ~3 s)
 
     // internal: called by the static CSI trampoline (WiFi task)
@@ -105,6 +116,7 @@ public:
 
 private:
     struct Slot {
+        uint32_t tMs;      // arrival time (ms since boot), stamped in the WiFi callback
         uint16_t len;
         int8_t   rssi;
         int8_t   noise;
@@ -141,6 +153,9 @@ private:
     bool        _probeInject = false;
     bool        _promisc = false;     // promiscuous mode kills CSI on Arduino core 2.0.17 (S3); keep off
     int8_t      _probeForce = -1;     // -1 auto, 0 off, 1 on (csi_probe action)
+    uint8_t     _segment = 0;
+    uint32_t    _segmentStartMs = 0;
+    volatile uint8_t _layout = 0;     // written by the DSP task
     uint32_t    _bootMs = 0;
 
     // config (NVS)

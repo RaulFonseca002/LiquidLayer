@@ -48,7 +48,12 @@ public:
     uint32_t frames() const { return _frameCount; }
     // True once when a filtered-heart positive zero-crossing occurs (for a heartbeat LED pulse).
     bool     consumeBeat() { bool b = _beat; _beat = false; return b; }
-    void     forceCalibrate() { _calibFrames = 0; welfordReset(_ambient); _threshold = 0; }
+    void     forceCalibrate() { _calibFrames = 0; welfordReset(_ambient); _threshold = 0; _presence = false; _belowCount = 0; }
+    // Diagnostics: the learned presence threshold and the ambient statistics behind it.
+    float    threshold() const { return _threshold; }
+    float    ambientMean() const { return (float)_ambient.mean; }
+    float    ambientSigma() const { return (float)sqrt(welfordVar(_ambient)); }
+    uint32_t calibFramesLeft() const { return _calibFrames < CALIB_FRAMES ? CALIB_FRAMES - _calibFrames : 0; }
 
 private:
     struct Biquad { float b0, b1, b2, a1, a2, x1, x2, y1, y2; };

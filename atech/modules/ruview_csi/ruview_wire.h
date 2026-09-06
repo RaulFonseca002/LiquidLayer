@@ -92,7 +92,7 @@ struct __attribute__((packed)) NodeStatus {
     uint32_t magic;          // 0xA11E0002
     uint8_t  node_id;
     uint8_t  state;          // RuViewCsi::State (0 unconfigured .. 5 lost)
-    uint8_t  flags;          // bit0 presence, bit1 fall, bit2 calibrating, bit3 csi_on
+    uint8_t  flags;          // bit0 presence, bit1 fall, bit2 calibrating, bit3 csi_on, bits4-5 segment (0 live, 1 empty, 2 still, 3 walk)
     uint8_t  reset_reason;   // esp_reset_reason(): 1 power-on, 3 software, 6 task-WDT, 9 brownout
     uint32_t seq;
     uint32_t uptime_ms;
@@ -102,18 +102,19 @@ struct __attribute__((packed)) NodeStatus {
     float    breathing_bpm;
     float    motion;
     int8_t   rssi;
-    uint8_t  reserved[3];
+    uint8_t  layout;         // CSI frame bytes / 128 (1 LLTF only, 2 +HT-LTF, 3 +STBC-HT-LTF); 0 unknown
+    uint8_t  reserved[2];
 };
 static_assert(sizeof(NodeStatus) == 40, "node status packet must be 40 bytes");
 
 inline void fillStatus(NodeStatus& s, uint8_t nodeId, uint8_t state, bool presence, bool fall,
                        bool calibrating, bool csiOn, uint8_t resetReason, uint32_t seq,
                        uint32_t uptimeMs, uint32_t freeHeap, float rateHz, float hr, float br,
-                       float motion, int8_t rssi) {
+                       float motion, int8_t rssi, uint8_t segment = 0, uint8_t layout = 0) {
     s.magic = MAGIC_STATUS;
     s.node_id = nodeId;
     s.state = state;
-    s.flags = (presence ? 1 : 0) | (fall ? 2 : 0) | (calibrating ? 4 : 0) | (csiOn ? 8 : 0);
+    s.flags = (uint8_t)((presence ? 1 : 0) | (fall ? 2 : 0) | (calibrating ? 4 : 0) | (csiOn ? 8 : 0) | ((segment & 3) << 4));
     s.reset_reason = resetReason;
     s.seq = seq;
     s.uptime_ms = uptimeMs;
@@ -123,7 +124,8 @@ inline void fillStatus(NodeStatus& s, uint8_t nodeId, uint8_t state, bool presen
     s.breathing_bpm = br;
     s.motion = motion;
     s.rssi = rssi;
-    s.reserved[0] = s.reserved[1] = s.reserved[2] = 0;
+    s.layout = layout;
+    s.reserved[0] = s.reserved[1] = 0;
 }
 
 }  // namespace ruview_wire

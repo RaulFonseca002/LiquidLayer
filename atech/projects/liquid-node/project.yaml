@@ -1,20 +1,25 @@
 # Liquid node — RuView WiFi CSI sensing on the Atech 14port (see ../../STAGES.md).
 #
-# RUNG R0 (fix validation): display + sensing module, radio ON, CSI streaming to
-# the sink, NO loop watchdog. Built by the hardened pipeline (USB-CDC brought up
-# 2 s after boot instead of at boot). Gate: >= 15 cold resets (Restart button),
-# zero freezes; the footer's "wdt" count must stay 0 and "r" must read 1
-# (power-on) — a 6 would mean a task-watchdog rescue, i.e. a masked hang.
+# Modules: display (ports 1-2), button (port 3), CSI sensing (port 11, virtual).
+# Built by the hardened pipeline (USB-CDC brought up 2 s after boot). No loop watchdog:
+# the footer's "wdt" count must stay 0 and "r" must read 1 (power-on).
+#
+# Button = session segments, cycling on each press:
+#   live -> empty (leave the room; the ambient baseline is relearned for as long as
+#   this segment lasts) -> still (sit 1-2 m away, breathe normally) -> walk -> live.
+# The segment is shown on screen, logged as a serial event and carried in the
+# NodeStatus beacon so host/csi_sink.py --record can label the CSI frames.
 name: liquid-node
 board: 14port
 modules_path: ../../modules
 modules:
   - {id: st7735_tft, instance: tftA, ports: [1, 2]}
+  - {id: button,     instance: btn,  port: 3}
   - {id: ruview_csi, instance: csi,  port: 11}
 code:
   setup: |
     // Reboot audit, persistent in flash: count task-watchdog reboots (reason 6).
-    // The watchdog is OFF in this rung, so the count must never move.
+    // The watchdog is OFF, so the count must never move.
     {
       Preferences p; p.begin("node", false);
       if (esp_reset_reason() == ESP_RST_TASK_WDT) p.putUShort("wdt", (uint16_t)(p.getUShort("wdt", 0) + 1));
@@ -25,6 +30,19 @@ code:
   loop: |
     static uint16_t wdtCount = 0xFFFF;              // read once, after setup() updated it
     if (wdtCount == 0xFFFF) { Preferences p; p.begin("node", true); wdtCount = p.getUShort("wdt", 0); p.end(); }
+
+    // ---- button: poll isPressed() and detect the edge ourselves (the button
+    // template already consumes wasPressed()), 30 ms debounce. Each press = next segment.
+    {
+      static bool lastDown = false;
+      static uint32_t lastEdgeMs = 0;
+      bool down = btn.isPressed();
+      if (down != lastDown && millis() - lastEdgeMs > 30) {
+        lastEdgeMs = millis();
+        lastDown = down;
+        if (down) csi.nextSegment();
+      }
+    }
 
     // ---- screen A, redrawn at 2 Hz. loop() only renders; the module does the work in tasks.
     static uint32_t lastDraw = 0;
@@ -50,8 +68,11 @@ code:
       if (show) snprintf(big, sizeof big, "BR %2.0f", csi.breathingRate()); else snprintf(big, sizeof big, "BR --");
       tftA.displayText(big, 2, 42, 3, show ? ST7735_TFT::COLOR_WHITE : 0x8410);
       tftA.fillCircle(148, 8, 6, csi.presence() ? ST7735_TFT::COLOR_GREEN : 0x2104);   // presence lamp
+      if (csi.vitalsCalibrating()) tftA.displayText("calib", 96, 18, 1, ST7735_TFT::COLOR_ORANGE);
+      // segment name + elapsed seconds (button protocol); "live" when not recording
+      snprintf(line, sizeof line, "%s %lus", csi.segmentName(), (unsigned long)csi.segmentElapsedS());
+      tftA.displayText(line, 96, 30, 1, csi.segment() ? ST7735_TFT::COLOR_YELLOW : 0x8410);
       if (csi.fall()) tftA.displayText("FALL", 96, 44, 2, ST7735_TFT::COLOR_RED);
-      if (csi.vitalsCalibrating()) tftA.displayText("calibrating", 96, 30, 1, ST7735_TFT::COLOR_ORANGE);
     }
 
     // ---- footer: reset reason, watchdog-reboot count (must stay 0), frame counter, heartbeat square
