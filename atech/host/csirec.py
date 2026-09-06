@@ -13,7 +13,7 @@ Little-endian, no compression, ~400 bytes per CSI frame at 192 subcarriers, so 6
 20 Hz is under 3 MB. Stdlib only.
 
     python3 csirec.py FILE.csirec            # summary per segment
-    python3 csirec.py FILE.csirec --trim OUT --keep 90   # keep the first 90 s of every segment
+    python3 csirec.py FILE.csirec --trim OUT --keep 90   # first 90 s of every protocol segment run (>= 30 s), +30 s of the final live
 """
 from __future__ import annotations
 
@@ -101,14 +101,37 @@ def summary(path: str) -> str:
     return "\n".join(lines)
 
 
-def trim(src: str, dst: str, keep_s: float) -> int:
-    """Copy src to dst keeping only the first keep_s seconds of each segment (all packet kinds)."""
-    seg_t0 = {}
+def trim(src: str, dst: str, keep_s: float, min_run_s: float = 30.0, live_keep_s: float = 30.0) -> int:
+    """Copy src to dst keeping, for every contiguous run of a non-live segment longer than
+    min_run_s (shorter runs are button false starts), its first keep_s seconds, plus the first
+    live_keep_s seconds of the live run that follows the protocol. Frames keep their timestamps."""
+    recs = list(read(src))
+    runs = []            # (seg, start_idx, end_idx_exclusive, t0_us, t1_us)
+    for i, (kind, t_us, seg, payload) in enumerate(recs):
+        if runs and runs[-1][0] == seg:
+            runs[-1][2] = i + 1
+            runs[-1][4] = t_us
+        else:
+            runs.append([seg, i, i + 1, t_us, t_us])
+    keep = set()
+    last_protocol_end = None
+    for seg, a, b, t0, t1 in runs:
+        dur = (t1 - t0) / 1e6
+        if seg != 0 and dur >= min_run_s:
+            for i in range(a, b):
+                if (recs[i][1] - t0) / 1e6 <= keep_s:
+                    keep.add(i)
+            last_protocol_end = b
+    if last_protocol_end is not None:
+        for seg, a, b, t0, t1 in runs:
+            if a == last_protocol_end and seg == 0:
+                for i in range(a, b):
+                    if (recs[i][1] - t0) / 1e6 <= live_keep_s:
+                        keep.add(i)
     out = Recorder(dst)
-    for kind, t_us, seg, payload in read(src):
-        t0 = seg_t0.setdefault(seg, t_us)
-        if (t_us - t0) / 1e6 <= keep_s:
-            out.write(payload, seg, t_us)
+    for i in sorted(keep):
+        kind, t_us, seg, payload = recs[i]
+        out.write(payload, seg, t_us)
     out.close()
     return out.count
 

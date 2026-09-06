@@ -1,7 +1,7 @@
 /**
  * @file ruview_edge.cpp
- * @brief Amplitude-correlation CSI sensing engine (see ruview_edge.h for the design and the
- *        reasons it replaced the RuView phase port). Python twin: atech/host/edge_proto.py.
+ * @brief Amplitude-correlation CSI sensing engine (design and rationale in ruview_edge.h).
+ *        Python twin: atech/host/edge_proto.py. Native tests: atech/tests/edge.
  */
 #include "ruview_edge.h"
 #include <string.h>
@@ -10,48 +10,34 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-// ------------------------------------------------------------------ bin tables
-// One 64-entry LTF block is ordered subcarrier 0..31, -32..-1. Data bins: HT-LTF +-1..28,
-// LLTF +-1..26; pilots at +-7 and +-21 (idx 7, 21, 43, 57); DC (0) and guards are null.
 namespace {
+// One 64-entry HT-LTF block is ordered subcarrier 0..31, -32..-1. Data bins +-1..28, pilots at
+// +-7 and +-21 (idx 7, 21, 43, 57), DC (0) and guards (29..35) are null.
 constexpr uint8_t HT_BINS[52] = {
      1, 2, 3, 4, 5, 6, 8, 9,10,11,12,13,14,15,16,17,18,19,20,22,23,24,25,26,27,28,
     36,37,38,39,40,41,42,44,45,46,47,48,49,50,51,52,53,54,55,56,58,59,60,61,62,63 };
-constexpr uint8_t LLTF_BINS[48] = {
-     1, 2, 3, 4, 5, 6, 8, 9,10,11,12,13,14,15,16,17,18,19,20,22,23,24,25,26,
-    38,39,40,41,42,44,45,46,47,48,49,50,51,52,53,54,55,56,58,59,60,61,62,63 };
-constexpr float DC_ALPHA  = 1.0f / (4.0f * 20.0f);  // 4 s detrend at 20 Hz
-constexpr float P_ALPHA   = 0.02f;                  // ~2.5 s power / covariance EMAs
 constexpr float ABS_ALPHA = 0.05f;
 constexpr float CLAMP_K   = 5.0f;
 }
 
-uint8_t RuViewEdge::binsFor(uint8_t layout, const uint8_t** table) {
-    if (layout >= 2) { *table = HT_BINS; return 52; }
-    if (layout == 1) { *table = LLTF_BINS; return 48; }
-    *table = nullptr; return 0;
-}
+// ------------------------------------------------------------------ features
 
 bool RuViewEdge::amplitudeVector(const int8_t* iq, uint16_t iqLen, float* out, uint8_t& nOut, uint8_t& layoutOut) {
-    // 128-byte frames carry the LLTF only; 256 (HT) and 384 (HT + STBC) both carry the HT-LTF block
-    // at bytes 128..255, so they share one bin set and are interchangeable frame to frame.
-    uint8_t lay = (uint8_t)(iqLen / 128);
-    if (lay > 2) lay = 2;
-    const uint8_t* bins;
-    uint8_t n = binsFor(lay, &bins);
-    if (!n) return false;
-    uint16_t base = lay >= 2 ? 128 : 0;   // HT-LTF block starts at byte 128
+    // 256-byte (HT) and 384-byte (HT + STBC) frames carry the HT-LTF block at bytes 128..255.
+    // 128-byte frames (LLTF only) are not usable: the LLTF block is noise against its own template.
+    if (iqLen < 256) return false;
+    layoutOut = iqLen >= 384 ? 1 : 0;
     float norm = 0;
-    for (uint8_t k = 0; k < n; ++k) {
-        uint16_t o = (uint16_t)(base + 2u * bins[k]);
+    for (uint8_t k = 0; k < MAX_BINS; ++k) {
+        uint16_t o = (uint16_t)(128 + 2u * HT_BINS[k]);
         float im = (float)iq[o], re = (float)iq[o + 1];
         out[k] = sqrtf(im * im + re * re);
         norm += out[k] * out[k];
     }
     if (norm < 1e-6f) return false;
     norm = 1.0f / sqrtf(norm);
-    for (uint8_t k = 0; k < n; ++k) out[k] *= norm;
-    nOut = n; layoutOut = lay;
+    for (uint8_t k = 0; k < MAX_BINS; ++k) out[k] *= norm;
+    nOut = MAX_BINS;
     return true;
 }
 
@@ -68,30 +54,6 @@ float RuViewEdge::corr(const float* a, const float* b, uint8_t n) {
     return d > 1e-12f ? sab / d : 0.0f;
 }
 
-// ------------------------------------------------------------------ DSP primitives
-
-void RuViewEdge::designBandpass(Biquad& bq, float fs, float fLo, float fHi) {
-    // RBJ constant-Q bandpass, designed from the band edges: f0 = sqrt(fLo*fHi), Q = f0 / (fHi - fLo).
-    float f0 = sqrtf(fLo * fHi);
-    float q  = f0 / (fHi - fLo);
-    float w0 = 2.0f * (float)M_PI * f0 / fs;
-    float alpha = sinf(w0) / (2.0f * q);
-    float a0inv = 1.0f / (1.0f + alpha);
-    bq.b0 =  alpha * a0inv;
-    bq.b1 =  0.0f;
-    bq.b2 = -alpha * a0inv;
-    bq.a1 = -2.0f * cosf(w0) * a0inv;
-    bq.a2 =  (1.0f - alpha) * a0inv;
-    bq.x1 = bq.x2 = bq.y1 = bq.y2 = 0.0f;
-}
-
-float RuViewEdge::runBiquad(Biquad& bq, float x) {
-    float y = bq.b0 * x + bq.b1 * bq.x1 + bq.b2 * bq.x2 - bq.a1 * bq.y1 - bq.a2 * bq.y2;
-    bq.x2 = bq.x1; bq.x1 = x;
-    bq.y2 = bq.y1; bq.y1 = y;
-    return y;
-}
-
 void RuViewEdge::welfordUpdate(Welford& w, double x) {
     w.count++;
     double d = x - w.mean;
@@ -99,97 +61,43 @@ void RuViewEdge::welfordUpdate(Welford& w, double x) {
     w.m2 += d * (x - w.mean);
 }
 
-float RuViewEdge::medianOf(const float* v, uint8_t n) {
-    float tmp[MEDIAN_N];
-    for (uint8_t i = 0; i < n; ++i) tmp[i] = v[i];
-    for (uint8_t i = 1; i < n; ++i) { float x = tmp[i]; int8_t j = (int8_t)(i - 1); while (j >= 0 && tmp[j] > x) { tmp[j + 1] = tmp[j]; --j; } tmp[j + 1] = x; }
-    return tmp[n / 2];
+float RuViewEdge::medianOf(float* v, uint8_t n) {
+    for (uint8_t i = 1; i < n; ++i) { float x = v[i]; int8_t j = (int8_t)(i - 1); while (j >= 0 && v[j] > x) { v[j + 1] = v[j]; --j; } v[j + 1] = x; }
+    return v[n / 2];
 }
 
-float RuViewEdge::autocorrPeak(const float* x, uint16_t n, uint16_t lagLo, uint16_t lagHi, const float* noiseRef,
-                               const float* rejectLag, uint8_t rejectN, float& conf) {
-    conf = 0.0f;
-    if (n < 8 || lagLo < 1 || lagHi <= lagLo || lagHi >= n / 2) return 0.0f;
-    float mean = 0;
-    for (uint16_t i = 0; i < n; ++i) mean += x[i];
-    mean /= (float)n;
-    float r0 = 0;
-    for (uint16_t i = 0; i < n; ++i) { float d = x[i] - mean; r0 += d * d; }
-    if (r0 < 1e-9f) return 0.0f;
-    r0 /= (float)n;   // unbiased per-lag normalisation below
-    static float r[VIT_LEN / 2 + 1];
-    float best = -2.0f;
-    for (uint16_t lag = lagLo; lag <= lagHi; ++lag) {
-        float s = 0;
-        for (uint16_t i = 0; i + lag < n; ++i) s += (x[i] - mean) * (x[i + lag] - mean);
-        r[lag] = s / ((float)(n - lag) * r0);
-        if (noiseRef) r[lag] -= noiseRef[lag];    // excess over the filter's own ringing
-        bool rejected = false;
-        for (uint8_t k = 0; k < rejectN; ++k) if (fabsf((float)lag - rejectLag[k]) <= 0.08f * rejectLag[k]) rejected = true;
-        if (rejected) r[lag] = -2.0f;
-        if (r[lag] > best) best = r[lag];
-    }
-    if (best <= 0.0f) return 0.0f;
-    // First local maximum (smallest lag) within 85 % of the best: the fundamental period.
-    uint16_t pick = 0;
-    for (uint16_t lag = lagLo; lag <= lagHi; ++lag) {
-        if (r[lag] < 0.85f * best) continue;
-        float l = lag > lagLo ? r[lag - 1] : -2.0f, h = lag < lagHi ? r[lag + 1] : -2.0f;
-        if (r[lag] >= l && r[lag] >= h) { pick = lag; break; }
-    }
-    if (!pick) return 0.0f;
-    float denomC = noiseRef ? (1.0f - noiseRef[pick]) : 1.0f;
-    conf = denomC > 1e-3f ? r[pick] / denomC : 0.0f;
-    if (conf > 1.0f) conf = 1.0f;
-    if (conf < 0.0f) conf = 0.0f;
-    // Parabolic interpolation around the peak.
-    float lagF = (float)pick;
-    if (pick > lagLo && pick < lagHi && r[pick - 1] > -1.5f && r[pick + 1] > -1.5f) {
-        float denom = r[pick - 1] - 2.0f * r[pick] + r[pick + 1];
-        if (fabsf(denom) > 1e-9f) lagF += 0.5f * (r[pick - 1] - r[pick + 1]) / denom;
-    }
-    return lagF;
-}
-
-void RuViewEdge::noiseAutocorr(float fs, float fLo, float fHi, uint16_t lagLo, uint16_t lagHi, float* out) {
-    // Impulse response of the band-pass (long enough to decay), then its normalised autocorrelation:
-    // for white-noise input the output autocorrelation equals that of the impulse response.
-    static float h[VIT_LEN];
-    Bandpass bp; designBandpass(bp, fs, fLo, fHi);
-    float e0 = 0;
-    for (uint16_t i = 0; i < VIT_LEN; ++i) { h[i] = runBandpass(bp, i == 0 ? 1.0f : 0.0f); e0 += h[i] * h[i]; }
-    for (uint16_t lag = 0; lag <= VIT_LEN / 2; ++lag) out[lag] = 0;
-    if (e0 < 1e-12f) return;
-    for (uint16_t lag = lagLo; lag <= lagHi && lag <= VIT_LEN / 2; ++lag) {
-        float s = 0;
-        for (uint16_t i = 0; i + lag < VIT_LEN; ++i) s += h[i] * h[i + lag];
-        out[lag] = s / e0;
-    }
+void RuViewEdge::designHighpass(Biquad& bq, float fs, float fc) {
+    // RBJ high-pass, Q = 1/sqrt(2)
+    float w0 = 2.0f * (float)M_PI * fc / fs, cw = cosf(w0), alpha = sinf(w0) / (2.0f * 0.70710678f);
+    float a0inv = 1.0f / (1.0f + alpha);
+    bq.b0 = (1.0f + cw) * 0.5f * a0inv; bq.b1 = -(1.0f + cw) * a0inv; bq.b2 = bq.b0;
+    bq.a1 = -2.0f * cw * a0inv; bq.a2 = (1.0f - alpha) * a0inv;
+    bq.x1 = bq.x2 = bq.y1 = bq.y2 = 0.0f;
 }
 
 // ------------------------------------------------------------------ lifecycle
 
 void RuViewEdge::reset() {
-    _frameCount = 0; _layoutDrops = 0; _layout = 0; _nBins = 0; _havePrev = false; _lastMs = 0;
-    _fs = FS; _rateMs = 0; _rateFrames = 0;
-    _sj = _sw = 0; _haveS = false; _haveRef = false;
-    _phase = Phase::Idle; _calibrated = false; _openEnded = false; _closeRequested = false; _leaveMs = 0;
-    _calibStartMs = _phaseStartMs = 0; _tplCount = 0;
+    _frameCount = _layoutDrops = _untemplated = 0;
+    for (uint8_t l = 0; l < LAYOUTS; ++l) {
+        _havePrev[l] = false; _prevMs[l] = 0; _haveRef[l] = false; _lazyCount[l] = 0; _tplCount[l] = 0;
+        for (uint8_t k = 0; k < MAX_BINS; ++k) { _prev[l][k] = _ref[l][k] = 0; _lazySum[l][k] = 0; _tplSum[l][k] = 0; }
+    }
+    _primary = -1; _lastMs = 0; _fs = FS; _rateMs = 0; _rateFrames = 0;
+    _sj = _sw = 0; _haveS = false; _lastTemplatedMs = 0; _lastTemplatedW = 0;
+    _phase = Phase::Idle; _calibrated = _openEnded = _closeRequested = false;
+    _calibStartMs = _phaseStartMs = _leaveMs = 0;
     welfordReset(_statJ); welfordReset(_statW);
-    _thrJ = DEFAULT_THR_J; _thrW = 0; _offJ = 0.5f * DEFAULT_THR_J; _offW = 0;
-    _meanJ = _sigJ = _meanW = _sigW = 0;
+    _thrJ = _thrW = _offJ = _offW = 0; _meanJ = _sigJ = _meanW = _sigW = 0;
     _presence = false; _above = _below = 0; _onSinceMs = 0;
     _gridValid = false; _nextGridMs = 0;
-    noiseAutocorr(FS, 0.1f, 0.5f, (uint16_t)(FS * 60.0f / BR_HI_BPM), (uint16_t)(FS * 60.0f / BR_LO_BPM), _noiseBr);
-    noiseAutocorr(FS, 0.8f, 2.0f, (uint16_t)(FS * 60.0f / HR_HI_BPM), (uint16_t)(FS * 60.0f / HR_LO_BPM), _noiseHr);
-    for (uint8_t k = 0; k < MAX_BINS; ++k) {
-        _dc[k] = _absEma[k] = _pTot[k] = _pBr[k] = _pHr[k] = _covBr[k] = _covHr[k] = 0;
-        designBandpass(_brBq[k], FS, 0.1f, 0.5f);
-        designBandpass(_hrBq[k], FS, 0.8f, 2.0f);
-    }
-    _topN = 0; _ringPos = _ringCount = 0; _sinceTick = 0;
-    _brHistN = _hrHistN = _brHistPos = _hrHistPos = 0;
-    _brBpm = _brConf = _hrBpm = _hrConf = 0; _lastHrSample = 0; _beat = false;
+    for (uint8_t k = 0; k < MAX_BINS; ++k) { designHighpass(_hp[k], FS, HP_FC_HZ); _absEma[k] = 0; }
+    for (uint8_t f = 0; f < BR_BINS; ++f) { float w = 2.0f * (float)M_PI * (BR_F0 + BR_DF * f) / FS; _brCw[f] = cosf(w); _brSw[f] = sinf(w); }
+    for (uint8_t f = 0; f < HR_BINS; ++f) { float w = 2.0f * (float)M_PI * (HR_F0 + HR_DF * f) / FS; _hrCw[f] = cosf(w); _hrSw[f] = sinf(w); }
+    _blocks = 0;
+    resetBlock();
+    _brBpm = _brConf = _hrBpm = _hrConf = 0; _brCandidate = 0;
+    _lastBeatMs = 0; _beat = false;
 }
 
 const char* RuViewEdge::phaseName() const {
@@ -200,7 +108,6 @@ uint32_t RuViewEdge::calibSecondsLeft(uint32_t nowMs) const {
     if (_phase == Phase::Idle) return 0;
     uint32_t el = nowMs - _calibStartMs;
     uint32_t minEnd = _leaveMs + TEMPLATE_MS + STATS_MIN_MS;
-    // open-ended (button): seconds until the minimum is met, 0 afterwards (waiting for the press)
     uint32_t end = _openEnded ? minEnd : (CALIB_AUTO_MS > minEnd ? CALIB_AUTO_MS : minEnd);
     return el >= end ? 0 : (end - el + 999) / 1000;
 }
@@ -214,37 +121,46 @@ void RuViewEdge::forceCalibrate(uint32_t nowMs, uint32_t leaveDelayMs, bool open
 void RuViewEdge::startCalibration(uint32_t nowMs, uint32_t leaveDelayMs, bool openEnded) {
     _phase = leaveDelayMs ? Phase::Leave : Phase::Template;
     _openEnded = openEnded; _closeRequested = false; _leaveMs = leaveDelayMs;
-    _calibStartMs = nowMs; _phaseStartMs = nowMs;
-    _tplCount = 0;
-    for (uint8_t k = 0; k < MAX_BINS; ++k) _tplSum[k] = 0;
+    _calibStartMs = _phaseStartMs = nowMs;
+    for (uint8_t l = 0; l < LAYOUTS; ++l) {
+        _tplCount[l] = 0; _lazyCount[l] = 0; _haveRef[l] = false;   // wander is meaningless until the new templates exist
+        for (uint8_t k = 0; k < MAX_BINS; ++k) { _tplSum[l][k] = 0; _lazySum[l][k] = 0; }
+    }
     welfordReset(_statJ); welfordReset(_statW);
     _presence = false; _above = _below = 0;
-    _haveRef = false;                 // wander is meaningless until the new template exists
-    _thrJ = DEFAULT_THR_J; _thrW = 0; _offJ = 0.5f * DEFAULT_THR_J; _offW = 0;
+    _thrJ = _thrW = _offJ = _offW = 0;
 }
 
-void RuViewEdge::updateCalibration(uint32_t nowMs, const float* a) {
+void RuViewEdge::updateCalibration(uint32_t nowMs, uint8_t lay, const float* a) {
     switch (_phase) {
         case Phase::Idle:
             return;
         case Phase::Leave:
             if (nowMs - _phaseStartMs >= _leaveMs) { _phase = Phase::Template; _phaseStartMs = nowMs; }
             return;
-        case Phase::Template:
-            for (uint8_t k = 0; k < _nBins; ++k) _tplSum[k] += a[k];
-            _tplCount++;
-            if (nowMs - _phaseStartMs >= TEMPLATE_MS && _tplCount >= 20) {
-                float norm = 0;
-                for (uint8_t k = 0; k < _nBins; ++k) { _ref[k] = (float)(_tplSum[k] / (double)_tplCount); norm += _ref[k] * _ref[k]; }
-                norm = norm > 1e-12f ? 1.0f / sqrtf(norm) : 0.0f;
-                for (uint8_t k = 0; k < _nBins; ++k) _ref[k] *= norm;
-                _haveRef = true;
+        case Phase::Template: {
+            for (uint8_t k = 0; k < MAX_BINS; ++k) _tplSum[lay][k] += a[k];
+            _tplCount[lay]++;
+            uint32_t total = _tplCount[0] + _tplCount[1];
+            if (nowMs - _phaseStartMs >= TEMPLATE_MS && total >= 20) {
+                int8_t best = -1;
+                for (uint8_t l = 0; l < LAYOUTS; ++l) {
+                    if (_tplCount[l] < 20) continue;
+                    float norm = 0;
+                    for (uint8_t k = 0; k < MAX_BINS; ++k) { _ref[l][k] = (float)(_tplSum[l][k] / (double)_tplCount[l]); norm += _ref[l][k] * _ref[l][k]; }
+                    norm = norm > 1e-12f ? 1.0f / sqrtf(norm) : 0.0f;
+                    for (uint8_t k = 0; k < MAX_BINS; ++k) _ref[l][k] *= norm;
+                    _haveRef[l] = true;
+                    if (best < 0 || _tplCount[l] > _tplCount[best]) best = (int8_t)l;
+                }
+                if (best >= 0 && best != _primary) { _primary = best; _gridValid = false; resetBlock(); }
                 _phase = Phase::Stats; _phaseStartMs = nowMs;
                 _haveS = false;        // restart the EMAs so the stats are not biased by the template phase
             }
             return;
+        }
         case Phase::Stats: {
-            if (_haveS) { welfordUpdate(_statJ, _sj); welfordUpdate(_statW, _sw); }
+            if (_haveS && _haveRef[lay]) { welfordUpdate(_statJ, _sj); welfordUpdate(_statW, _sw); }
             uint32_t inStats = nowMs - _phaseStartMs;
             uint32_t total = nowMs - _calibStartMs;
             bool done;
@@ -272,9 +188,8 @@ void RuViewEdge::finishCalibration() {
 // ------------------------------------------------------------------ presence
 
 void RuViewEdge::updatePresence(uint32_t nowMs) {
-    bool useW = _haveRef && _thrW > 0;
-    bool hi = _sj > _thrJ || (useW && _sw > _thrW);
-    bool lo = _sj < _offJ && (!useW || _sw < _offW);
+    bool hi = _sj > _thrJ || _sw > _thrW;
+    bool lo = _sj < _offJ && _sw < _offW;
     if (!_presence) {
         _above = hi ? (uint8_t)(_above + 1) : 0;
         if (_above >= ON_FRAMES) { _presence = true; _onSinceMs = nowMs; _below = 0; _above = 0; }
@@ -289,11 +204,9 @@ void RuViewEdge::updatePresence(uint32_t nowMs) {
 void RuViewEdge::push(const int8_t* iq, uint16_t iqLen, uint32_t nowMs) {
     float a[MAX_BINS];
     uint8_t n, lay;
-    if (!amplitudeVector(iq, iqLen, a, n, lay)) return;
-    if (_layout == 0) { _layout = lay; _nBins = n; }
-    else if (lay != _layout) { _layoutDrops++; return; }
-
+    if (!amplitudeVector(iq, iqLen, a, n, lay)) { if (iqLen) _layoutDrops++; return; }
     _frameCount++;
+
     // sample-rate estimate (diagnostic only; vitals run on the fixed grid)
     _rateFrames++;
     if (_rateMs == 0) _rateMs = nowMs;
@@ -305,135 +218,166 @@ void RuViewEdge::push(const int8_t* iq, uint16_t iqLen, uint32_t nowMs) {
 
     if (!_calibrated && _phase == Phase::Idle) startCalibration(nowMs, 0, false);   // automatic boot calibration
 
-    if (_havePrev && nowMs - _lastMs > GAP_RESET_MS) { _havePrev = false; _gridValid = false; }
-    if (!_havePrev) {
-        memcpy(_prev, a, sizeof(float) * n);
-        _havePrev = true; _lastMs = nowMs;
-        updateCalibration(nowMs, a);
-        return;
+    // Same-layout previous frame for jitter; a long gap breaks the chain.
+    if (_havePrev[lay] && nowMs - _prevMs[lay] > GAP_RESET_MS) _havePrev[lay] = false;
+    bool haveJ = _havePrev[lay];
+    float j = haveJ ? 1.0f - corr(a, _prev[lay], n) : 0.0f; if (j < 0) j = 0;
+    bool haveW = _haveRef[lay];
+    float w = haveW ? 1.0f - corr(a, _ref[lay], n) : 0.0f; if (w < 0) w = 0;
+    if (haveJ) {
+        if (!_haveS) { _sj = j; _sw = haveW ? w : 0.0f; _haveS = true; }
+        else { _sj += ALPHA * (j - _sj); if (haveW) _sw += ALPHA * (w - _sw); }
+    }
+    if (haveW) { _lastTemplatedMs = nowMs; _lastTemplatedW = _sw; }
+    else if (_calibrated && _phase == Phase::Idle) {
+        _untemplated++;
+        // Wander is unknown for this layout: after 2 s without a templated frame let the smoothed value
+        // decay so a stale high reading cannot hold presence; jitter still drives the decision.
+        if (haveJ && nowMs - _lastTemplatedMs > 2000) _sw += ALPHA * (0.0f - _sw);
+        // Lazy template for a layout unseen during calibration: only while a templated layout judged
+        // the room empty and quiet within the last 2 s.
+        if (!_presence && nowMs - _lastTemplatedMs <= 2000 && _lastTemplatedW < _offW && _sj < _offJ) {
+            for (uint8_t k = 0; k < MAX_BINS; ++k) _lazySum[lay][k] += a[k];
+            if (++_lazyCount[lay] >= LAZY_TEMPLATE_FRAMES) {
+                float norm = 0;
+                for (uint8_t k = 0; k < MAX_BINS; ++k) { _ref[lay][k] = (float)(_lazySum[lay][k] / (double)_lazyCount[lay]); norm += _ref[lay][k] * _ref[lay][k]; }
+                norm = norm > 1e-12f ? 1.0f / sqrtf(norm) : 0.0f;
+                for (uint8_t k = 0; k < MAX_BINS; ++k) _ref[lay][k] *= norm;
+                _haveRef[lay] = true;
+            }
+        }
     }
 
-    float j = 1.0f - corr(a, _prev, n); if (j < 0) j = 0;
-    float w = _haveRef ? 1.0f - corr(a, _ref, n) : 0.0f; if (w < 0) w = 0;
-    if (!_haveS) { _sj = j; _sw = w; _haveS = true; }
-    else { _sj += ALPHA * (j - _sj); _sw += ALPHA * (w - _sw); }
-
-    updateCalibration(nowMs, a);
-    updatePresence(nowMs);
+    updateCalibration(nowMs, lay, a);
+    // No presence decisions until thresholds are learned: a provisional constant is meaningless in a
+    // real room (idle jitter ~0.04-0.07 here, 0.008 in the synthetic one). The screen shows "--" anyway.
+    if (_phase == Phase::Idle && _calibrated && haveJ) updatePresence(nowMs);
 
     // Slow baseline drift while the room is empty (esp_wifi_sensing "dynamic baseline").
-    if (_calibrated && _phase == Phase::Idle && !_presence && _haveRef) {
-        float g = (float)(nowMs - _lastMs) / REF_TAU_MS;
+    if (_calibrated && _phase == Phase::Idle && !_presence && haveW && _havePrev[lay]) {
+        float g = (float)(nowMs - _prevMs[lay]) / REF_TAU_MS;
         float norm = 0;
-        for (uint8_t k = 0; k < n; ++k) { _ref[k] += g * (a[k] - _ref[k]); norm += _ref[k] * _ref[k]; }
+        for (uint8_t k = 0; k < MAX_BINS; ++k) { _ref[lay][k] += g * (a[k] - _ref[lay][k]); norm += _ref[lay][k] * _ref[lay][k]; }
         norm = norm > 1e-12f ? 1.0f / sqrtf(norm) : 1.0f;
-        for (uint8_t k = 0; k < n; ++k) _ref[k] *= norm;
+        for (uint8_t k = 0; k < MAX_BINS; ++k) _ref[lay][k] *= norm;
     }
 
-    // Uniform 20 Hz grid for the vitals filters: linear interpolation between the last two frames.
-    if (!_gridValid) { _gridValid = true; _nextGridMs = nowMs; }
-    uint32_t span = nowMs - _lastMs;
-    float v[MAX_BINS];
-    while ((int32_t)(_nextGridMs - nowMs) <= 0) {
-        float f = span ? (float)(_nextGridMs - _lastMs) / (float)span : 1.0f;
-        if (f < 0) f = 0;
-        if (f > 1) f = 1;
-        for (uint8_t k = 0; k < n; ++k) v[k] = _prev[k] + f * (a[k] - _prev[k]);
-        processGridSample(v);
-        _nextGridMs += GRID_MS;
+    // Vitals: uniform 20 Hz grid on the primary layout only (linear interpolation between its frames).
+    if (_primary < 0 && _phase == Phase::Idle && _calibrated) _primary = (int8_t)lay;
+    if ((int8_t)lay == _primary) {
+        if (!_havePrev[lay]) { _gridValid = false; _blockDirty = true; }
+        if (!_gridValid) {
+            _gridValid = true; _nextGridMs = nowMs; _blockDirty = true;   // the (re)start transient spoils this block
+            for (uint8_t k = 0; k < MAX_BINS; ++k) { _hp[k].x1 = _hp[k].x2 = a[k]; _hp[k].y1 = _hp[k].y2 = 0.0f; _absEma[k] = 0.0f; }
+        } else {
+            uint32_t span = nowMs - _prevMs[lay];
+            float v[MAX_BINS];
+            while ((int32_t)(_nextGridMs - nowMs) <= 0) {
+                float f = span ? (float)(_nextGridMs - _prevMs[lay]) / (float)span : 1.0f;
+                if (f < 0) f = 0;
+                if (f > 1) f = 1;
+                for (uint8_t k = 0; k < MAX_BINS; ++k) v[k] = _prev[lay][k] + f * (a[k] - _prev[lay][k]);
+                processGridSample(v);
+                _nextGridMs += GRID_MS;
+            }
+        }
     }
 
-    memcpy(_prev, a, sizeof(float) * n);
-    _lastMs = nowMs;
+    // Heartbeat pulse for the LED: a metronome at the estimated rate while someone is present.
+    if (_presence && _hrBpm > 0 && nowMs - _lastBeatMs >= (uint32_t)(60000.0f / _hrBpm)) { _lastBeatMs = nowMs; _beat = true; }
+
+    memcpy(_prev[lay], a, sizeof(float) * n);
+    _havePrev[lay] = true; _prevMs[lay] = nowMs; _lastMs = nowMs;
 }
 
 // ------------------------------------------------------------------ vitals
 
+void RuViewEdge::resetBlock() {
+    _blockN = 0; _blockDirty = false;
+    memset(_brRe, 0, sizeof _brRe); memset(_brIm, 0, sizeof _brIm);
+    memset(_hrRe, 0, sizeof _hrRe); memset(_hrIm, 0, sizeof _hrIm);
+    for (uint8_t f = 0; f < BR_BINS; ++f) { _brC[f] = 1.0f; _brS[f] = 0.0f; }
+    for (uint8_t f = 0; f < HR_BINS; ++f) { _hrC[f] = 1.0f; _hrS[f] = 0.0f; }
+}
+
 void RuViewEdge::processGridSample(const float* v) {
-    float br[MAX_BINS], hr[MAX_BINS];
-    for (uint8_t k = 0; k < _nBins; ++k) {
-        float d = v[k] - _dc[k];
-        _dc[k] += DC_ALPHA * (v[k] - _dc[k]);
+    float hann = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * (float)_blockN / (float)(BLOCK_LEN - 1));
+    for (uint8_t k = 0; k < MAX_BINS; ++k) {
+        float d = runBiquad(_hp[k], v[k]);
         float ad = fabsf(d);
         if (_absEma[k] > 1e-9f && ad > CLAMP_K * _absEma[k]) d = d > 0 ? CLAMP_K * _absEma[k] : -CLAMP_K * _absEma[k];
         _absEma[k] += ABS_ALPHA * (ad - _absEma[k]);
-        br[k] = runBandpass(_brBq[k], d);
-        hr[k] = runBandpass(_hrBq[k], d);
-        _pTot[k] += P_ALPHA * (d * d - _pTot[k]);
-        _pBr[k]  += P_ALPHA * (br[k] * br[k] - _pBr[k]);
-        _pHr[k]  += P_ALPHA * (hr[k] * hr[k] - _pHr[k]);
+        float x = d * hann;
+        float* re = _brRe[k]; float* im = _brIm[k];
+        for (uint8_t f = 0; f < BR_BINS; ++f) { re[f] += x * _brC[f]; im[f] -= x * _brS[f]; }
+        re = _hrRe[k]; im = _hrIm[k];
+        for (uint8_t f = 0; f < HR_BINS; ++f) { re[f] += x * _hrC[f]; im[f] -= x * _hrS[f]; }
     }
-    if (_topN == 0) refreshTopK();
-    uint8_t refBin = _topK[0];
-    float fusedBr = 0, fusedHr = 0;
-    for (uint8_t i = 0; i < _topN; ++i) {
-        uint8_t k = _topK[i];
-        _covBr[k] += P_ALPHA * (br[k] * br[refBin] - _covBr[k]);
-        _covHr[k] += P_ALPHA * (hr[k] * hr[refBin] - _covHr[k]);
-        float sBr = (k == refBin || _covBr[k] >= 0) ? 1.0f : -1.0f;
-        float sHr = (k == refBin || _covHr[k] >= 0) ? 1.0f : -1.0f;
-        float ratio = _pTot[k] > 1e-12f ? _pBr[k] / _pTot[k] : 0.0f;
-        float wgt = sqrtf(ratio);
-        fusedBr += sBr * wgt * br[k] / sqrtf(_pBr[k] + 1e-12f);
-        fusedHr += sHr * wgt * hr[k] / sqrtf(_pHr[k] + 1e-12f);
+    // rotate the phasors to the next sample (renormalised to bound drift)
+    for (uint8_t f = 0; f < BR_BINS; ++f) {
+        float c = _brC[f] * _brCw[f] - _brS[f] * _brSw[f], s = _brS[f] * _brCw[f] + _brC[f] * _brSw[f];
+        float g = 1.0f / sqrtf(c * c + s * s); _brC[f] = c * g; _brS[f] = s * g;
     }
-    _brRing[_ringPos] = fusedBr;
-    _hrRing[_ringPos] = fusedHr;
-    _ringPos = (uint16_t)((_ringPos + 1) % VIT_LEN);
-    if (_ringCount < VIT_LEN) _ringCount++;
-    if (_presence && _lastHrSample <= 0.0f && fusedHr > 0.0f) _beat = true;
-    _lastHrSample = fusedHr;
-    if (++_sinceTick >= 20) { _sinceTick = 0; refreshTopK(); estimateVitals(); }
+    for (uint8_t f = 0; f < HR_BINS; ++f) {
+        float c = _hrC[f] * _hrCw[f] - _hrS[f] * _hrSw[f], s = _hrS[f] * _hrCw[f] + _hrC[f] * _hrSw[f];
+        float g = 1.0f / sqrtf(c * c + s * s); _hrC[f] = c * g; _hrS[f] = s * g;
+    }
+    if (++_blockN >= BLOCK_LEN) { finishBlock(); resetBlock(); }
 }
 
-void RuViewEdge::refreshTopK() {
-    bool used[MAX_BINS] = {false};
-    _topN = 0;
-    for (uint8_t i = 0; i < VIT_K && i < _nBins; ++i) {
-        int best = -1; float bestR = -1.0f;
-        for (uint8_t k = 0; k < _nBins; ++k) {
-            if (used[k]) continue;
-            float r = _pTot[k] > 1e-12f ? _pBr[k] / _pTot[k] : 0.0f;
-            if (r > bestR) { bestR = r; best = k; }
-        }
-        if (best < 0) break;
-        used[best] = true;
-        _topK[_topN++] = (uint8_t)best;
+float RuViewEdge::fusedPeak(const float* re, const float* im, uint8_t nb, float f0, float df,
+                            const float* reject, uint8_t nRej, float& freqOut, uint8_t& idxOut, float* fused) {
+    // re/im are [MAX_BINS][nb] row-major. Each bin's in-band spectrum is normalised to unit power
+    // and summed, so a coherent peak across bins stands out while independent noise stays flat.
+    for (uint8_t f = 0; f < nb; ++f) fused[f] = 0;
+    for (uint8_t k = 0; k < MAX_BINS; ++k) {
+        const float* r = re + (size_t)k * nb; const float* i = im + (size_t)k * nb;
+        float tot = 0;
+        float p[HR_BINS > BR_BINS ? HR_BINS : BR_BINS];
+        for (uint8_t f = 0; f < nb; ++f) { p[f] = r[f] * r[f] + i[f] * i[f]; tot += p[f]; }
+        if (tot < 1e-18f) continue;
+        for (uint8_t f = 0; f < nb; ++f) fused[f] += p[f] / tot;
     }
-    if (_topN == 0) { _topK[0] = 0; _topN = 1; }
+    float tmp[HR_BINS > BR_BINS ? HR_BINS : BR_BINS];
+    for (uint8_t f = 0; f < nb; ++f) tmp[f] = fused[f];
+    float med = medianOf(tmp, nb);
+    int best = -1; float bestV = -1;
+    for (uint8_t f = 0; f < nb; ++f) {
+        float fr = f0 + df * f;
+        bool rej = false;
+        for (uint8_t r = 0; r < nRej; ++r) if (fabsf(fr - reject[r]) <= 0.08f * reject[r]) rej = true;
+        if (!rej && fused[f] > bestV) { bestV = fused[f]; best = f; }
+    }
+    if (best < 0 || med < 1e-12f) { freqOut = 0; idxOut = 0; return 0.0f; }
+    float fpk = f0 + df * best;
+    if (best > 0 && best < nb - 1) {
+        float denom = fused[best - 1] - 2.0f * fused[best] + fused[best + 1];
+        if (fabsf(denom) > 1e-12f) fpk += df * 0.5f * (fused[best - 1] - fused[best + 1]) / denom;
+    }
+    freqOut = fpk; idxOut = (uint8_t)best;
+    return bestV / med;
 }
 
-void RuViewEdge::estimateVitals() {
-    if (_ringCount < VIT_WARMUP) return;
-    static float scratch[VIT_LEN];
-    uint16_t len = _ringCount;
-    for (uint16_t i = 0; i < len; ++i) scratch[i] = _brRing[(uint16_t)((_ringPos + VIT_LEN - len + i) % VIT_LEN)];
-    float conf;
-    float lag = autocorrPeak(scratch, len, (uint16_t)(FS * 60.0f / BR_HI_BPM), (uint16_t)(FS * 60.0f / BR_LO_BPM), _noiseBr, nullptr, 0, conf);
-    _brConf = conf;
-    if (lag > 0 && conf >= CONF_MIN) {
-        float bpm = 60.0f * FS / lag;
-        if (bpm >= BR_LO_BPM && bpm <= BR_HI_BPM) {
-            _brHist[_brHistPos] = bpm; _brHistPos = (uint8_t)((_brHistPos + 1) % MEDIAN_N);
-            if (_brHistN < MEDIAN_N) _brHistN++;
-            _brBpm = medianOf(_brHist, _brHistN);
-        }
-    }
-    // Heart: reject the breathing period and its sub-multiples (harmonics land in the cardiac band).
-    for (uint16_t i = 0; i < len; ++i) scratch[i] = _hrRing[(uint16_t)((_ringPos + VIT_LEN - len + i) % VIT_LEN)];
-    float rej[6]; uint8_t nRej = 0;
-    if (_brBpm > 0 && _brConf >= CONF_MIN) {
-        float pBr = 60.0f * FS / _brBpm;
-        for (uint8_t k = 1; k <= 6; ++k) rej[nRej++] = pBr / (float)k;
-    }
-    float lagH = autocorrPeak(scratch, len, (uint16_t)(FS * 60.0f / HR_HI_BPM), (uint16_t)(FS * 60.0f / HR_LO_BPM), _noiseHr, rej, nRej, conf);
-    _hrConf = conf;
-    if (lagH > 0) {
-        float bpm = 60.0f * FS / lagH;
-        if (bpm >= HR_LO_BPM && bpm <= HR_HI_BPM) {
-            _hrHist[_hrHistPos] = bpm; _hrHistPos = (uint8_t)((_hrHistPos + 1) % MEDIAN_N);
-            if (_hrHistN < MEDIAN_N) _hrHistN++;
-            _hrBpm = medianOf(_hrHist, _hrHistN);
-        }
-    }
+void RuViewEdge::finishBlock() {
+    if (_blockDirty) return;
+    _blocks++;
+    float fused[HR_BINS > BR_BINS ? HR_BINS : BR_BINS];
+    float fBr, fHr; uint8_t iBr, iHr;
+    float promBr = fusedPeak(&_brRe[0][0], &_brIm[0][0], BR_BINS, BR_F0, BR_DF, nullptr, 0, fBr, iBr, fused);
+    for (uint8_t f = 0; f < BR_BINS; ++f) _lastFusedBr[f] = fused[f];
+    _lastPromBr = promBr;
+    bool brEdge = !(iBr > 0 && iBr < BR_BINS - 1);   // a peak on the band edge is drift, not breathing
+    _brConf = brEdge ? 0.0f : (promBr - 1.0f) / 4.0f; if (_brConf > 1) _brConf = 1; if (_brConf < 0) _brConf = 0;
+    bool brOk = promBr >= BR_PROMINENCE_MIN && !brEdge;
+    float cand = brOk ? fBr * 60.0f : 0.0f;
+    // Report only when two consecutive blocks agree: noise peaks wander from block to block.
+    if (cand > 0 && _brCandidate > 0 && fabsf(cand - _brCandidate) <= BR_AGREE_BPM) _brBpm = 0.5f * (cand + _brCandidate);
+    else _brBpm = 0.0f;                                 // no stale numbers
+    _brCandidate = cand;
+    // Heart: skip the breathing harmonics that land in the cardiac band when breathing is known.
+    float rej[12]; uint8_t nRej = 0;
+    if (brOk) for (uint8_t k = 2; k <= 13 && nRej < 12; ++k) { float h = fBr * k; if (h >= HR_F0 - 0.05f && h <= HR_F0 + HR_DF * HR_BINS) rej[nRej++] = h; }
+    float promHr = fusedPeak(&_hrRe[0][0], &_hrIm[0][0], HR_BINS, HR_F0, HR_DF, rej, nRej, fHr, iHr, fused);
+    _hrConf = (promHr - 1.0f) / 4.0f; if (_hrConf > 1) _hrConf = 1; if (_hrConf < 0) _hrConf = 0;
+    _hrBpm = fHr > 0 ? fHr * 60.0f : 0.0f;
 }

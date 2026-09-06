@@ -580,6 +580,9 @@ void RuViewCsi::onAction(const char* action, const char* value) {
                  s.jitter, s.thrJ, s.wander, s.thrW, s.fs, calibPhaseName(), (unsigned long)s.calibLeft, (unsigned)s.layout, segmentName(),
                  (int)s.presence, s.hr, s.hrConf, s.br, s.brConf);
         logEvent(msg);
+        snprintf(msg, sizeof msg, "diag: edge templates=%u untemplated=%lu lltf_drops=%lu blocks=%lu",
+                 (unsigned)_edge.templates(), (unsigned long)_edge.untemplated(), (unsigned long)_edge.layoutDrops(), (unsigned long)_edge.blocks());
+        logEvent(msg);
     } else if (strcmp(sub, "segment") == 0) {
         setSegment((uint8_t)strtod(value, nullptr));
     } else if (strcmp(sub, "promisc") == 0) {

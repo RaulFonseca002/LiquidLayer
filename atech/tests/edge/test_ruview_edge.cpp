@@ -23,11 +23,13 @@ struct Room {
     float delta[64] = {0};     // multiplicative channel change caused by a person
     float phase[64] = {0};
     float breathAmp = 0.0f, breathHz = 0.25f;
+    float breathDepth[64] = {0};   // per-bin modulation depth (signed): a chest reflection touches the whole band
     float gain = 1.0f;         // AGC step
     float noise = 1.0f;        // I/Q noise sigma (LSB)
     Room() {
         std::uniform_real_distribution<float> u(20.0f, 60.0f), ph(0.0f, 6.283f);
-        for (int k = 0; k < 64; ++k) { base[k] = u(rng); phase[k] = ph(rng); }
+        std::uniform_real_distribution<float> depth(0.02f, 0.05f);
+        for (int k = 0; k < 64; ++k) { base[k] = u(rng); phase[k] = ph(rng); breathDepth[k] = (k % 2) ? depth(rng) * ((k / 2) % 2 ? 1.0f : -1.0f) : 0.0f; }
     }
     void personStill(float strength) {   // channel changed by a body; breathing modulates some bins
         std::uniform_real_distribution<float> u(-strength, strength);
@@ -44,8 +46,8 @@ struct Room {
         float common = ph(rng);   // random per-packet phase offset (CFO), as on real hardware
         for (int k = 0; k < 64; ++k) {
             float a = base[k] * (1.0f + delta[k]) * gain;
-            bool breathing = breathAmp > 0 && (k % 7 == 3);   // a few bins see the chest
-            if (breathing) a *= 1.0f + breathAmp * std::sin(6.283f * breathHz * tS + phase[k]);
+            if (breathAmp > 0 && breathDepth[k] != 0.0f)          // about half the bins see the chest, with varying depth and sign
+                a *= 1.0f + breathDepth[k] * std::sin(6.283f * breathHz * tS);
             if (k == 0 || (k >= 29 && k <= 35)) a = 0;        // DC and guards
             float p = common + phase[k];
             float im = a * std::sin(p) + n(rng), re = a * std::cos(p) + n(rng);
@@ -92,12 +94,12 @@ static void testSynthetic() {
     // (b) still person with breathing 15 BPM
     room.personStill(0.15f);
     float brBpm = 0, brC = 0;
-    float fStill = run(e, room, t, 60.0f, now, &brBpm, &brC);
-    std::printf("  still:  presence %.1f%%  wander %.4f  BR %.1f bpm conf %.2f  HR %.1f conf %.2f  bins %u\n",
-                100 * fStill, e.wander(), brBpm, brC, e.heartRateBpm(), e.heartConfidence(), e.binCount());
+    float fStill = run(e, room, t, 90.0f, now, &brBpm, &brC);   // >= 2 full 30 s blocks after the entry transient
+    std::printf("  still:  presence %.1f%%  wander %.4f  BR %.1f bpm conf %.2f  HR %.1f conf %.2f  blocks %lu\n",
+                100 * fStill, e.wander(), brBpm, brC, e.heartRateBpm(), e.heartConfidence(), (unsigned long)e.blocks());
     CHECK(fStill > 0.95f, "still person detected (%.1f%%)", 100 * fStill);
     CHECK(std::fabs(brBpm - 15.0f) <= 1.5f, "breathing 15 +- 1.5 bpm (got %.1f)", brBpm);
-    CHECK(brC >= RuViewEdge::CONF_MIN, "breathing confidence >= %.2f (got %.2f)", RuViewEdge::CONF_MIN, brC);
+    CHECK(brC >= (RuViewEdge::BR_PROMINENCE_MIN - 1.0f) / 4.0f, "breathing prominence >= %.0f (conf %.2f)", RuViewEdge::BR_PROMINENCE_MIN, brC);
     CHECK(!e.fall(), "fall disabled");
     // (c) walking
     room.personWalk();
@@ -123,8 +125,10 @@ static void testSynthetic() {
     CHECK(e.presence(), "person present before recalibration");
     e.forceCalibrate(now, RuViewEdge::LEAVE_MS, true);
     CHECK(!e.presence() && e.calibrating() && e.phase() == RuViewEdge::Phase::Leave, "forceCalibrate clears presence and enters leave phase");
+    float fCal = run(e, room, t, 3.0f, now);   // still moving while leaving: no presence during calibration
+    CHECK(fCal == 0.0f, "no presence decisions while calibrating (%.1f%%)", 100 * fCal);
     room.empty();
-    run(e, room, t, 5.0f, now);
+    run(e, room, t, 2.0f, now);
     CHECK(e.phase() == RuViewEdge::Phase::Leave, "still leaving at 5 s");
     run(e, room, t, 30.0f, now);   // 35 s in: leave 10 + template 15 + 10 of the 15 s minimum stats
     CHECK(e.calibrating() && e.phase() == RuViewEdge::Phase::Stats, "open-ended calibration keeps collecting (phase %s)", e.phaseName());
@@ -139,13 +143,15 @@ static void testSynthetic() {
     room.personStill(0.15f);
     float fAgain = run(e, room, t, 20.0f, now);
     CHECK(fAgain > 0.9f, "detects again after recalibration (%.1f%%)", 100 * fAgain);
-    // (g) frames of another layout are counted and dropped, not processed
+    // (g) 128-byte LLTF-only frames are dropped (counted); 256-byte HT frames are a second layout
+    //     with no template yet: processed for jitter, counted as untemplated, no presence flip
     int8_t small[128]; for (int i = 0; i < 128; ++i) small[i] = (int8_t)(10 + (i % 7)); uint32_t drops = e.layoutDrops();
     e.push(small, 128, now + 50);
-    CHECK(e.layoutDrops() == drops + 1, "layout mismatch counted");
-    // a 256-byte (non-STBC HT) frame shares the HT-LTF bin set with the 384-byte ones: processed, not dropped
-    { int8_t ht[256]; room.frame(t, small); (void)small; std::memcpy(ht, small, 0); int8_t full[384]; room.frame(t, full); std::memcpy(ht, full, 256);
-      uint32_t fr = e.frames(); e.push(ht, 256, now + 100); CHECK(e.frames() == fr + 1 && e.layoutDrops() == drops + 1, "256-byte HT frame accepted"); }
+    CHECK(e.layoutDrops() == drops + 1, "LLTF-only frame dropped and counted");
+    { int8_t full[384]; room.frame(t, full); uint32_t fr = e.frames(), un = e.untemplated(); bool p0 = e.presence();
+      e.push(full, 256, now + 100); e.push(full, 256, now + 150);
+      CHECK(e.frames() == fr + 2 && e.untemplated() == un + 2, "256-byte frames processed as their own layout (untemplated %lu)", (unsigned long)e.untemplated());
+      CHECK(e.presence() == p0 && e.templates() == 2, "no template for the new layout yet, presence unchanged"); }
     // (h) gap: a 3 s hole resets the frame chain without breaking calibration
     now += 3000; t += 3.0f;
     run(e, room, t, 5.0f, now);
@@ -182,7 +188,7 @@ static bool readRec(const char* path, std::vector<Rec>& out) {
     std::fclose(f); return true;
 }
 
-struct SegStat { int n = 0, on = 0; float brSum = 0; int brN = 0; float t0 = -1, tOn = -1; float jSum = 0, wSum = 0; };
+struct SegStat { int n = 0, on = 0, nT = 0, onT = 0; float brSum = 0; int brN = 0; float t0 = -1, tOn = -1; float jSum = 0, wSum = 0; };
 static const char* SEG[4] = {"live", "empty", "still", "walk"};
 
 static bool replay(const char* path, bool doAssert, const char* dumpPath) {
@@ -205,26 +211,33 @@ static bool replay(const char* path, bool doAssert, const char* dumpPath) {
         SegStat& s = st[r.seg & 3];
         if (s.t0 < 0) s.t0 = tS;
         s.n++; s.on += e.presence(); s.jSum += e.jitter(); s.wSum += e.wander();
+        bool templated = e.templates() & (r.payload.size() - 20 >= 384 ? 2 : 1);   // this frame's layout has a template
+        if (templated) { s.nT++; s.onT += e.presence(); }
         if (e.presence() && s.tOn < 0) s.tOn = tS - s.t0;
-        if (e.breathingConfidence() >= RuViewEdge::CONF_MIN && e.breathingBpm() > 0) { s.brSum += e.breathingBpm(); s.brN++; }
+        if (e.breathingBpm() > 0) { s.brSum += e.breathingBpm(); s.brN++; }
         if (dump) std::fprintf(dump, "%.3f\t%d\t%.6f\t%.6f\t%d\t%.2f\t%.2f\t%.1f\t%.2f\n", tS, r.seg, e.jitter(), e.wander(), e.presence() ? 1 : 0,
                                e.thresholdJitter(), e.thresholdWander(), e.breathingBpm(), e.breathingConfidence());
     }
     if (dump) std::fclose(dump);
-    std::printf("%s: %d frames, layout %u, bins %u, drops %lu, thr_j %.4f thr_w %.4f, calibrated %d\n", path, frames,
-                e.layout(), e.binCount(), (unsigned long)e.layoutDrops(), e.thresholdJitter(), e.thresholdWander(), (int)e.calibrated());
+    std::printf("%s: %d frames, vitals layout %u, templates %u, drops %lu, untemplated %lu, blocks %lu, thr_j %.4f thr_w %.4f, calibrated %d\n", path, frames,
+                e.layout(), e.templates(), (unsigned long)e.layoutDrops(), (unsigned long)e.untemplated(), (unsigned long)e.blocks(),
+                e.thresholdJitter(), e.thresholdWander(), (int)e.calibrated());
     bool ok = true;
     for (int s = 0; s < 4; ++s) {
         if (!st[s].n) continue;
         float pres = 100.0f * st[s].on / st[s].n;
-        std::printf("  %-5s n=%5d presence %5.1f%%  jitter %.4f wander %.4f  BR %s  first on %s\n", SEG[s], st[s].n, pres,
-                    st[s].jSum / st[s].n, st[s].wSum / st[s].n,
-                    st[s].brN ? (std::to_string(st[s].brSum / st[s].brN).substr(0, 4) + " bpm (" + std::to_string(st[s].brN) + " confident frames)").c_str() : "--",
+        float presT = st[s].nT ? 100.0f * st[s].onT / st[s].nT : -1.0f;
+        std::printf("  %-5s n=%5d presence %5.1f%% (templated frames %d: %5.1f%%)  jitter %.4f wander %.4f  BR %s  first on %s\n", SEG[s], st[s].n, pres,
+                    st[s].nT, presT, st[s].jSum / st[s].n, st[s].wSum / st[s].n,
+                    st[s].brN ? (std::to_string(st[s].brSum / st[s].brN).substr(0, 4) + " bpm (" + std::to_string(st[s].brN) + " frames with a reading)").c_str() : "--",
                     st[s].tOn >= 0 ? (std::to_string(st[s].tOn).substr(0, 4) + " s").c_str() : "never");
         if (doAssert) {
             // only the part of "empty" after the minimum calibration is judged (the person is leaving at first)
-            if (s == 2 && pres < 90.0f) { ok = false; std::printf("  FAIL still < 90%%\n"); }
-            if (s == 3 && pres < 95.0f) { ok = false; std::printf("  FAIL walk < 95%%\n"); }
+            // gates apply to frames whose layout had a template; untemplated layouts are a known limitation
+            if (s == 1 && st[s].nT && presT > 1.0f) { ok = false; std::printf("  FAIL empty > 1%%\n"); }
+            if (s == 2 && st[s].nT && presT < 90.0f) { ok = false; std::printf("  FAIL still < 90%%\n"); }
+            if (s == 3 && st[s].nT && presT < 95.0f) { ok = false; std::printf("  FAIL walk < 95%%\n"); }
+            if (s == 3 && !st[s].nT) std::printf("  note: walk frames were all of an untemplated layout; presence there relied on jitter only\n");
         }
     }
     return ok;

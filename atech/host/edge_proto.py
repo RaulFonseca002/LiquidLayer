@@ -33,7 +33,6 @@ from ruview_packets import SEGMENT_NAMES  # noqa: E402
 
 PILOTS = {7, 21, 43, 57}
 HT_BINS = [i for i in list(range(1, 29)) + list(range(36, 64)) if i not in PILOTS]      # 52 bins
-LLTF_BINS = [i for i in list(range(1, 27)) + list(range(38, 64)) if i not in PILOTS]    # 48 bins
 
 
 def layout_of(iq_len: int) -> int:
@@ -45,10 +44,8 @@ def amplitude_vector(iq: bytes) -> list[float] | None:
     lay = layout_of(len(iq))
     if lay >= 2:
         base, bins = 128, HT_BINS          # HT-LTF block = subcarriers 64..127 = bytes 128..255
-    elif lay == 1:
-        base, bins = 0, LLTF_BINS
     else:
-        return None
+        return None                        # 128-byte LLTF-only frames: the LLTF block is noise (ignored by the firmware too)
     v = []
     for b in bins:
         o = base + 2 * b
@@ -257,49 +254,65 @@ def autocorr_bpm(sig, fs, bpm_lo, bpm_hi):
     return 60.0 * fs / best_lag, max(0.0, best)
 
 
-def breathing_report(frames, fs=20.0, window_s=30.0, step_s=10.0, top_k=5):
-    """frames: list of (t_s, vec) in the STILL segment. Prints per-window breathing estimates."""
+def fused_prominence(win, fs=20.0, f0=0.1, df=0.0125, nb=33, detrend_s=10.0):
+    """RuViewEdge::fusedPeak twin: per-bin Hann-windowed DFT over the band, each bin's spectrum
+    normalised to unit in-band power, summed over bins. Returns (peak_bpm, prominence=peak/median,
+    peak_index)."""
+    ts = [t for t, _ in win]
+    freqs = [f0 + df * i for i in range(nb)]
+    fused = [0.0] * nb
+    nbins = len(win[0][1])
+    for k in range(nbins):
+        u = resample(ts, [v[k] for _, v in win], fs)
+        if len(u) < int(fs * 25):
+            continue
+        d = moving_average_detrend(u, int(detrend_s * fs))
+        n = len(d)
+        m = sum(d) / n
+        xs = [(v - m) * (0.5 - 0.5 * math.cos(2 * math.pi * i / (n - 1))) for i, v in enumerate(d)]
+        sp = []
+        for f in freqs:
+            w = 2 * math.pi * f / fs
+            re = im = 0.0
+            for i, v in enumerate(xs):
+                re += v * math.cos(w * i)
+                im -= v * math.sin(w * i)
+            sp.append(re * re + im * im)
+        tot = sum(sp) or 1e-18
+        for i, v in enumerate(sp):
+            fused[i] += v / tot
+    med = sorted(fused)[nb // 2]
+    pk = max(range(nb), key=lambda i: fused[i])
+    return freqs[pk] * 60.0, (fused[pk] / med if med > 0 else 0.0), pk
+
+
+def breathing_report(frames, fs=20.0, window_s=30.0, step_s=30.0):
+    """frames: list of (t_s, vec) of one layout in the STILL segment. Per-window fused-spectrum
+    prominence; like the firmware, a reading needs prominence >= 3 away from the band edges in two
+    consecutive blocks agreeing within 1.5 bpm (non-overlapping 30 s blocks: step_s = 30)."""
     if len(frames) < fs * window_s:
         return [f"  breathing: only {len(frames)} frames in STILL (< {window_s:.0f} s), skipped"]
-    nb = len(frames[0][1])
-    ts = [f[0] for f in frames]
-    series = []
-    for k in range(nb):
-        xs = [f[1][k] for f in frames]
-        u = resample(ts, xs, fs)
-        series.append(u)
-    n = min(len(s) for s in series)
-    lines = []
-    w = int(window_s * fs)
-    st = int(step_s * fs)
-    estimates = []
-    for start in range(0, n - w + 1, st):
-        cands = []
-        for k in range(nb):
-            seg = series[k][start:start + w]
-            d = moving_average_detrend(seg, int(4 * fs))
-            bp = bandpass(d, fs, 0.1, 0.5)
-            tot = sum(v * v for v in d) or 1e-12
-            inb = sum(v * v for v in bp[int(2 * fs):])   # skip filter transient
-            cands.append((inb / tot, bp))
-        cands.sort(key=lambda c: -c[0])
-        chosen = cands[:top_k]
-        # fuse: normalise each in-band signal to unit energy, then sum autocorrelations via the summed signal
-        fused = [0.0] * w
-        for ratio, bp in chosen:
-            e = math.sqrt(sum(v * v for v in bp)) or 1e-12
-            for i, v in enumerate(bp):
-                fused[i] += v / e
-        bpm, conf = autocorr_bpm(fused[int(2 * fs):], fs, 6, 30)
-        estimates.append((start / fs, bpm, conf, chosen[0][0]))
-        lines.append(f"  t={start / fs:5.0f}s  breathing {bpm:5.1f} bpm  confidence {conf:.2f}  best in-band ratio {chosen[0][0]:.2f}")
-    good = [e for e in estimates if e[2] >= 0.3]
-    if good:
-        bpms = sorted(e[1] for e in good)
-        lines.append(f"  -> {len(good)}/{len(estimates)} windows confident (>=0.30); median {bpms[len(bpms)//2]:.1f} bpm, "
-                     f"range {bpms[0]:.1f}-{bpms[-1]:.1f}")
+    t0 = frames[0][0]
+    lines, reported = [], []
+    prev_cand = 0.0
+    w0 = 0.0
+    while w0 + window_s <= frames[-1][0] - t0:
+        win = [f for f in frames if w0 <= f[0] - t0 < w0 + window_s]
+        if len(win) >= fs * window_s * 0.8:
+            bpm, prom, idx = fused_prominence(win, fs)
+            cand = bpm if (prom >= 3.0 and 0 < idx < 32) else 0.0
+            agree = cand > 0 and prev_cand > 0 and abs(cand - prev_cand) <= 1.5
+            lines.append(f"  t={w0:5.0f}s  fused peak {bpm:5.1f} bpm  prominence {prom:4.1f}  "
+                         f"{'candidate' if cand else 'reject'}{'  -> REPORT %.1f' % (0.5 * (cand + prev_cand)) if agree else ''}")
+            if agree:
+                reported.append(0.5 * (cand + prev_cand))
+            prev_cand = cand
+        w0 += step_s
+    if reported:
+        a = sorted(reported)
+        lines.append(f"  -> {len(reported)} block pairs agree; median {a[len(a)//2]:.1f} bpm, range {a[0]:.1f}-{a[-1]:.1f}")
     else:
-        lines.append("  -> no confident breathing estimate (all windows < 0.30)")
+        lines.append("  -> no two consecutive blocks agree on a prominent peak: breathing not recoverable here (BR stays --)")
     return lines
 
 
@@ -385,8 +398,10 @@ def main() -> None:
               f"wander {mw:.4f}±{sw:.4f} p95 {pw:.4f}  presence {100.0 * d['p'] / d['n']:5.1f}%{sep}{on}")
 
     if not args.no_breathing and 2 in per:
-        print("breathing (STILL segment, 30 s windows, top-5 bins by in-band power, autocorrelation):")
+        print("breathing (STILL segment, 30 s windows, fused per-bin spectra, prominence = peak/median):")
         still = [(t, vec) for t, seg, vec in frames if seg == 2]
+        nb = max(set(len(v) for _, v in still), key=lambda n: sum(1 for _, v in still if len(v) == n)) if still else 0
+        still = [(t, v) for t, v in still if len(v) == nb]   # one bin set only (LLTF-only frames are rare)
         for line in breathing_report(still):
             print(line)
 

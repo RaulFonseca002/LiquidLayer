@@ -95,12 +95,17 @@ The engine now follows Espressif's esp-radar formulation on subcarrier
 (`1 − corr` with an empty-room template) for presence, thresholds learned as
 mean + 4 σ during an empty-room calibration (60 s automatic at boot, or the
 button-driven "empty" segment), Schmitt trigger with confirmation and hold.
-Breathing comes from band-passed amplitude fused over the best bins with an
-autocorrelation confidence; heart rate is best-effort and is always shown with
-its confidence. Fall detection is disabled (never validated). Validated with the
-native harness `tests/edge/run.sh` (synthetic still/walking/leaving/AGC/button
-scenarios) and by replaying real recordings (`host/csi_sink.py --record`,
-`.csirec`). Hardware acceptance status lives in `STAGES.md` ("Sensing fix").
+Each frame layout (256-byte HT, 384-byte HT+STBC) has its own template because
+their HT-LTF blocks describe different channels; the access point switches
+between them with link quality. Breathing comes from a per-bin block DFT of the
+detrended amplitudes fused over the band: a reading needs a prominent peak
+(≥ 3× the spectrum median, off the band edges) in two consecutive 30 s blocks
+that agree within 1.5 bpm. In the owner's room (2026-09-06, seated 1-2 m away)
+no such peak exists, so BR reads `--`; heart rate is best-effort and is always
+shown with its confidence. Fall detection is disabled (never validated).
+Validated with the native harness `tests/edge/run.sh` (synthetic scenarios plus
+replay of `tests/fixtures/*.csirec` with acceptance gates: empty 0.0 %, still
+99.9 %). Hardware acceptance status lives in `STAGES.md` ("Sensing fix").
 
 Button protocol (port 3): press → *empty* (leave; the baseline is relearned for
 as long as the segment lasts, min 30 s after a 10 s leave delay) → press →
