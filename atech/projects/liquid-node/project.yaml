@@ -1,64 +1,61 @@
-# Liquid node — Phase 1 hang locator (see ../../STAGES.md).
-# Faithful to the failing S1b config (display + ruview_csi, radio off) PLUS pure
-# instrumentation. One monotonic RTC marker (g_hlPhase, owned by the module)
-# advances through every step; each setup step is also painted to the panel, so a
-# FROZEN screen shows the exact phase with no reset. The boot card reports where
-# the PREVIOUS boot died (g_hlPrev) and how many task-WDT reboots have happened
-# (g_hlWdt) — a WDT reboot is a masked hang.
+# Liquid node — RuView WiFi CSI sensing on the Atech 14port (see ../../STAGES.md).
+#
+# RUNG R0 (fix validation): display + sensing module, radio ON, CSI streaming to
+# the sink, NO loop watchdog. Built by the hardened pipeline (USB-CDC brought up
+# 2 s after boot instead of at boot). Gate: >= 15 cold resets (Restart button),
+# zero freezes; the footer's "wdt" count must stay 0 and "r" must read 1
+# (power-on) — a 6 would mean a task-watchdog rescue, i.e. a masked hang.
 name: liquid-node
 board: 14port
-modules_path: /tmp/claude-1000/-home-raul-Desktop-tcc/b57e5cbc-6ba9-4617-a8ef-06d7fdf6ff42/scratchpad/diag_modules
+modules_path: ../../modules
 modules:
-  - {id: st7735_tft,    instance: tftA, ports: [1, 2]}
-  - {id: ruview_csi_hl, instance: csi,  port: 11}
+  - {id: st7735_tft, instance: tftA, ports: [1, 2]}
+  - {id: ruview_csi, instance: csi,  port: 11}
 code:
   setup: |
-    // markers owned by the module (RTC_NOINIT, survive warm/WDT resets)
-    extern uint32_t g_hlPhase, g_hlPrev, g_hlWdt, g_hlBoots;
-    // begin() already ran (module marker 90..94) and captured g_hlPrev.
-    #define PHASE(n, label) do { g_hlPhase = (n); tftA.clear(); \
-      tftA.displayText("locator P" #n, 2, 2, 1, ST7735_TFT::COLOR_CYAN); \
-      tftA.displayText(label, 2, 22, 2, ST7735_TFT::COLOR_WHITE); \
-      tftA.display(); } while (0)
-
-    PHASE(95, "post begin");
-    pinMode(4, OUTPUT); digitalWrite(4, HIGH);
-    pinMode(5, OUTPUT); digitalWrite(5, HIGH);
-    pinMode(8, OUTPUT); digitalWrite(8, LOW);
-    pinMode(9, OUTPUT); digitalWrite(9, LOW);
-    PHASE(96, "pins done");
-    delay(50);
-    // Boot card: where the PREVIOUS run died, and the WDT-reboot tally.
-    tftA.clear();
-    tftA.displayText("LOCATOR boot card", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
-    char line[40];
-    snprintf(line, sizeof line, "boot #%lu reason %d", (unsigned long)g_hlBoots, (int)esp_reset_reason());
-    tftA.displayText(line, 2, 16, 1, ST7735_TFT::COLOR_WHITE);
-    snprintf(line, sizeof line, "PREV died P%lu", (unsigned long)g_hlPrev);
-    tftA.displayText(line, 2, 30, 2, (esp_reset_reason() == 6) ? ST7735_TFT::COLOR_RED : ST7735_TFT::COLOR_YELLOW);
-    snprintf(line, sizeof line, "wdt reboots %lu", (unsigned long)g_hlWdt);
-    tftA.displayText(line, 2, 56, 1, g_hlWdt ? ST7735_TFT::COLOR_RED : ST7735_TFT::COLOR_GREEN);
-    tftA.display();
-    g_hlPhase = 97;      // card shown
-    delay(2500);
-    g_hlPhase = 98;      // setup end (setup() about to return)
+    // Reboot audit, persistent in flash: count task-watchdog reboots (reason 6).
+    // The watchdog is OFF in this rung, so the count must never move.
+    {
+      Preferences p; p.begin("node", false);
+      if (esp_reset_reason() == ESP_RST_TASK_WDT) p.putUShort("wdt", (uint16_t)(p.getUShort("wdt", 0) + 1));
+      p.end();
+    }
+    // Do NOT call tftA.setRotation(): the SDK driver initialises this 160x80
+    // panel for rotation 3 with a BGR MADCTL override.
   loop: |
-    extern uint32_t g_hlPhase;
-    g_hlPhase = 110;     // loop entered
+    static uint16_t wdtCount = 0xFFFF;              // read once, after setup() updated it
+    if (wdtCount == 0xFFFF) { Preferences p; p.begin("node", true); wdtCount = p.getUShort("wdt", 0); p.end(); }
+
+    // ---- screen A, redrawn at 2 Hz. loop() only renders; the module does the work in tasks.
     static uint32_t lastDraw = 0;
     if (millis() - lastDraw < 500) return;
     lastDraw = millis();
-    g_hlPhase = 111;
     static uint32_t frames = 0; frames++;
     static bool hb = false; hb = !hb;
+
     tftA.clear();
-    tftA.displayText("locator RUNNING", 2, 2, 1, ST7735_TFT::COLOR_GREEN);
     char line[40];
-    snprintf(line, sizeof line, "frame %lu", (unsigned long)frames);
-    tftA.displayText(line, 2, 22, 2, ST7735_TFT::COLOR_WHITE);
-    snprintf(line, sizeof line, "%s up %lus", csi.stateName(), (unsigned long)(millis()/1000));
-    tftA.displayText(line, 2, 48, 1, ST7735_TFT::COLOR_YELLOW);
-    g_hlPhase = 112;
+    snprintf(line, sizeof line, "%s %4.1fHz %ddBm", csi.stateName(), csi.frameRateHz(), csi.rssi());
+    tftA.displayText(line, 2, 2, 1, csi.isStreaming() ? ST7735_TFT::COLOR_CYAN : ST7735_TFT::COLOR_ORANGE);
+
+    if (!csi.isStreaming()) {
+      tftA.displayText(csi.stateName(), 2, 22, 2, ST7735_TFT::COLOR_ORANGE);
+      snprintf(line, sizeof line, "-> %s", csi.sinkIp());
+      tftA.displayText(line, 2, 46, 1, ST7735_TFT::COLOR_YELLOW);
+    } else {
+      bool show = csi.presence() && !csi.vitalsCalibrating();
+      char big[16];
+      if (show) snprintf(big, sizeof big, "HR %2.0f", csi.heartRate()); else snprintf(big, sizeof big, "HR --");
+      tftA.displayText(big, 2, 16, 3, show ? ST7735_TFT::COLOR_GREEN : 0x8410);
+      if (show) snprintf(big, sizeof big, "BR %2.0f", csi.breathingRate()); else snprintf(big, sizeof big, "BR --");
+      tftA.displayText(big, 2, 42, 3, show ? ST7735_TFT::COLOR_WHITE : 0x8410);
+      tftA.fillCircle(148, 8, 6, csi.presence() ? ST7735_TFT::COLOR_GREEN : 0x2104);   // presence lamp
+      if (csi.fall()) tftA.displayText("FALL", 96, 44, 2, ST7735_TFT::COLOR_RED);
+      if (csi.vitalsCalibrating()) tftA.displayText("calibrating", 96, 30, 1, ST7735_TFT::COLOR_ORANGE);
+    }
+
+    // ---- footer: reset reason, watchdog-reboot count (must stay 0), frame counter, heartbeat square
+    snprintf(line, sizeof line, "r%d wdt%u f%lu", (int)esp_reset_reason(), (unsigned)wdtCount, (unsigned long)frames);
+    tftA.displayText(line, 2, 70, 1, wdtCount ? ST7735_TFT::COLOR_RED : ST7735_TFT::COLOR_YELLOW);
     tftA.fillRect(154, 74, 6, 6, hb ? ST7735_TFT::COLOR_YELLOW : 0x2104);
     tftA.display();
-    g_hlPhase = 113;

@@ -9,6 +9,7 @@
 // duplicates are harmless (include guard + inline definitions).
 #pragma once
 #include <Arduino.h>
+#include "atech_usb.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -97,8 +98,8 @@ inline bool dispatchLine(char* line) {
 inline void poll() {
     static char buf[768];
     static size_t len = 0;
-    while (Serial.available() > 0) {
-        int c = Serial.read();
+    while (atechUsb().available() > 0) {
+        int c = atechUsb().read();
         if (c < 0) break;
         if (c == '\n' || c == '\r') {
             if (len > 0) {

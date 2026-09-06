@@ -84,4 +84,46 @@ inline void fillVitals(Vitals& v, uint8_t nodeId, bool presence, bool fall, bool
     v.reserved2 = 0;
 }
 
+// ---- Node status (ours, not RuView's): magic 0xA11E0002, 40 bytes, 1 Hz ----
+// Sent from loop() (not from the DSP task), so receiving it proves the main loop
+// is alive; carries what a host (csi_sink.py, liquid_bridge.py) needs at a glance.
+constexpr uint32_t MAGIC_STATUS = 0xA11E0002u;
+struct __attribute__((packed)) NodeStatus {
+    uint32_t magic;          // 0xA11E0002
+    uint8_t  node_id;
+    uint8_t  state;          // RuViewCsi::State (0 unconfigured .. 5 lost)
+    uint8_t  flags;          // bit0 presence, bit1 fall, bit2 calibrating, bit3 csi_on
+    uint8_t  reset_reason;   // esp_reset_reason(): 1 power-on, 3 software, 6 task-WDT, 9 brownout
+    uint32_t seq;
+    uint32_t uptime_ms;
+    uint32_t free_heap;
+    float    rate_hz;        // CSI frames/s
+    float    heart_bpm;      // 0 when no presence / calibrating
+    float    breathing_bpm;
+    float    motion;
+    int8_t   rssi;
+    uint8_t  reserved[3];
+};
+static_assert(sizeof(NodeStatus) == 40, "node status packet must be 40 bytes");
+
+inline void fillStatus(NodeStatus& s, uint8_t nodeId, uint8_t state, bool presence, bool fall,
+                       bool calibrating, bool csiOn, uint8_t resetReason, uint32_t seq,
+                       uint32_t uptimeMs, uint32_t freeHeap, float rateHz, float hr, float br,
+                       float motion, int8_t rssi) {
+    s.magic = MAGIC_STATUS;
+    s.node_id = nodeId;
+    s.state = state;
+    s.flags = (presence ? 1 : 0) | (fall ? 2 : 0) | (calibrating ? 4 : 0) | (csiOn ? 8 : 0);
+    s.reset_reason = resetReason;
+    s.seq = seq;
+    s.uptime_ms = uptimeMs;
+    s.free_heap = freeHeap;
+    s.rate_hz = rateHz;
+    s.heart_bpm = hr;
+    s.breathing_bpm = br;
+    s.motion = motion;
+    s.rssi = rssi;
+    s.reserved[0] = s.reserved[1] = s.reserved[2] = 0;
+}
+
 }  // namespace ruview_wire

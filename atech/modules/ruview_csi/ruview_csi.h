@@ -13,6 +13,11 @@
  *  - WiFi starts LATE (1.5 s after boot) so the display paints its first frame
  *    before the radio comes up.
  *  - csi_enable (NVS, default 1) lets a stage run WiFi-only.
+ *  - USB serial: all host I/O goes through atechUsb() (atech_usb.h), which the
+ *    build pipeline brings up ~2 s after boot instead of at boot (the boot-time
+ *    USB-CDC init deadlocks WiFi-linked firmware intermittently; see STAGES.md).
+ *  - A 40-byte NodeStatus packet goes to the sink at 1 Hz from loop(), so the
+ *    host can see the main loop is alive and read state/vitals without USB.
  *
  * Ported from github.com/ruvnet/RuView firmware/esp32-csi-node (MIT):
  *   csi_collector.c (CSI config, 50 Hz early gate, ADR-018 serialization),
@@ -121,6 +126,7 @@ private:
     void updateRate(uint32_t nowMs);
     void sendVitalsPacket(uint32_t nowMs);
     void publish();
+    void sendStatus(uint32_t nowMs);   // 1 Hz node status from loop() (liveness beacon)
     void onConnected();
     static void onActionStatic(const char* action, const char* value, void* ctx);
     void onAction(const char* action, const char* value);
@@ -147,6 +153,10 @@ private:
 
     // network (DSP task owns _udp while running)
     WiFiUDP     _udp;
+    WiFiUDP     _statusUdp;           // loop-side socket for the status beacon (never touched by the DSP task)
+    uint32_t    _lastStatusMs = 0;
+    uint32_t    _statusSeq = 0;
+    uint32_t    _statusTx = 0, _statusFail = 0;
     void*       _ping = nullptr;      // esp_ping_handle_t
     IPAddress   _sinkAddr;
     bool        _sinkValid = false;

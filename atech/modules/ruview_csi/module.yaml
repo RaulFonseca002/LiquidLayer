@@ -12,6 +12,9 @@ description: |
   written over USB with the set_wifi / set_sink actions, never in the firmware.
   Ported from github.com/ruvnet/RuView firmware/esp32-csi-node (MIT).
 
+  Host I/O: JSON events over USB (paced, one line per 200 ms) starting ~2 s after
+  boot, plus UDP to the sink: RuView ADR-018 CSI frames, 32-byte vitals at 1 Hz,
+  and a 40-byte node-status beacon at 1 Hz sent from loop() (main-loop liveness).
 driver:
   header: ruview_csi.h
   source: ruview_csi.cpp
@@ -33,6 +36,7 @@ templates:
     }
 
 events:
+  - {key: "{{ instance }}_health", type: state, value_type: string, description: "status beacon counters, USB state, heap, reset reason (diagnostic)"}
   - key: frame_rate
     type: sensor
     value_type: float
@@ -75,10 +79,10 @@ actions:
     description: 'Object {"ip": "192.168.1.20", "port": 5005, "node_id": 1} RuView aggregator; stored in NVS.'
   - key: "{{ instance }}_wifi_enable"
     value_type: int
-    description: "1 = start the radio (default), 0 = never start WiFi (stage test; module still runs). Persisted in NVS."
+    description: "1 = start the radio (default), 0 = never start WiFi (stage test; module still runs). Persisted in NVS. Runtime only, not persisted (defaults on at every boot)."
   - key: "{{ instance }}_csi_enable"
     value_type: int
-    description: "1 = capture CSI + run the DSP task + stream to the sink (default), 0 = WiFi only. Persisted in NVS."
+    description: "1 = capture CSI + run the DSP task + stream to the sink (default), 0 = WiFi only. Persisted in NVS. Runtime only, not persisted (defaults on at every boot)."
   - key: "{{ instance }}_scan"
     value_type: "null"
     description: "Scan 2.4 GHz networks; each SSID is reported as a log event (RSSI, channel, security)."

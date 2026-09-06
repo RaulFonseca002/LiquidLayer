@@ -48,6 +48,16 @@ def main() -> None:
     try:
         with atech.Board.connect(port=args.port) as board:
             print(f"# listening on {getattr(board.transport, 'port', args.port or 'auto')} for {args.seconds:g}s", file=sys.stderr)
+            if args.send:
+                # Opening the port resets an ESP32-S3, and hardened firmware brings its
+                # USB-CDC up ~2 s after boot: wait for the board's first event (up to 8 s)
+                # so the action is not sent into the void.
+                t_wait = time.monotonic() + 8.0
+                while time.monotonic() < t_wait:
+                    if board.transport.recv(timeout=0.5) is not None:
+                        break
+                else:
+                    print("# warning: no event from the board within 8 s; sending anyway", file=sys.stderr)
             for key, raw in args.send:
                 try:
                     value = json.loads(raw)

@@ -131,6 +131,9 @@ public:
     size_t println() { sim::serial_out("\n"); return 1; }
     size_t printf(const char* fmt, ...) { char b[1024]; va_list ap; va_start(ap, fmt); int n = std::vsnprintf(b, sizeof b, fmt, ap); va_end(ap); if (n > 0) sim::serial_out(std::string(b, (size_t)std::min<int>(n, (int)sizeof b - 1))); return n > 0 ? (size_t)n : 0; }
     operator bool() const { return true; }
+    // atech_usb.h routes to this object in the simulator; keep its extra API present.
+    void update() {}
+    bool ready() const { return true; }
 };
 inline HardwareSerial Serial;
 inline HardwareSerial Serial1;

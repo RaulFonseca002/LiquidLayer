@@ -12,13 +12,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV="$HERE/atech-env.sh"
 ATECH_HOME="${ATECH_HOME:-$HOME/.atech}"
 
-PROJECT=""; PORT=""; MONITOR=8; DO_UPLOAD=1; DO_BUILD=1
+PROJECT=""; PORT=""; MONITOR=8; DO_UPLOAD=1; DO_BUILD=1; STOCK_USB=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --port)      PORT="$2"; shift 2 ;;
     --monitor)   MONITOR="$2"; shift 2 ;;
     --no-upload) DO_UPLOAD=0; shift ;;
     --no-build)  DO_BUILD=0; shift ;;
+    --stock-usb) STOCK_USB=1; shift ;;
     -h|--help)   sed -n 2,9p "$0"; exit 0 ;;
     *)           PROJECT="$1"; shift ;;
   esac
@@ -79,16 +80,20 @@ fi
 # 1. validate
 step "validate" "$ENV" validate "$PROJECT"
 
-# 2. build
+# 2. generate -> harden -> compile (build_flash.py: purges stale generated code,
+#    builds with USB-CDC-on-boot OFF and routes Serial to the deferred USB wrapper;
+#    see atech_usb.h for why). --stock-usb reproduces the SDK's default build.
 if [ "$DO_BUILD" -eq 1 ]; then
-  step "build   " "$ENV" build "$PROJECT"
+  step "build   " "$ENV" python "$HERE/build_flash.py" "$PROJECT" --no-upload ${STOCK_USB:+--stock-usb}
   BIN="$(grep -oE 'firmware: .*firmware\.bin' "$LOG" | tail -1 | cut -d' ' -f2-)"
   [ -n "$BIN" ] && echo "       firmware: $BIN ($(du -h "$BIN" 2>/dev/null | cut -f1))"
+  HARD="$(grep -oE '^hardened: .*' "$LOG" | tail -1)"
+  [ -n "$HARD" ] && echo "       $HARD"
 fi
 
 # 3. upload
 if [ "$DO_UPLOAD" -eq 1 ]; then
-  step "upload  " "$ENV" upload "$PROJECT" --port "$PORT"
+  step "upload  " "$ENV" python "$HERE/build_flash.py" "$PROJECT" --upload-only --port "$PORT"
 fi
 
 # 4. listen

@@ -195,7 +195,7 @@ def return_stmt(rt: str, method: str, static: bool, class_name: str = "") -> str
     return "return {};"
 
 
-FAKE_HEADERS = {"Wire.h", "SPI.h", "freertos/FreeRTOS.h", "freertos/task.h", "freertos/queue.h", "esp_system.h"}
+FAKE_HEADERS = {"Wire.h", "SPI.h", "freertos/FreeRTOS.h", "freertos/task.h", "freertos/queue.h", "esp_system.h", "Preferences.h"}
 
 
 def generate_mock(header_text: str, class_name: str, module_id: str, foreign: list[str], siblings: set[str] = frozenset()) -> str:
@@ -491,7 +491,7 @@ int main(int argc, char** argv) {{
     if not cxx:
         sys.exit("no C++ compiler found (need g++/c++/clang++) — install build-essential or Xcode CLT to simulate")
     binary = simdir / "firmware_sim"
-    cmd = [cxx, "-std=c++17", "-O0", "-w", "-fmax-errors=8"] + [f"-I{d}" for d in include_dirs] + \
+    cmd = [cxx, "-std=c++17", "-O0", "-w", "-fmax-errors=8", "-DATECH_SIM=1"] + [f"-I{d}" for d in include_dirs] + \
           [str(simdir / "harness.cpp")] + [str(c) for c in native_cpps] + ["-o", str(binary)]
     t0 = time.time()
     cp = subprocess.run(cmd, capture_output=True, text=True)

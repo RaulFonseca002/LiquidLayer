@@ -2,7 +2,7 @@
 """csi_sink.py — minimal RuView-compatible UDP sink for validating the Atech node.
 
 Listens on UDP :5005 (RuView default), parses ADR-018 CSI frames (0xC5110001)
-and 32-byte vitals packets (0xC5110002), and prints a one-line summary per
+32-byte vitals packets (0xC5110002) and 40-byte node-status beacons (0xA11E0002), and prints a one-line summary per
 second: frames/s, subcarriers, RSSI, sequence gaps, vitals if present.
 
   python3 csi_sink.py [--port 5005] [--seconds 60] [--dump N]
@@ -17,10 +17,14 @@ import socket
 import struct
 import sys
 import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ruview_packets import parse  # noqa: E402
 
 MAGIC_CSI = 0xC5110001
 MAGIC_VITALS = 0xC5110002
-MAGIC_ALIVE = 0xA11E0001   # wifi_link loop beacon: seq, uptime_ms, free_heap
+MAGIC_STATUS = 0xA11E0002  # node status beacon, 40 bytes, 1 Hz, sent from loop() (see ruview_packets.py)
 
 
 def main() -> None:
@@ -46,6 +50,7 @@ def main() -> None:
     dumped = 0
     src = None
     vitals = None
+    status = None
     nsub = None
     rssi = None
     while time.time() < t_end:
@@ -70,9 +75,12 @@ def main() -> None:
                 if dumped < args.dump:
                     dumped += 1
                     print(f"  csi node={node} ant={nant} nsub={nsub} freq={freq}MHz seq={seq} rssi={r} nf={nf} iq_bytes={len(data) - 20}")
-            elif magic == MAGIC_ALIVE and len(data) == 16:
-                seq, up, heap = struct.unpack_from("<III", data, 4)
-                print(f"{time.strftime('%H:%M:%S')} ALIVE from={addr[0]} seq={seq} uptime={up/1000:.1f}s heap={heap//1024}K", flush=True)
+            elif magic == MAGIC_STATUS and len(data) == 40:
+                st = parse(data)
+                status = (f"STATUS seq={st['seq']} {st['state']} up={st['uptime_ms']/1000:.0f}s heap={st['free_heap']//1024}K "
+                          f"reset={st['reset_reason']} rate={st['rate_hz']:.1f}")
+                if st["reset_code"] == 6:
+                    status += "  <-- TASK-WDT REBOOT (a masked hang)"
             elif magic == MAGIC_VITALS and len(data) == 32:
                 node, flags, br, hr, r, npers = struct.unpack_from("<BBHIbB", data, 4)
                 motion, score, ts = struct.unpack_from("<ffI", data, 16)
@@ -85,6 +93,8 @@ def main() -> None:
             line = f"{time.strftime('%H:%M:%S')} from={src or '-'} csi={rate:5.1f}/s nsub={nsub} rssi={rssi} gaps={gaps} bad={bad}"
             if vitals:
                 line += "  vitals: " + vitals
+            if status:
+                line += "  " + status
             print(line, flush=True)
             t_win = now
             frames_win = 0

@@ -15,6 +15,7 @@
  *    Espressif's esp-csi examples. Probe-request injection is the fallback.
  */
 #include "ruview_csi.h"
+#include "atech_usb.h"
 #include "atech_actions.h"
 #include "ruview_wire.h"
 #include <string.h>
@@ -55,8 +56,8 @@ void RuViewCsi::loadConfig() {
     String ip = _prefs.getString("sink_ip", _sinkIp);
     _sinkPort = (uint16_t)_prefs.getUShort("sink_port", ruview_wire::DEFAULT_PORT);
     _nodeId = (uint8_t)_prefs.getUChar("node_id", 1);
-    _csiEnabled = _prefs.getUChar("csi_en", 1) != 0;
-    _wifiEnabled = _prefs.getUChar("wifi_en", 1) != 0;
+    _csiEnabled = true;    // runtime-only switch (csi_csi_enable); never persisted, same reason as wifi_en
+    _wifiEnabled = true;   // runtime-only switch (csi_wifi_enable); never persisted: a stale "radio off" in flash must not survive a reflash
     strncpy(_ssid, s.c_str(), sizeof _ssid - 1);
     strncpy(_pass, p.c_str(), sizeof _pass - 1);
     strncpy(_sinkIp, ip.c_str(), sizeof _sinkIp - 1);
@@ -80,6 +81,7 @@ void RuViewCsi::startWifi() {
 }
 
 void RuViewCsi::onConnected() {
+    _statusUdp.begin(ruview_wire::DEFAULT_PORT + 1);   // fixed local port: avoids an ephemeral-port clash with the DSP socket (both begin(0) collided)
     if (_csiEnabled) { enableCsi(); _state = State::Streaming; }
     else _state = State::Connected;
 }
@@ -230,7 +232,7 @@ void RuViewCsi::updateRate(uint32_t now) {
 
 void RuViewCsi::sendVitalsPacket(uint32_t nowMs) {
     ruview_wire::Vitals v;
-    ruview_wire::fillVitals(v, _nodeId, _edge.presence(), _edge.fall(), _edge.motionEnergy() > 0.02f,
+    ruview_wire::fillVitals(v, _nodeId, _edge.presence(), _edge.fall() && _edge.presence(), _edge.motionEnergy() > 0.02f,
                             _edge.breathingBpm(), _edge.heartRateBpm(), (int8_t)_lastRssi,
                             _edge.presence() ? 1 : 0, _edge.motionEnergy(), _edge.presenceScore(), nowMs);
     if (_udp.beginPacket(_sinkAddr, _sinkPort)) {
@@ -247,7 +249,7 @@ void RuViewCsi::publish() {
     s.rateHz = _rateHz;
     s.rssi = _lastRssi;
     s.presence = _edge.presence();
-    s.fall = _edge.fall();
+    s.fall = _edge.fall() && _edge.presence();   // a fall needs a person: never flag an empty room
     s.calibrating = _edge.calibrating();
     s.frames = _framesTotal;
     s.gateDrops = _gateDrops;
@@ -302,7 +304,7 @@ void RuViewCsi::injectProbe() {
 // ------------------------------------------------------------------ loop side
 
 void RuViewCsi::update() {
-    if (Serial) atech_actions::poll();   // serial I/O only while a host is connected
+    if (atechUsb().ready()) atech_actions::poll();   // read whenever the USB driver is up (reads are harmless with no host)
     uint32_t now = millis();
 
     switch (_state) {
@@ -316,10 +318,10 @@ void RuViewCsi::update() {
             else if (now - _connectStartMs > 30000) startWifi();   // retry association every 30 s
             break;
         case State::Connected:
-            if (WiFi.status() != WL_CONNECTED) { _state = State::Lost; _connectStartMs = now; }
+            if (WiFi.status() != WL_CONNECTED || (uint32_t)WiFi.localIP() == 0) { _state = State::Lost; _connectStartMs = now; }
             break;
         case State::Streaming:
-            if (WiFi.status() != WL_CONNECTED) { disableCsi(); _state = State::Lost; _connectStartMs = now; }
+            if (WiFi.status() != WL_CONNECTED || (uint32_t)WiFi.localIP() == 0) { disableCsi(); _state = State::Lost; _connectStartMs = now; }
             break;
         case State::Lost:
             if (WiFi.status() == WL_CONNECTED) onConnected();
@@ -336,6 +338,20 @@ void RuViewCsi::update() {
         _snap.rssi = isConnected() ? WiFi.RSSI() : 0;
         _snap.rateHz = 0;
     }
+    sendStatus(now);
+}
+
+void RuViewCsi::sendStatus(uint32_t now) {
+    if (!isConnected() || !_sinkValid || (uint32_t)WiFi.localIP() == 0 || now - _lastStatusMs < 1000) return;
+    _lastStatusMs = now;
+    ruview_wire::NodeStatus st;
+    ruview_wire::fillStatus(st, _nodeId, (uint8_t)_state, _snap.presence, _snap.fall, _snap.calibrating,
+                            _csiOn, (uint8_t)esp_reset_reason(), _statusSeq++, now, (uint32_t)ESP.getFreeHeap(),
+                            _snap.rateHz, _snap.hr, _snap.br, _snap.motion, (int8_t)_snap.rssi);
+    bool ok = _statusUdp.beginPacket(_sinkAddr, _sinkPort)
+              && _statusUdp.write((const uint8_t*)&st, sizeof st) == sizeof st
+              && _statusUdp.endPacket();
+    if (ok) _statusTx++; else _statusFail++;
 }
 
 bool RuViewCsi::tick1Hz() {
@@ -355,7 +371,7 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
         _logCount--;
         return n > 0 && (size_t)n < cap;
     }
-    static const char* keys[7] = {"frame_rate", "rssi", "heart_rate", "breathing_rate", "activity", "presence", "link"};
+    static const char* keys[8] = {"frame_rate", "rssi", "heart_rate", "breathing_rate", "activity", "presence", "link", "health"};
     const char* type = (_evIdx >= 5) ? "state" : "sensor";
     int n = snprintf(out, cap, "{\"type\":\"event\",\"payload\":{\"event_type\":\"%s\",\"key\":\"%s_%s\",\"value\":",
                      type, _name, keys[_evIdx]);
@@ -369,12 +385,15 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
         case 3: m = snprintf(out + n, left, "%.1f,\"unit\":\"bpm\"", _snap.br); break;
         case 4: m = snprintf(out + n, left, "%.3f", _snap.motion); break;
         case 5: m = snprintf(out + n, left, "%d", _snap.presence ? 1 : 0); break;
-        default: m = snprintf(out + n, left, "\"%s\"", stateName()); break;
+        case 6: m = snprintf(out + n, left, "\"%s\"", stateName()); break;
+        default: m = snprintf(out + n, left, "\"status_tx=%lu status_fail=%lu usb_up=%d usb_host=%d heap=%u reset=%d\"",
+                              (unsigned long)_statusTx, (unsigned long)_statusFail, (int)atechUsb().ready(), (int)(bool)atechUsb(),
+                              (unsigned)ESP.getFreeHeap(), (int)esp_reset_reason()); break;
     }
     if (m < 0 || (size_t)m >= left) return false;
     n += m; left = cap - (size_t)n;
     m = snprintf(out + n, left, ",\"source\":\"ruview_csi\"}}");
-    _evIdx = (uint8_t)((_evIdx + 1) % 7);
+    _evIdx = (uint8_t)((_evIdx + 1) % 8);
     return m > 0 && (size_t)m < left;
 }
 
@@ -409,8 +428,7 @@ void RuViewCsi::setSink(const char* ip, uint16_t port, uint8_t nodeId) {
 }
 
 void RuViewCsi::setWifiEnabled(bool on) {
-    _wifiEnabled = on;
-    _prefs.putUChar("wifi_en", on ? 1 : 0);
+    _wifiEnabled = on;   // not persisted (see loadConfig)
     if (!on) {
         disableCsi();
         WiFi.disconnect(true, false);
@@ -424,7 +442,7 @@ void RuViewCsi::setWifiEnabled(bool on) {
 
 void RuViewCsi::setCsiEnabled(bool on) {
     _csiEnabled = on;
-    _prefs.putUChar("csi_en", on ? 1 : 0);
+    // not persisted (see loadConfig)
     if (on && _state == State::Connected) onConnected();
     else if (!on && _state == State::Streaming) { disableCsi(); _state = State::Connected; }
     logEvent(on ? "csi: enabled" : "csi: disabled (WiFi only)");

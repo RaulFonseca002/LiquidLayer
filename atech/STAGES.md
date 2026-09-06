@@ -74,3 +74,38 @@ Root cause: the ESP32-S3 USB-Serial-JTAG HWCDC driver, auto-initialised at boot 
 
 Cost of the raw fix: with CDC_ON_BOOT=0, `Serial` is UART0, not USB — so `atech monitor`/`send` over USB break. Production fix must KEEP USB serial: build CDC_ON_BOOT=0 and bring the USB-CDC up DELIBERATELY after boot/settle (USBSerial/HWCDC begin from setup once past the fragile window), or equivalently defer/guard the CDC init. To design + validate next, then report upstream to Atech.
 
+## Rebuild v3 on the confirmed fix (2026-09-06 ~02:50)
+
+THE FIX (skill pipeline, applied to every build): scripts/build_flash.py now
+generates -> purges stale build/lib+src (prevents linker binding a wrong stale
+module object) -> sets ARDUINO_USB_CDC_ON_BOOT=0 -> routes the generated code's
+Serial to atechUsb() (scripts/atech_usb.h), which brings the USB-CDC up ~2 s
+after boot from loop() instead of at boot. UART0 (port-11 pins) never starts.
+deploy.sh drives build_flash for both build and upload; --stock-usb reproduces
+the SDK default. Verified on hardware: hardened firmware boots reliably, health
+event reports usb_up=1 usb_host=1, USB events flow after the deferred bring-up.
+
+NODE: ruview_csi kept (verified DSP), watchdog OFF, wifi_enable/csi_enable made
+runtime-only (a stale "off" in flash must not survive a reflash), fall gated on
+presence, +40-byte NodeStatus beacon (magic 0xA11E0002) sent 1 Hz from loop()
+for headless liveness, +health event, IP guards (no streaming/beacon without a
+real IP). Diagnostic probe modules and unproven drafts removed (in git history).
+
+HOST: atech/host/ruview_packets.py (shared CSI/vitals/status parser),
+liquid_bridge.py (node UDP -> Liquid ExternalObservation NDJSON; --selftest
+passes: 17 obs, monotonic revisions, correct keys), csi_sink.py decodes status
+and flags task-WDT reboots.
+
+VERIFIED tonight: fix boots reliably; simulator passes; USB events work; CSI
+streamed to the host at 20/s at 02:41 on this hardened firmware.
+PENDING (needs owner / stable WiFi):
+  1. Acceptance gate: >=15 cold resets (Restart button), WDT off, zero freezes,
+     on-screen "wdt" count stays 0 and "r" reads 1. Owner presses.
+  2. Live end-to-end re-verify (CSI >=15/s + status/vitals via liquid_bridge):
+     blocked after 02:44 by WiFi failing to associate despite "Fonseca" at -35 dBm
+     (13 networks, crowded ch6) — an association wedge after many rapid reflash
+     resets, not a code change (same firmware streamed at 02:41). A power cycle
+     and a few minutes should clear it; then run:
+       python3 atech/host/csi_sink.py --seconds 60
+       python3 atech/host/liquid_bridge.py --seconds 60
+
