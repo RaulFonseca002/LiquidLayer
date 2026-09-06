@@ -51,3 +51,16 @@ FINDING (tooling): the SDK build tree (`<project>/build/lib/`) is NOT purged bet
 | Locator run | PREV phase | reason | wdt tally | reading |
 |---|---|---|---|---|
 | (pending owner) | | | | |
+
+### Phase 1 result (2026-09-06 ~01:35) — ROOT CHARACTERISED: boot-time settle race
+
+Controlled flashes, all clean/purged builds, watchdog OFF (a hang freezes visibly):
+- S1b control (stock display + original ruview_csi, radio off, minimal setup, delay 50 ms): logo then black, FROZEN. Bug is real and reproducible in a clean build (the build-dir purge did NOT fix it).
+- NS control (same, but ALL Serial/HWCDC access removed from the module loop path): identical freeze. USB-CDC/serial is NOT the cause.
+- Locator (ruview_csi_hl, radio off, WDT off, delay 2500 ms before loop): reaches "locator RUNNING" reliably.
+- No-delay locator (identical, delay cut to 50 ms): freezes on the boot card, never reaches loop.
+
+Conclusion: with the WiFi/lwIP stack linked, starting loop() too soon after boot deadlocks the board, independent of serial, radio (off), and CSI logic (does nothing). A ~2.5 s settle before the first loop makes it reliable; ~50 ms does not. Ruled out this session: display driver / setRotation / double-SWRESET, NeoPixel/RMT, speaker, button, watchdog, binary size, NVS-at-boot (begin completes: the black frame paints after it), serial output, per-loop serial polling, and build-dir contamination (separate tooling bug, fixed).
+
+Open: identify WHAT must be ready (a background task/timer/one-time init from the linked stack). Next: delay-threshold sweep (500/1000/1500/2000 ms) to find the settle boundary and implicate the actor, then replace the blind delay with a wait-on-actual-ready condition (the real fix, not a delay).
+
