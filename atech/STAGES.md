@@ -27,7 +27,7 @@ reset shows as 0/UNKNOWN.
 | LC | control: instrumented base + the real `ruview_csi` (radio off, serial gated) = S1b + WDT/boot card/LED | **PASS** | 2026-09-06 00:22 | the S1b failure does NOT reproduce on the instrumented base. Candidates for what fixed it: 2 s boot-card pause after display init (LCnd tests), NeoPixel blink from loop, WDT |
 | LCnd | LC without the 2 s boot-card pause | **PASS** | 2026-09-06 00:28 | pause not needed. NOTE: the `st7735_tft` override (extra SWRESET before init) has been active in every build since L3 (created 23:38) — a confound and a fix candidate |
 | LCndno | LCnd built with the STOCK st7735 driver (single SWRESET) — no override | **PASS** | 2026-09-06 00:33 | double SWRESET is NOT the fixer. Left vs S1b: NeoPixel present + blinking from loop, loop WDT, boot card frame/RTC counter |
-| LCndno-noLED | LCndno without the NeoPixel module (= S1b + WDT + boot card) | pending | | |
+| LCndno-noLED | LCndno without the NeoPixel module (= S1b + WDT + boot card) | **PASS** | 2026-09-06 00:38 | the LED is irrelevant |
 | LCndno-noWDT | LCndno without enableLoopWDT (= S1b + LED + boot card) | pending | | |
 | L4 | L3 + WiFi station late start + 1 Hz UDP alive beacon from loop | pending | | radio; beacon = loop liveness over the network |
 | L5 | L4 + CSI arm + ring + DSP task (no UDP) | pending | | |
