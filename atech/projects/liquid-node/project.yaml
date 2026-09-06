@@ -9,7 +9,9 @@ modules:
   - {id: speaker,    instance: spk,  ports: [13, 14]}
 code:
   setup: |
-    tftA.setRotation(1);
+    // Do NOT call tftA.setRotation() here: the SDK driver initialises this
+    // 160x80 panel for rotation 3 with a BGR MADCTL override, and user-side
+    // rotation is the documented trouble spot for this panel.
     led.setBrightness(40);
   loop: |
     // ---- NeoPixel heartbeat pulse: brighten on each detected beat, decay otherwise.
@@ -54,6 +56,12 @@ code:
     tftA.setTextSize(1);
     tftA.setTextColor(ST7735_TFT::COLOR_CYAN);
     tftA.setCursor(2, 2);
+
+    // Heartbeat: a 6 px square in the bottom-right corner that alternates colour
+    // on every redraw, so "alive" vs "frozen" is visible without serial.
+    static bool hb = false;
+    hb = !hb;
+    tftA.fillRect(154, 74, 6, 6, hb ? ST7735_TFT::COLOR_YELLOW : 0x2104);
 
     if (csi.state() != RuViewCsi::State::Streaming) {
       tftA.print("RuView CSI  connecting");

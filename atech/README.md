@@ -93,6 +93,20 @@ are code-complete and validated in the host simulator; they are not yet
 hardware-verified because the display, LED and speaker modules are not plugged
 in. These vitals are RuView's heuristic Tier-2, noisy and not medical.
 
+## The frozen-display incident (fixed 2026-09-05)
+
+Symptom: after any reset the TFT showed only the Atech splash, while WiFi,
+CSI and serial events ran normally underneath. Root cause found by bisect:
+`tftA.setRotation(1)` in user setup. The SDK driver initialises this 160x80
+panel for rotation 3 with a BGR MADCTL override; the user-side rotation
+re-applied a different MADCTL and the canvas frames stopped reaching the
+visible panel. Fix: no user-side `setRotation()`, draw for the default
+orientation, and a heartbeat square on every screen so alive vs frozen is
+visible at a glance. Two false leads on the way, now documented: the button in
+the Restart footprint *is* a working hardware reset (the USB device simply
+re-enumerates under a new name, which a naive serial watcher misses), and the
+60 s "calibrating" is presence-only ambient learning, restarted by every reset.
+
 ## Upstream notes (RuView, MIT)
 
 Ported from `firmware/esp32-csi-node`: CSI config (S3 legacy layout), 50 Hz
@@ -125,3 +139,9 @@ builds on Arduino core 2.0.17 (ESP-IDF 4.4) instead of ESP-IDF 5.4:
   reboot and a WiFi reconnect (about 3 s).
 - The SDK's `Action` model rejects `null`; send `1` for value-less actions
   (`csi_scan 1`, `csi_calibrate 1`).
+- The device name can change after a reset (`/dev/ttyACM0` → `/dev/ttyACM1`).
+  Use `monitor.py --follow` / `board_logger.py` to observe across resets.
+- `Speaker::begin()` leaves `mck_io_num` unset (0), so I2S claims GPIO0 as MCLK.
+  Harmless for us; worth an upstream report.
+- `(Restart)` on the layout is the chip's EN line: a button module plugged there
+  is only a hardware reset and restarts the presence calibration each press.

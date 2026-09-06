@@ -103,10 +103,38 @@ bash $S/atech-env.sh --upgrade                              # newer SDK
 - `scripts/catalog.py` — module/board discovery incl. each module's published C++ API
 - `scripts/describe_project.py` — ASCII board layout + module→port table + placement check
 - `scripts/deploy.sh` — validate → build → upload → listen, with logs and failure hints
-- `scripts/monitor.py` — bounded, cross-platform event listener
+- `scripts/monitor.py` — bounded, cross-platform event listener (`--send` acks on the same connection, `--follow` reconnecting)
+- `scripts/board_logger.py` — follow the board across resets and device renames
 - `scripts/simulate.py` — host-side firmware simulation with scripted inputs and call expectations
 - `scripts/atech_lint.py` — static checks on the `code:` block (shared by describe and simulate)
 - `scripts/sim/` — fake `Arduino.h`, `esp_system.h` and the recording runtime used by the simulator
+
+## Findings worth knowing (Atech SDK 1.0.0a7, 14-port board, 2026-09-05)
+
+Learned the hard way while building a WiFi-sensing node; each one is now a
+rule or a check in this skill.
+
+- **Display:** calling `setRotation()` on the ST7735 160x80 from user code left
+  the panel showing only the Atech boot splash while the firmware kept running.
+  The driver already tunes rotation 3 + BGR. The lint flags it; every screen
+  gets a heartbeat square so "frozen" is visible.
+- **Serial resets the board:** opening the USB port restarts the chip (S3
+  USB-Serial-JTAG, not disable-able) and the device may come back under a new
+  name. `monitor.py --follow` reconnects across both.
+- **Actions:** the open SDK declares actions but generates no serial reader
+  (our modules ship `atech_actions.h`); values arrive JSON-encoded twice; the
+  SDK rejects `null`, so send `1`.
+- **Output pacing:** codegen sets a zero USB TX timeout, so bursts of lines are
+  truncated. Emit at most one line per loop pass.
+- **Button template:** it consumes `wasPressed()` before user code; poll
+  `isPressed()` and detect edges yourself.
+- **Reset footprint:** the `(Restart)` position is the EN line, not a port. A
+  button module there is only a hardware reset.
+- **Speaker driver:** `Speaker::begin()` never sets `mck_io_num`, so I2S claims
+  GPIO0 as MCLK (harmless today, worth reporting).
+- **Radio:** on Arduino core 2.0.17, promiscuous mode silences the CSI callback;
+  CSI only comes from station-addressed frames, so a 20 Hz ping to the gateway
+  is the traffic source.
 
 ## Using it from another agent
 

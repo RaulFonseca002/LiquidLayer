@@ -33,7 +33,7 @@ minutes); later builds take seconds.
 bash $SKILL_DIR/scripts/atech-env.sh ports
 ```
 
-- Exactly one device: use it as `PORT`.
+- Exactly one device: use it as `PORT`. **The name can change after a reset** (`/dev/ttyACM0` may come back as `/dev/ttyACM1`); rerun `ports` after any reset or flash.
 - Several: pick the one whose description mentions Espressif / USB JTAG / vid 0x303a, otherwise ask the user which one.
 - None: stop and tell the user to connect the board with a USB-C *data* cable. Offer `--no-upload` to build only.
 
@@ -83,6 +83,8 @@ Rules for `code:` (they come from the SDK authors):
 - Only call methods shown in each module's `usage`. Instance names are the C++ variable names.
 - **Module templates run before your code in `loop()` and consume one-shot flags.** If a module's template already calls `x.wasPressed()` (the button does), your own `x.wasPressed()` returns false except on contact bounce. Poll state instead (`isPressed()`, `getState()`), keep a `static bool last`, detect the edge yourself, and debounce with `millis()` (30 ms). The code check in step 4 flags this.
 - No `delay()` in `loop` — use `millis()` timers so events keep flowing.
+- **Displays (`st7735_tft`): never call `setRotation()` from `code:`.** The driver initialises this 160x80 panel for its tuned orientation (rotation 3 with a BGR colour override). A user-side rotation left the panel showing only the Atech boot splash forever while the firmware ran fine underneath. Draw for the default orientation; the code check flags this.
+- **Every screen draws a heartbeat**: a small square that alternates colour on each redraw (e.g. `fillRect(154, 74, 6, 6, hb ? COLOR_YELLOW : 0x2104)`). The driver's boot splash persists until the first `display()`, so without a heartbeat a frozen panel is indistinguishable from a booting one.
 - Modules already emit their own events; only add `Serial.println` of `{"type":"event","payload":{...}}` for custom state.
 - Never place anything on a reserved port; double-width modules need one of the printed adjacent pairs.
 - Never hand-edit anything under `build/` — it is regenerated every build.
@@ -137,6 +139,13 @@ then report.
 Flashing with modules unplugged is fine for GPIO modules. I2C modules
 (sensors, displays) are probed at boot, so tell the user to press the board's
 Restart button after seating them if events for those modules are missing.
+
+Serial facts that shape every observation:
+- **Opening the serial port resets the board** (ESP32-S3 USB-Serial-JTAG; cannot be disabled). Every `monitor`, `send` or flash restarts the firmware and any calibration it was doing.
+- To watch across resets use `monitor.py --follow` (a reconnecting logger that survives disconnects and device renames); never chain ad-hoc port opens.
+- `atech send` needs a value; the SDK rejects `null`, so send `1` for value-less actions.
+- If the screen shows **only the Atech logo** after boot while events still flow, the loop is not painting the panel: check for a user-side `setRotation()` first.
+- The `(Restart)` and `(USB-C)` positions on the layout are fixed board hardware. A button module plugged into the Restart footprint is just a hardware reset — it cannot be read by code and every press restarts calibration. Software buttons go on a real port.
 
 ## 6. Report
 

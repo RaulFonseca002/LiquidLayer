@@ -4,7 +4,9 @@ describe_project.py and simulate.py. Import-only; no CLI.
 Catches the traps we have actually hit:
   * the module's own template consumes a one-shot flag (wasPressed & co.)
     before the user loop runs, so the user's call almost never fires;
-  * delay() in loop, which stalls every module's event stream.
+  * delay() in loop, which stalls every module's event stream;
+  * setRotation() on the st7735_tft from user code, which blanked the panel
+    (only the boot splash stayed) on the 14port board.
 """
 from __future__ import annotations
 
@@ -13,8 +15,14 @@ import re
 ONE_SHOT = re.compile(r"^(was|consume|take|pop|poll|read[A-Z]\w*Event|get\w*Event|\w+Changed)")
 
 
+def _strip_comments(code: str) -> str:
+    """Drop // and /* */ comments so prose about a call never counts as the call."""
+    code = re.sub(r"/\*.*?\*/", "", code or "", flags=re.S)
+    return re.sub(r"//[^\n]*", "", code)
+
+
 def _calls(code: str, instance: str) -> set[str]:
-    return set(re.findall(r"\b" + re.escape(instance) + r"\s*\.\s*(\w+)\s*\(", code or ""))
+    return set(re.findall(r"\b" + re.escape(instance) + r"\s*\.\s*(\w+)\s*\(", _strip_comments(code)))
 
 
 def _render(template: str, instance: str) -> str:
@@ -24,7 +32,7 @@ def _render(template: str, instance: str) -> str:
 def lint_project(project) -> list[tuple[str, str]]:
     """Return [(level, message)], level in {'WARNING', 'INFO'}."""
     out: list[tuple[str, str]] = []
-    user_code = (getattr(project, "loop_code", "") or "") + "\n" + (getattr(project, "setup_code", "") or "")
+    user_code = _strip_comments((getattr(project, "loop_code", "") or "") + "\n" + (getattr(project, "setup_code", "") or ""))
 
     for pm in getattr(project, "modules", []):
         inst = pm.instance
@@ -41,7 +49,13 @@ def lint_project(project) -> list[tuple[str, str]]:
             else:
                 out.append(("INFO", f"{inst}.{m}() is also called by the {pm.module_id} template each loop; fine unless it has side effects."))
 
-    if re.search(r"\bdelay\s*\(", project.loop_code or ""):
+    for pm in getattr(project, "modules", []):
+        if pm.module_id == "st7735_tft" and re.search(r"\b" + re.escape(pm.instance) + r"\s*\.\s*setRotation\s*\(", user_code):
+            out.append(("WARNING",
+                        f"{pm.instance}.setRotation() from code: the st7735_tft driver initialises this 160x80 panel for "
+                        f"rotation 3 with a BGR override; a user-side rotation left the panel stuck on the boot splash while "
+                        f"the firmware ran. Remove it and draw for the default orientation."))
+    if re.search(r"\bdelay\s*\(", _strip_comments(project.loop_code or "")):
         out.append(("WARNING", "delay() inside loop blocks every module's event stream and button polling; use a millis() timer."))
     return out
 

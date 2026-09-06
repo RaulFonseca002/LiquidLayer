@@ -26,10 +26,20 @@ def main() -> None:
     ap.add_argument("--seconds", type=float, default=8.0)
     ap.add_argument("--max-lines", type=int, default=40)
     ap.add_argument("--key", default=None, help="comma-separated event keys to keep")
+    ap.add_argument("--follow", action="store_true",
+                    help="follow the board forever across resets/renames (uses board_logger.py); ignores --seconds")
     ap.add_argument("--send", nargs=2, action="append", metavar=("KEY", "VALUE"), default=[],
                     help="send an action right after connecting, then keep listening (repeatable). "
                          "Acks arrive on this same connection, unlike `atech send` which closes the port.")
     args = ap.parse_args()
+    if args.follow:
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+        from board_logger import follow
+        try:
+            follow(None, args.port, False)
+        except KeyboardInterrupt:
+            pass
+        return
     keys = {k.strip() for k in args.key.split(",")} if args.key else None
 
     deadline = time.monotonic() + args.seconds
