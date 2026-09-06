@@ -1,0 +1,41 @@
+id: wifi_link
+name: "WiFi link (station + alive beacon)"
+category: connectivity
+interface: gpio
+size: 1
+description: |
+  Joins a 2.4 GHz network with credentials stored in NVS (set over USB with the
+  set_wifi action), starting 1.5 s after boot so the display paints first. Sends
+  a 1 Hz UDP "alive" beacon (magic 0xA11E0001) from loop() to the configured sink
+  so the host can see the main loop is running without touching the serial port.
+  No sensing here; csi_sense builds on it. Occupies a port slot, uses no pins.
+driver: {header: wifi_link.h, source: wifi_link.cpp, class_name: WifiLink}
+templates:
+  globals: |
+    WifiLink {{ instance }}("{{ instance }}");
+  setup: |
+    {{ instance }}.begin();
+  loop: |
+    {{ instance }}.update();
+    if (Serial) {
+      char ev[160];
+      if ({{ instance }}.nextEvent(ev, sizeof ev)) Serial.println(ev);
+    }
+events:
+  - {key: link, type: state, value_type: string, description: "unconfigured | idle | connecting | connected | lost"}
+  - {key: rssi, type: sensor, value_type: int, unit: dBm, description: "station RSSI"}
+actions:
+  - {key: "{{ instance }}_set_wifi", value_type: json, description: 'Object {"ssid":"...","pass":"..."} stored in NVS; reconnects.'}
+  - {key: "{{ instance }}_set_sink", value_type: json, description: 'Object {"ip":"192.168.1.20","port":5005} for beacons and sensing; stored in NVS.'}
+  - {key: "{{ instance }}_scan", value_type: int, description: "Scan 2.4 GHz networks; results as log events (send 1)."}
+  - {key: "{{ instance }}_diag", value_type: int, description: "Report ip/gateway/sink/heap/state as log events (send 1)."}
+lib_deps: []
+usage: |
+  // Public API of WifiLink — the instance is `{{ instance }}`.
+  // begin() already ran; update() runs every loop and sends the alive beacon.
+  const char* s = {{ instance }}.stateName();   // unconfigured|idle|connecting|connected|lost
+  bool up      = {{ instance }}.isConnected();
+  int  rssi    = {{ instance }}.rssi();
+  const char* ip = {{ instance }}.ipString();    // "0.0.0.0" until connected
+  const char* sink = {{ instance }}.sinkIp();
+  uint32_t beacons = {{ instance }}.beaconsSent();

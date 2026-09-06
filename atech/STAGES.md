@@ -22,7 +22,7 @@ reset shows as 0/UNKNOWN.
 | L1' | L0 + `if (Serial) {}` every loop, no prints | pending | | isCDC_Connected() pokes the USB FIFO on every call |
 | L2 | L0 + `link_probe` (links WiFi/lwIP/ping, 608 KB, does nothing) | **PASS** | 2026-09-05 23:48 | binary size, boot length and the linked libraries are innocent |
 | L3 | L2 + Preferences (NVS) open+read at boot | **PASS** | 2026-09-06 00:02 | NVS at boot is innocent. Left from the old module: per-loop USB-CDC polling (L3s) and 27 KB statics + global ctors (L3g); then the radio (L4) |
-| L3s | L3 + per-loop `if (Serial)` + `Serial.available()/read()` | pending | | |
+| L3s | L3 + per-loop `if (Serial)` + `Serial.available()/read()` | **PASS** | 2026-09-06 00:08 | per-loop USB-CDC polling is innocent |
 | L3g | L3 + `bulk_probe` (old module's static footprint + WiFiUDP/Preferences ctors, idle) | pending | | |
 | L4 | L3 + WiFi station late start + 1 Hz UDP alive beacon from loop | pending | | radio; beacon = loop liveness over the network |
 | L5 | L4 + CSI arm + ring + DSP task (no UDP) | pending | | |

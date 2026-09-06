@@ -20,6 +20,7 @@ import time
 
 MAGIC_CSI = 0xC5110001
 MAGIC_VITALS = 0xC5110002
+MAGIC_ALIVE = 0xA11E0001   # wifi_link loop beacon: seq, uptime_ms, free_heap
 
 
 def main() -> None:
@@ -69,6 +70,9 @@ def main() -> None:
                 if dumped < args.dump:
                     dumped += 1
                     print(f"  csi node={node} ant={nant} nsub={nsub} freq={freq}MHz seq={seq} rssi={r} nf={nf} iq_bytes={len(data) - 20}")
+            elif magic == MAGIC_ALIVE and len(data) == 16:
+                seq, up, heap = struct.unpack_from("<III", data, 4)
+                print(f"{time.strftime('%H:%M:%S')} ALIVE from={addr[0]} seq={seq} uptime={up/1000:.1f}s heap={heap//1024}K", flush=True)
             elif magic == MAGIC_VITALS and len(data) == 32:
                 node, flags, br, hr, r, npers = struct.unpack_from("<BBHIbB", data, 4)
                 motion, score, ts = struct.unpack_from("<ffI", data, 16)
