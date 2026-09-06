@@ -61,7 +61,7 @@ events:
   - key: link
     type: state
     value_type: string
-    description: "unconfigured | connecting | streaming | lost"
+    description: "unconfigured | idle | connecting | connected (WiFi only) | streaming (WiFi + CSI) | lost"
 
 actions:
   - key: "{{ instance }}_set_wifi"
@@ -70,6 +70,9 @@ actions:
   - key: "{{ instance }}_set_sink"
     value_type: json
     description: 'Object {"ip": "192.168.1.20", "port": 5005, "node_id": 1} RuView aggregator; stored in NVS.'
+  - key: "{{ instance }}_csi_enable"
+    value_type: int
+    description: "1 = capture CSI + run the DSP task + stream to the sink (default), 0 = WiFi only. Persisted in NVS."
   - key: "{{ instance }}_scan"
     value_type: "null"
     description: "Scan 2.4 GHz networks; each SSID is reported as a log event (RSSI, channel, security)."
@@ -97,8 +100,10 @@ usage: |
   // module template every loop. Credentials come from NVS, written over USB:
   //   atech send {{ instance }}_set_wifi '{"ssid":"MyWiFi","pass":"secret"}'
   //   atech send {{ instance }}_set_sink '{"ip":"192.168.1.20","port":5005}'
-  const char* s = {{ instance }}.stateName();      // "unconfigured" | "connecting" | "streaming" | "lost"
-  bool up      = {{ instance }}.isConnected();     // WiFi associated
+  const char* s = {{ instance }}.stateName();      // unconfigured|idle|connecting|connected|streaming|lost
+  bool up      = {{ instance }}.isConnected();     // WiFi associated (connected or streaming)
+  bool sensing = {{ instance }}.isStreaming();     // CSI capture running (csi_enable 1)
+  // Sensing runs on its own task; every getter below reads a snapshot refreshed by update().
   float hz     = {{ instance }}.frameRateHz();     // CSI frames/s (aim for >= 15)
   int   rssi   = {{ instance }}.rssi();            // dBm of last frame
   float act    = {{ instance }}.activity();        // motion energy, 0 = still

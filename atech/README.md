@@ -93,19 +93,23 @@ are code-complete and validated in the host simulator; they are not yet
 hardware-verified because the display, LED and speaker modules are not plugged
 in. These vitals are RuView's heuristic Tier-2, noisy and not medical.
 
-## The frozen-display incident (fixed 2026-09-05)
+## Rebuild rules (after the frozen-display incident, 2026-09-05)
 
-Symptom: after any reset the TFT showed only the Atech splash, while WiFi,
-CSI and serial events ran normally underneath. Root cause found by bisect:
-`tftA.setRotation(1)` in user setup. The SDK driver initialises this 160x80
-panel for rotation 3 with a BGR MADCTL override; the user-side rotation
-re-applied a different MADCTL and the canvas frames stopped reaching the
-visible panel. Fix: no user-side `setRotation()`, draw for the default
-orientation, and a heartbeat square on every screen so alive vs frozen is
-visible at a glance. Two false leads on the way, now documented: the button in
-the Restart footprint *is* a working hardware reset (the USB device simply
-re-enumerates under a new name, which a naive serial watcher misses), and the
-60 s "calibrating" is presence-only ambient learning, restarted by every reset.
+The node is being rebuilt stage by stage; see `STAGES.md` for the gates. What
+the incident taught, now design rules:
+
+- A warm chip reset does not reset the TFT panel (no reset line, keeps power);
+  only a cold power cycle does. So every stage is gated on **warm resets**:
+  press the board's reset, the heartbeat must stay alive for 60 s, twice.
+- `loop()` only renders (≤2 Hz) and polls actions. All CSI work (ring drain,
+  DSP, UDP, vitals packet) runs in a dedicated task on core 0 and publishes a
+  snapshot; `loop()` reads it. This also removes the 70 % ring drops.
+- WiFi starts 1.5 s after boot so the first frame paints before the radio.
+  `csi_enable` (NVS, action `csi_csi_enable 0|1`) allows a WiFi-only stage.
+- Nobody opens the serial port during a soak; opening it resets the board.
+  Use `monitor.py --follow` at announced checkpoints only.
+- A user-side `setRotation()` on the panel was an early suspect; it was not
+  the root cause but stays linted as a documented trouble spot.
 
 ## Upstream notes (RuView, MIT)
 

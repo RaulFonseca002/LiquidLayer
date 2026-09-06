@@ -89,6 +89,8 @@ Rules for `code:` (they come from the SDK authors):
 - Never place anything on a reserved port; double-width modules need one of the printed adjacent pairs.
 - Never hand-edit anything under `build/` — it is regenerated every build.
 - Keep it small. A few lines of behaviour is the intended shape.
+- **Keep `loop()` short.** Anything heavier than a few hundred microseconds (signal processing, network sends, big buffers) belongs in its own FreeRTOS task that publishes results for `loop()` to read. A long `loop()` starves everything else and interleaves badly with a bit-banged display refresh.
+- **Build in stages and gate each one with a warm reset.** Add one module or behaviour at a time; after flashing, the user presses the board's reset once and watches for 60 s: text + heartbeat alive = pass. Never open the serial port during that watch (opening it resets the board). Cold power cycles do not count as a pass: the display panel keeps power across a chip reset and only a warm reset shows the real state.
 
 Prefer ports that are physically convenient: put a display or LED grid where
 it faces the user, motors at corners (the board notes list them), sensors away

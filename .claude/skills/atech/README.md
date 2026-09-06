@@ -114,10 +114,12 @@ bash $S/atech-env.sh --upgrade                              # newer SDK
 Learned the hard way while building a WiFi-sensing node; each one is now a
 rule or a check in this skill.
 
-- **Display:** calling `setRotation()` on the ST7735 160x80 from user code left
-  the panel showing only the Atech boot splash while the firmware kept running.
-  The driver already tunes rotation 3 + BGR. The lint flags it; every screen
-  gets a heartbeat square so "frozen" is visible.
+- **Display:** the ST7735 160x80 panel keeps power across a chip reset and has
+  no reset line to the chip, so a warm reset can leave it showing only the
+  Atech boot splash while the firmware runs on. A cold power cycle hides the
+  problem. Rebuild stage by stage, gate with warm resets, keep `loop()` short,
+  draw a heartbeat so "frozen" is visible. (A user-side `setRotation()` was an
+  early suspect; it was not the root cause but stays linted as a trouble spot.)
 - **Serial resets the board:** opening the USB port restarts the chip (S3
   USB-Serial-JTAG, not disable-able) and the device may come back under a new
   name. `monitor.py --follow` reconnects across both.

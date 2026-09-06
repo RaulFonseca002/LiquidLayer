@@ -172,7 +172,7 @@ def parse_param(p: str, idx: int) -> tuple[str, str, str]:
     return (p, f"a{idx}", default)
 
 
-def return_stmt(rt: str, method: str, static: bool) -> str:
+def return_stmt(rt: str, method: str, static: bool, class_name: str = "") -> str:
     rt_clean = re.sub(r"\b(const|volatile|inline|virtual|static)\b", "", rt).strip()
     self_ = "nullptr" if static else "this"
     if rt_clean in ("", "void"):
@@ -186,7 +186,12 @@ def return_stmt(rt: str, method: str, static: bool) -> str:
     if rt_clean.endswith("*"):
         return "return nullptr;"
     if rt_clean.endswith("&"):
-        return "return *this;" if not static else "static " + rt_clean[:-1] + " _r; return _r;"
+        target = rt_clean[:-1].strip()
+        # `Foo& method()` on class Foo chains -> *this; any other referenced type
+        # (e.g. a nested `const Snapshot&`) gets a static default instance.
+        if not static and target.split("::")[-1] == class_name:
+            return "return *this;"
+        return f"static {target} _r{{}}; return _r;"
     return "return {};"
 
 
@@ -289,7 +294,7 @@ def generate_mock(header_text: str, class_name: str, module_id: str, foreign: li
         args = ", ".join(n for _, n, _ in params)
         self_ = "nullptr" if static else "this"
         const = " const" if re.match(r"^const\b", tail) else ""
-        rs = return_stmt(rt, name, static)
+        rs = return_stmt(rt, name, static, class_name)
         tpl = f"template <{', '.join('class ' + p for p in tpl_params)}> " if tpl_params else ""
         methods.append(f"    {tpl}{'static ' if static else ''}{rt} {name}({sig}){const} {{ sim::call({self_}, \"{name}\"{', ' + args if args else ''}); {rs} }}")
     lines += ["    " + v for v in verbatim]

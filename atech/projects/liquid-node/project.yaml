@@ -1,98 +1,41 @@
+# Liquid node — rebuilt stage by stage (see ../../STAGES.md).
+# STAGE S0: bare display. Nothing else is added until S0 survives two warm
+# resets (board reset button) with the heartbeat alive for 60 s each.
 name: liquid-node
 board: 14port
 modules_path: ../../modules
 modules:
   - {id: st7735_tft, instance: tftA, ports: [1, 2]}
-  - {id: ruview_csi, instance: csi,  port: 11}
-  - {id: button,     instance: btn,  port: 9}
-  - {id: neopixel,   instance: led,  port: 10}
-  - {id: speaker,    instance: spk,  ports: [13, 14]}
 code:
   setup: |
-    // Do NOT call tftA.setRotation() here: the SDK driver initialises this
-    // 160x80 panel for rotation 3 with a BGR MADCTL override, and user-side
-    // rotation is the documented trouble spot for this panel.
-    led.setBrightness(40);
+    // Panel warm-reset hygiene. A chip reset does not reset the panel (its
+    // reset line is not wired to the chip), so after a warm reset the panel
+    // may sit in a half-finished transaction. Park the bus lines, then paint
+    // two full black frames to force a clean state before the first real frame.
+    // Pins for tftA on ports 1+2: sclk 8, cs 4, mosi 9, dc 5 (see generated main.cpp).
+    pinMode(4, OUTPUT); digitalWrite(4, HIGH);   // CS idle high
+    pinMode(5, OUTPUT); digitalWrite(5, HIGH);   // DC data
+    pinMode(8, OUTPUT); digitalWrite(8, LOW);    // SCLK idle low
+    pinMode(9, OUTPUT); digitalWrite(9, LOW);    // MOSI low
+    delay(50);
+    tftA.clear(); tftA.display();
+    delay(100);
+    tftA.clear(); tftA.display();
   loop: |
-    // ---- NeoPixel heartbeat pulse: brighten on each detected beat, decay otherwise.
-    // Runs every loop so the pulse is crisp; cheap (no display, no serial).
-    static uint8_t pulse = 0;
-    if (csi.consumeBeat()) pulse = 255;
-    else if (pulse > 12) pulse -= 12; else pulse = 0;
-    static uint8_t lastPulse = 1;
-    if (pulse != lastPulse) {                 // only touch the LEDs when the value changed
-      lastPulse = pulse;
-      uint8_t g = csi.presence() ? 40 : 0;    // faint green tint when someone is present
-      led.setAll(pulse, g, 0);
-      led.show();
-    }
-
-    // ---- speaker: one soft tick when presence turns on or off.
-    static bool lastPresent = false;
-    bool present = csi.presence();
-    if (present != lastPresent) {
-      lastPresent = present;
-      spk.playTone(present ? 880.0f : 440.0f, 60);
-    }
-
-    // ---- button swaps screen mode. The button template already consumes
-    // wasPressed(), so poll isPressed() and detect the edge here with debounce.
-    static bool showVitals = true;
-    static bool btnLast = false;
-    static uint32_t btnEdgeMs = 0;
-    bool btnDown = btn.isPressed();
-    if (btnDown != btnLast && millis() - btnEdgeMs > 30) {
-      btnEdgeMs = millis();
-      btnLast = btnDown;
-      if (btnDown) showVitals = !showVitals;
-    }
-
-    // ---- screen A, redrawn at 2 Hz.
+    // render() at 2 Hz is the ONLY thing that touches the panel.
     static uint32_t lastDraw = 0;
     if (millis() - lastDraw < 500) return;
     lastDraw = millis();
+    static uint32_t frames = 0; frames++;
+    static bool hb = false; hb = !hb;
 
     tftA.clear();
-    tftA.setTextSize(1);
-    tftA.setTextColor(ST7735_TFT::COLOR_CYAN);
-    tftA.setCursor(2, 2);
-
-    // Heartbeat: a 6 px square in the bottom-right corner that alternates colour
-    // on every redraw, so "alive" vs "frozen" is visible without serial.
-    static bool hb = false;
-    hb = !hb;
+    tftA.displayText("S0  display only", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
+    char line[40];
+    snprintf(line, sizeof line, "frame %lu", (unsigned long)frames);
+    tftA.displayText(line, 2, 18, 2, ST7735_TFT::COLOR_WHITE);
+    snprintf(line, sizeof line, "up %lus  reset %d", (unsigned long)(millis() / 1000), (int)esp_reset_reason());
+    tftA.displayText(line, 2, 44, 1, ST7735_TFT::COLOR_YELLOW);
+    tftA.displayText("heartbeat ->", 76, 66, 1, 0x8410);
     tftA.fillRect(154, 74, 6, 6, hb ? ST7735_TFT::COLOR_YELLOW : 0x2104);
-
-    if (csi.state() != RuViewCsi::State::Streaming) {
-      tftA.print("RuView CSI  connecting");
-      tftA.displayText(csi.stateName(), 2, 30, 2, ST7735_TFT::COLOR_ORANGE);
-      tftA.display();
-      return;
-    }
-
-    if (showVitals) {
-      const char* banner = csi.vitalsCalibrating() ? "vitals  calibrating 60s"
-                          : (csi.presence() ? "vitals  heuristic" : "vitals  room empty");
-      tftA.print(banner);
-      char big[16];
-      bool show = csi.presence() && !csi.vitalsCalibrating();
-      if (show) snprintf(big, sizeof big, "HR %2.0f", csi.heartRate()); else snprintf(big, sizeof big, "HR --");
-      tftA.displayText(big, 2, 16, 3, show ? ST7735_TFT::COLOR_GREEN : 0x8410);
-      if (show) snprintf(big, sizeof big, "BR %2.0f", csi.breathingRate()); else snprintf(big, sizeof big, "BR --");
-      tftA.displayText(big, 2, 44, 3, show ? ST7735_TFT::COLOR_WHITE : 0x8410);
-      // presence lamp + fall flag, top-right
-      tftA.fillCircle(148, 8, 6, csi.presence() ? ST7735_TFT::COLOR_GREEN : 0x2104);
-      if (csi.fall()) tftA.displayText("FALL", 96, 44, 2, ST7735_TFT::COLOR_RED);
-    } else {
-      tftA.print("CSI link");
-      char line[40];
-      snprintf(line, sizeof line, "%5.1f Hz  %d dBm", csi.frameRateHz(), csi.rssi());
-      tftA.displayText(line, 2, 20, 1, ST7735_TFT::COLOR_WHITE);
-      snprintf(line, sizeof line, "act %.3f %s", csi.activity(), csi.presence() ? "PRESENT" : "empty");
-      tftA.displayText(line, 2, 34, 1, ST7735_TFT::COLOR_WHITE);
-      snprintf(line, sizeof line, "%lu fr %lu tx", (unsigned long)csi.framesTotal(), (unsigned long)csi.packetsSent());
-      tftA.displayText(line, 2, 48, 1, ST7735_TFT::COLOR_YELLOW);
-      snprintf(line, sizeof line, "-> %s", csi.sinkIp());
-      tftA.displayText(line, 2, 62, 1, ST7735_TFT::COLOR_YELLOW);
-    }
     tftA.display();

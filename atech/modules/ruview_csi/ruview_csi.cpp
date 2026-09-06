@@ -1,33 +1,35 @@
 /**
  * @file ruview_csi.cpp
- * @brief RuView-compatible WiFi CSI sensing node as an Atech module (Milestone A).
+ * @brief RuView-compatible WiFi CSI sensing node as an Atech module.
+ *
+ * Threading (see header): WiFi callback -> ring -> DSP task (core 0) ->
+ * published Snapshot -> loop(). loop() never blocks on sensing work.
  *
  * Port notes (github.com/ruvnet/RuView firmware/esp32-csi-node, MIT):
  *  - CSI config is the ESP32-S3 legacy layout: lltf/htltf/stbc/ltf_merge on,
  *    channel_filter and manu_scale off, shift 0 (csi_collector.c).
- *  - Promiscuous MGMT-only filter: DATA frames can push the callback to
- *    100-500 Hz and race SPI-flash cache on core 0 (RuView issue #396); with
- *    two SPI displays on this board we keep MGMT only, as RuView does when a
- *    display is present.
  *  - 50 Hz early gate before any work in the callback.
- *  - RuView's NDP injection is a TODO placeholder upstream; its real frame
- *    rate comes from beacons plus probe requests. We do the same: a UDP pump
- *    to the gateway, and probe-request injection if the rate stays low.
+ *  - Finding (Arduino core 2.0.17 / IDF 4.4): promiscuous mode silences the
+ *    CSI callback, so CSI comes only from station-addressed frames. A 20 Hz
+ *    ICMP ping to the gateway (esp_ping) is the traffic source, as in
+ *    Espressif's esp-csi examples. Probe-request injection is the fallback.
  */
 #include "ruview_csi.h"
 #include "atech_actions.h"
 #include "ruview_wire.h"
 #include <string.h>
 #include <math.h>
-#include <ping/ping_sock.h>   // IDF ping session: the CSI traffic source (esp-csi does the same)
-
-static RuViewCsi* s_instance = nullptr;  // one radio, one sensing module
+#include <ping/ping_sock.h>
 
 static void promiscNoop(void* buf, wifi_promiscuous_pkt_type_t type) { (void)buf; (void)type; }
 
 static void csiTrampoline(void* ctx, wifi_csi_info_t* info) {
     RuViewCsi* self = static_cast<RuViewCsi*>(ctx);
     if (self && info) self->_onCsi(info);
+}
+
+static void dspTaskEntry(void* arg) {
+    static_cast<RuViewCsi*>(arg)->_dspLoop();
 }
 
 RuViewCsi::RuViewCsi(const char* instanceName) {
@@ -38,12 +40,12 @@ RuViewCsi::RuViewCsi(const char* instanceName) {
 // ------------------------------------------------------------------ lifecycle
 
 void RuViewCsi::begin() {
-    s_instance = this;
     loadConfig();
     atech_actions::subscribe(_name, &RuViewCsi::onActionStatic, this);
-    if (_ssid[0]) startWifi();
-    else _state = State::Unconfigured;
-    _lastTickMs = millis();
+    _bootMs = millis();
+    _lastTickMs = _bootMs;
+    // WiFi starts late from update(): the display gets to paint first.
+    _state = _ssid[0] ? State::Idle : State::Unconfigured;
 }
 
 void RuViewCsi::loadConfig() {
@@ -53,6 +55,7 @@ void RuViewCsi::loadConfig() {
     String ip = _prefs.getString("sink_ip", _sinkIp);
     _sinkPort = (uint16_t)_prefs.getUShort("sink_port", ruview_wire::DEFAULT_PORT);
     _nodeId = (uint8_t)_prefs.getUChar("node_id", 1);
+    _csiEnabled = _prefs.getUChar("csi_en", 1) != 0;
     strncpy(_ssid, s.c_str(), sizeof _ssid - 1);
     strncpy(_pass, p.c_str(), sizeof _pass - 1);
     strncpy(_sinkIp, ip.c_str(), sizeof _sinkIp - 1);
@@ -68,44 +71,53 @@ void RuViewCsi::startWifi() {
     esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
     esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);   // esp-csi examples require HT20 for CSI
     esp_wifi_set_ps(WIFI_PS_NONE);
-    armCsi();                                            // arm before association, like esp-csi
+    if (_csiEnabled) armCsi();                           // arm before association, like esp-csi
     WiFi.begin(_ssid, _pass);
     _state = State::Connecting;
     _connectStartMs = millis();
     _probeInject = false;
 }
 
+void RuViewCsi::onConnected() {
+    if (_csiEnabled) { enableCsi(); _state = State::Streaming; }
+    else _state = State::Connected;
+}
+
 void RuViewCsi::enableCsi() {
     if (_csiOn) return;
     esp_err_t eFilt = ESP_OK, eProm = ESP_OK;
     if (_promisc) {
-        // RuView registers a no-op promiscuous RX callback; without one the
-        // driver appears to discard promiscuous frames before the CSI hook.
         eProm = esp_wifi_set_promiscuous(true);
         esp_wifi_set_promiscuous_rx_cb(&promiscNoop);
         wifi_promiscuous_filter_t filter = {};
-        filter.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT;   // beacons + probe responses only
+        filter.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT;
         eFilt = esp_wifi_set_promiscuous_filter(&filter);
     }
-
     esp_wifi_set_ps(WIFI_PS_NONE);
     esp_err_t eCfg, eCb, eOn;
     armCsi(&eCfg, &eCb, &eOn);
-    _csiOn = true;
 
-    wifi_ps_type_t ps; esp_wifi_get_ps(&ps);
-    wifi_bandwidth_t bw; esp_wifi_get_bandwidth(WIFI_IF_STA, &bw);
-    uint8_t proto = 0; esp_wifi_get_protocol(WIFI_IF_STA, &proto);
-    char msg[120];
-    snprintf(msg, sizeof msg, "csi on: promisc=%d filt=%d prom=%d cfg=%d cb=%d csi=%d ch=%d ps=%d bw=%d proto=%d", (int)_promisc,
-             (int)eFilt, (int)eProm, (int)eCfg, (int)eCb, (int)eOn, (int)WiFi.channel(), (int)ps, (int)bw, (int)proto);
+    char msg[110];
+    snprintf(msg, sizeof msg, "csi on: cfg=%d cb=%d csi=%d promisc=%d filt=%d prom=%d ch=%d",
+             (int)eCfg, (int)eCb, (int)eOn, (int)_promisc, (int)eFilt, (int)eProm, (int)WiFi.channel());
     logEvent(msg);
 
-    _udp.begin(0);
-    startPump();
+    // Reset consumer-side state before the task exists (no race).
+    _tail = _head;
+    _edge.reset();
     _rateWindowStartMs = millis();
     _framesAtWindowStart = _framesTotal;
-    _edge.reset();
+    _lastVitalsMs = 0;
+    _udp.begin(0);
+    startPump();
+
+    _dspRun = true;
+    if (xTaskCreatePinnedToCore(&dspTaskEntry, "csi_dsp", 8192, this, 1, &_dspTask, 0) != pdPASS) {
+        _dspTask = nullptr;
+        _dspRun = false;
+        logEvent("csi: DSP task creation FAILED");
+    }
+    _csiOn = true;
 }
 
 void RuViewCsi::armCsi(esp_err_t* eCfg, esp_err_t* eCb, esp_err_t* eOn) {
@@ -127,19 +139,22 @@ void RuViewCsi::armCsi(esp_err_t* eCfg, esp_err_t* eCb, esp_err_t* eOn) {
 
 void RuViewCsi::disableCsi() {
     if (!_csiOn) return;
-    stopPump();
     esp_wifi_set_csi(false);
     esp_wifi_set_csi_rx_cb(nullptr, nullptr);
     if (_promisc) { esp_wifi_set_promiscuous(false); esp_wifi_set_promiscuous_rx_cb(nullptr); }
+    // Stop the DSP task and wait for it to exit before touching its resources.
+    _dspRun = false;
+    for (int i = 0; i < 100 && _dspTask != nullptr; ++i) delay(2);
+    stopPump();
     _udp.stop();
     _csiOn = false;
 }
 
-// ------------------------------------------------------------------ callback (WiFi task)
+// ------------------------------------------------------------------ callback (WiFi task, core 0)
 
 void RuViewCsi::_onCsi(const wifi_csi_info_t* info) {
     int64_t now = esp_timer_get_time();
-    if (now - _lastProcessUs < (int64_t)MIN_PROCESS_US) { _dropped++; return; }
+    if (now - _lastProcessUs < (int64_t)MIN_PROCESS_US) { _gateDrops++; return; }
     _lastProcessUs = now;
     if (!info->buf || info->len == 0) return;
 
@@ -147,7 +162,7 @@ void RuViewCsi::_onCsi(const wifi_csi_info_t* info) {
     _lastRssi = info->rx_ctrl.rssi;
 
     uint8_t next = (uint8_t)((_head + 1) % RING_SLOTS);
-    if (next == _tail) { _dropped++; return; }  // consumer behind: drop, never block
+    if (next == _tail) { _ringDrops++; return; }  // consumer behind: drop, never block
     Slot& s = _ring[_head];
     uint16_t len = info->len;
     if (len > ruview_wire::MAX_IQ_BYTES) len = ruview_wire::MAX_IQ_BYTES;
@@ -162,107 +177,29 @@ void RuViewCsi::_onCsi(const wifi_csi_info_t* info) {
     _head = next;
 }
 
-// ------------------------------------------------------------------ loop side
+// ------------------------------------------------------------------ DSP task (core 0)
 
-void RuViewCsi::update() {
-    atech_actions::poll();
-    uint32_t now = millis();
-
-    switch (_state) {
-        case State::Unconfigured:
-            return;
-        case State::Connecting:
-            if (WiFi.status() == WL_CONNECTED) {
-                _state = State::Streaming;
-                enableCsi();
-            } else if (now - _connectStartMs > 30000) {
-                startWifi();  // retry association every 30 s
-            }
-            return;
-        case State::Lost:
-            if (WiFi.status() == WL_CONNECTED) { _state = State::Streaming; enableCsi(); }
-            else if (now - _connectStartMs > 15000) startWifi();
-            return;
-        case State::Streaming:
-            if (WiFi.status() != WL_CONNECTED) {
-                disableCsi();
-                _state = State::Lost;
-                _connectStartMs = now;
-                return;
-            }
-            break;
+void RuViewCsi::_dspLoop() {
+    while (_dspRun) {
+        uint32_t now = millis();
+        drainRing(now);
+        updateRate(now);
+        if (_calibRequest) { _edge.forceCalibrate(); _calibRequest = false; }
+        if (_probeInject && now - _lastProbeMs >= PROBE_INTERVAL_MS) { _lastProbeMs = now; injectProbe(); }
+        if (_streaming && _sinkValid && now - _lastVitalsMs >= 1000) { _lastVitalsMs = now; sendVitalsPacket(now); }
+        publish();
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
-
-    pumpTraffic(now);
-    drainRing(now);
-    updateRate(now);
-    if (_streaming && _sinkValid && now - _lastVitalsMs >= 1000) {
-        _lastVitalsMs = now;
-        sendVitalsPacket(now);
-    }
-}
-
-void RuViewCsi::startPump() {
-    // Finding (Arduino core 2.0.17 / IDF 4.4, ESP32-S3): promiscuous mode
-    // silences the CSI callback entirely, so CSI only comes from frames
-    // addressed to this station. A 20 Hz ICMP ping to the gateway makes the
-    // AP answer 20 times a second; each reply carries CSI.
-    if (_ping) return;
-    IPAddress gw = WiFi.gatewayIP();
-    if ((uint32_t)gw == 0) return;
-    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
-    cfg.count = ESP_PING_COUNT_INFINITE;
-    cfg.interval_ms = PUMP_INTERVAL_MS;
-    cfg.timeout_ms = 500;
-    cfg.data_size = 8;
-    cfg.task_stack_size = 3072;
-    IP_ADDR4(&cfg.target_addr, gw[0], gw[1], gw[2], gw[3]);
-    esp_ping_callbacks_t cbs = {};
-    if (esp_ping_new_session(&cfg, &cbs, &_ping) == ESP_OK) esp_ping_start(_ping);
-    else _ping = nullptr;
-}
-
-void RuViewCsi::stopPump() {
-    if (!_ping) return;
-    esp_ping_stop(_ping);
-    esp_ping_delete_session(_ping);
-    _ping = nullptr;
-}
-
-void RuViewCsi::pumpTraffic(uint32_t now) {
-    if (!_ping) startPump();
-    // Fallback when the AP does not answer pings: probe requests, answered by every AP on the channel.
-    if (_probeInject && now - _lastProbeMs >= PROBE_INTERVAL_MS) {
-        _lastProbeMs = now;
-        injectProbe();
-    }
-}
-
-void RuViewCsi::injectProbe() {
-    // Broadcast 802.11 probe request; every AP on the channel answers with a
-    // probe response addressed to us, which the CSI engine sees as a MGMT frame.
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
-    uint8_t frame[64];
-    size_t n = 0;
-    frame[n++] = 0x40; frame[n++] = 0x00;                 // FC: mgmt, probe request
-    frame[n++] = 0x00; frame[n++] = 0x00;                 // duration
-    memset(frame + n, 0xFF, 6); n += 6;                   // DA broadcast
-    memcpy(frame + n, mac, 6);  n += 6;                   // SA
-    memset(frame + n, 0xFF, 6); n += 6;                   // BSSID broadcast
-    frame[n++] = 0x00; frame[n++] = 0x00;                 // seq ctl (sys seq when en_sys_seq)
-    frame[n++] = 0x00; frame[n++] = 0x00;                 // SSID IE, wildcard
-    frame[n++] = 0x01; frame[n++] = 0x08;                 // Supported rates IE
-    const uint8_t rates[8] = {0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24};
-    memcpy(frame + n, rates, 8); n += 8;
-    esp_wifi_80211_tx(WIFI_IF_STA, frame, (int)n, true);
+    _dspTask = nullptr;
+    vTaskDelete(nullptr);
 }
 
 void RuViewCsi::drainRing(uint32_t now) {
-    int budget = RING_SLOTS;  // never spend more than one ring per loop
+    int budget = RING_SLOTS;
     while (_tail != _head && budget-- > 0) {
         Slot& s = _ring[_tail];
         _edge.push(s.iq, s.len, now);
+        if (_edge.consumeBeat()) _beatPending = true;
         if (_streaming && _sinkValid) {
             size_t n = ruview_wire::serializeCsi(_txBuf, sizeof _txBuf, _nodeId, s.nAnt, s.channel,
                                                  s.seq, s.rssi, s.noise, s.iq, s.len);
@@ -285,7 +222,7 @@ void RuViewCsi::updateRate(uint32_t now) {
         _rateWindowStartMs = now;
         if (_probeForce < 0) {
             if (!_probeInject && _rateHz < LOW_RATE_HZ && now - _connectStartMs > 6000) _probeInject = true;
-            if (_probeInject && _rateHz > LOW_RATE_HZ * 3) _probeInject = false;  // beacons alone suffice
+            if (_probeInject && _rateHz > LOW_RATE_HZ * 3) _probeInject = false;
         }
     }
 }
@@ -298,6 +235,105 @@ void RuViewCsi::sendVitalsPacket(uint32_t nowMs) {
     if (_udp.beginPacket(_sinkAddr, _sinkPort)) {
         _udp.write((const uint8_t*)&v, sizeof v);
         _udp.endPacket();
+    }
+}
+
+void RuViewCsi::publish() {
+    Snapshot s;
+    s.hr = _edge.heartRateBpm();
+    s.br = _edge.breathingBpm();
+    s.motion = _edge.motionEnergy();
+    s.rateHz = _rateHz;
+    s.rssi = _lastRssi;
+    s.presence = _edge.presence();
+    s.fall = _edge.fall();
+    s.calibrating = _edge.calibrating();
+    s.frames = _framesTotal;
+    s.gateDrops = _gateDrops;
+    s.ringDrops = _ringDrops;
+    s.tx = _packetsSent;
+    portENTER_CRITICAL(&_mux);
+    _pub = s;
+    portEXIT_CRITICAL(&_mux);
+}
+
+void RuViewCsi::startPump() {
+    if (_ping) return;
+    IPAddress gw = WiFi.gatewayIP();
+    if ((uint32_t)gw == 0) return;
+    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+    cfg.count = ESP_PING_COUNT_INFINITE;
+    cfg.interval_ms = PUMP_INTERVAL_MS;
+    cfg.timeout_ms = 500;
+    cfg.data_size = 8;
+    cfg.task_stack_size = 3072;
+    IP_ADDR4(&cfg.target_addr, gw[0], gw[1], gw[2], gw[3]);
+    esp_ping_callbacks_t cbs = {};
+    if (esp_ping_new_session(&cfg, &cbs, &_ping) == ESP_OK) esp_ping_start(_ping);
+    else _ping = nullptr;
+}
+
+void RuViewCsi::stopPump() {
+    if (!_ping) return;
+    esp_ping_stop(_ping);
+    esp_ping_delete_session(_ping);
+    _ping = nullptr;
+}
+
+void RuViewCsi::injectProbe() {
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    uint8_t frame[64];
+    size_t n = 0;
+    frame[n++] = 0x40; frame[n++] = 0x00;                 // FC: mgmt, probe request
+    frame[n++] = 0x00; frame[n++] = 0x00;                 // duration
+    memset(frame + n, 0xFF, 6); n += 6;                   // DA broadcast
+    memcpy(frame + n, mac, 6);  n += 6;                   // SA
+    memset(frame + n, 0xFF, 6); n += 6;                   // BSSID broadcast
+    frame[n++] = 0x00; frame[n++] = 0x00;                 // seq ctl
+    frame[n++] = 0x00; frame[n++] = 0x00;                 // SSID IE, wildcard
+    frame[n++] = 0x01; frame[n++] = 0x08;                 // Supported rates IE
+    const uint8_t rates[8] = {0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24};
+    memcpy(frame + n, rates, 8); n += 8;
+    esp_wifi_80211_tx(WIFI_IF_STA, frame, (int)n, true);
+}
+
+// ------------------------------------------------------------------ loop side
+
+void RuViewCsi::update() {
+    atech_actions::poll();
+    uint32_t now = millis();
+
+    switch (_state) {
+        case State::Unconfigured:
+            break;
+        case State::Idle:
+            if (now - _bootMs >= LATE_START_MS) startWifi();
+            break;
+        case State::Connecting:
+            if (WiFi.status() == WL_CONNECTED) onConnected();
+            else if (now - _connectStartMs > 30000) startWifi();   // retry association every 30 s
+            break;
+        case State::Connected:
+            if (WiFi.status() != WL_CONNECTED) { _state = State::Lost; _connectStartMs = now; }
+            break;
+        case State::Streaming:
+            if (WiFi.status() != WL_CONNECTED) { disableCsi(); _state = State::Lost; _connectStartMs = now; }
+            break;
+        case State::Lost:
+            if (WiFi.status() == WL_CONNECTED) onConnected();
+            else if (now - _connectStartMs > 15000) startWifi();
+            break;
+    }
+
+    // Copy the latest published results for the getters (cheap, lock-guarded).
+    if (_csiOn) {
+        portENTER_CRITICAL(&_mux);
+        _snap = _pub;
+        portEXIT_CRITICAL(&_mux);
+    } else {
+        _snap.rssi = isConnected() ? WiFi.RSSI() : 0;
+        _snap.rateHz = 0;
     }
 }
 
@@ -318,7 +354,6 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
         _logCount--;
         return n > 0 && (size_t)n < cap;
     }
-    // Cycle: frame_rate, rssi, heart_rate, breathing_rate, activity, presence, link
     static const char* keys[7] = {"frame_rate", "rssi", "heart_rate", "breathing_rate", "activity", "presence", "link"};
     const char* type = (_evIdx >= 5) ? "state" : "sensor";
     int n = snprintf(out, cap, "{\"type\":\"event\",\"payload\":{\"event_type\":\"%s\",\"key\":\"%s_%s\",\"value\":",
@@ -327,12 +362,12 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
     size_t left = cap - (size_t)n;
     int m = 0;
     switch (_evIdx) {
-        case 0: m = snprintf(out + n, left, "%.1f,\"unit\":\"Hz\"", _rateHz); break;
-        case 1: m = snprintf(out + n, left, "%d,\"unit\":\"dBm\"", _lastRssi); break;
-        case 2: m = snprintf(out + n, left, "%.1f,\"unit\":\"bpm\"", _edge.heartRateBpm()); break;
-        case 3: m = snprintf(out + n, left, "%.1f,\"unit\":\"bpm\"", _edge.breathingBpm()); break;
-        case 4: m = snprintf(out + n, left, "%.3f", _edge.motionEnergy()); break;
-        case 5: m = snprintf(out + n, left, "%d", _edge.presence() ? 1 : 0); break;
+        case 0: m = snprintf(out + n, left, "%.1f,\"unit\":\"Hz\"", _snap.rateHz); break;
+        case 1: m = snprintf(out + n, left, "%d,\"unit\":\"dBm\"", _snap.rssi); break;
+        case 2: m = snprintf(out + n, left, "%.1f,\"unit\":\"bpm\"", _snap.hr); break;
+        case 3: m = snprintf(out + n, left, "%.1f,\"unit\":\"bpm\"", _snap.br); break;
+        case 4: m = snprintf(out + n, left, "%.3f", _snap.motion); break;
+        case 5: m = snprintf(out + n, left, "%d", _snap.presence ? 1 : 0); break;
         default: m = snprintf(out + n, left, "\"%s\"", stateName()); break;
     }
     if (m < 0 || (size_t)m >= left) return false;
@@ -345,7 +380,9 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
 const char* RuViewCsi::stateName() const {
     switch (_state) {
         case State::Unconfigured: return "unconfigured";
+        case State::Idle:         return "idle";
         case State::Connecting:   return "connecting";
+        case State::Connected:    return "connected";
         case State::Streaming:    return "streaming";
         case State::Lost:         return "lost";
     }
@@ -370,15 +407,17 @@ void RuViewCsi::setSink(const char* ip, uint16_t port, uint8_t nodeId) {
     _sinkValid = _sinkAddr.fromString(_sinkIp);
 }
 
-void RuViewCsi::calibrate() {
-    _edge.forceCalibrate();
+void RuViewCsi::setCsiEnabled(bool on) {
+    _csiEnabled = on;
+    _prefs.putUChar("csi_en", on ? 1 : 0);
+    if (on && _state == State::Connected) onConnected();
+    else if (!on && _state == State::Streaming) { disableCsi(); _state = State::Connected; }
+    logEvent(on ? "csi: enabled" : "csi: disabled (WiFi only)");
 }
 
 void RuViewCsi::scanNetworks() {
-    // Blocking 2.4 GHz scan at the ESP-IDF level (does not depend on the Arduino
-    // event loop). Results go out as log events.
-    bool wasStreaming = (_state == State::Streaming);
-    if (wasStreaming) disableCsi();
+    bool wasOn = _csiOn;
+    if (wasOn) disableCsi();
     WiFi.mode(WIFI_STA);
     delay(300);
     // A leftover station config (e.g. from the hosted firmware) makes the driver
@@ -387,8 +426,6 @@ void RuViewCsi::scanNetworks() {
     wifi_config_t blank = {};
     esp_wifi_set_config(WIFI_IF_STA, &blank);
     delay(300);
-    // Arduino's event handler consumes the IDF result list on SCAN_DONE, so read
-    // the results through the Arduino accessors after a blocking scan.
     uint32_t t0 = millis();
     int n = WiFi.scanNetworks(false, false, false, 300);
     char msg[110];
@@ -401,14 +438,11 @@ void RuViewCsi::scanNetworks() {
         logEvent(msg);
     }
     WiFi.scanDelete();
-    if (wasStreaming) enableCsi();
+    if (wasOn) enableCsi();
 }
 
 void RuViewCsi::logEvent(const char* msg) {
-    // Queue the message; nextEvent() emits it as one paced JSON line
-    // (event_type "log", key "<instance>_log"). Bursting lines straight to
-    // Serial truncates them: the SDK sets a zero USB-CDC TX timeout.
-    if (_logCount >= LOGQ) return;  // drop newest when full
+    if (_logCount >= LOGQ) return;
     uint8_t idx = (uint8_t)((_logHead + _logCount) % LOGQ);
     char* dst = _logQ[idx];
     size_t i = 0;
@@ -446,17 +480,22 @@ void RuViewCsi::onAction(const char* action, const char* value) {
         char msg[64];
         snprintf(msg, sizeof msg, "sink %s:%u node %u", _sinkIp, (unsigned)_sinkPort, (unsigned)_nodeId);
         logEvent(msg);
+    } else if (strcmp(sub, "csi_enable") == 0) {
+        setCsiEnabled(strtod(value, nullptr) != 0);
     } else if (strcmp(sub, "scan") == 0) {
         scanNetworks();
     } else if (strcmp(sub, "diag") == 0) {
+        Snapshot s = _snap;
+        uint32_t seen = s.frames + s.ringDrops;
+        float dropPct = seen ? 100.0f * (float)s.ringDrops / (float)seen : 0.0f;
         char msg[120];
-        snprintf(msg, sizeof msg, "diag: frames=%lu dropped=%lu tx=%lu rate=%.1f pump=%d probe=%d promisc=%d ch=%d rssi=%d",
-                 (unsigned long)_framesTotal, (unsigned long)_dropped, (unsigned long)_packetsSent, _rateHz,
-                 (int)(_ping != nullptr), (int)_probeInject, (int)_promisc, (int)WiFi.channel(), (int)WiFi.RSSI());
+        snprintf(msg, sizeof msg, "diag: frames=%lu ring_drops=%lu (%.1f%%) gate_drops=%lu tx=%lu rate=%.1f pump=%d csi_en=%d",
+                 (unsigned long)s.frames, (unsigned long)s.ringDrops, dropPct, (unsigned long)s.gateDrops,
+                 (unsigned long)s.tx, s.rateHz, (int)(_ping != nullptr), (int)_csiEnabled);
         logEvent(msg);
-        snprintf(msg, sizeof msg, "diag: ip=%s gw=%s sink=%s:%u heap=%u state=%s",
+        snprintf(msg, sizeof msg, "diag: ip=%s gw=%s sink=%s:%u heap=%u state=%s rssi=%d",
                  WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), _sinkIp,
-                 (unsigned)_sinkPort, (unsigned)ESP.getFreeHeap(), stateName());
+                 (unsigned)_sinkPort, (unsigned)ESP.getFreeHeap(), stateName(), (int)WiFi.RSSI());
         logEvent(msg);
     } else if (strcmp(sub, "promisc") == 0) {
         bool want = strtod(value, nullptr) != 0;
@@ -470,10 +509,6 @@ void RuViewCsi::onAction(const char* action, const char* value) {
     } else if (strcmp(sub, "calibrate") == 0) {
         calibrate();
     } else if (strcmp(sub, "stream") == 0) {
-        double on = 1;
-        // value is a bare number for this action
-        char* end = nullptr;
-        on = strtod(value, &end);
-        setStreaming(on != 0);
+        setStreaming(strtod(value, nullptr) != 0);
     }
 }
