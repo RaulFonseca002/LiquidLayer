@@ -196,7 +196,7 @@ bool RuViewEdge::exportCalibration(Calibration& out) const {
 }
 
 bool RuViewEdge::importCalibration(const Calibration& in) {
-    if (in.magic != CAL_MAGIC || !(in.haveRef & 3) || !(in.thrJ > 0.0f) || !(in.thrW > 0.0f) || in.thrJ > CAP_THR || in.thrW > CAP_THR) return false;
+    if (in.magic != CAL_MAGIC || !(in.haveRef & 3) || !(in.thrJ > 0.0f) || !(in.thrW > 0.0f) || in.thrJ > PLAUSIBLE_THR_J || in.thrW > PLAUSIBLE_THR_W) return false;
     if (in.primary < 0 || in.primary >= (int8_t)LAYOUTS || !(in.haveRef & (1 << in.primary))) return false;
     memcpy(_ref, in.ref, sizeof _ref);
     for (uint8_t l = 0; l < LAYOUTS; ++l) { _haveRef[l] = (in.haveRef >> l) & 1; _lazyCount[l] = 0; }

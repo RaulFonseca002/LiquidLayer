@@ -58,6 +58,8 @@ public:
     static constexpr float    FLOOR_J        = 0.002f;
     static constexpr float    FLOOR_W        = 0.005f;
     static constexpr float    CAP_THR        = 1.5f;    // metric is 1 - corr in [0, 2]; keep thresholds reachable
+    static constexpr float    PLAUSIBLE_THR_W = 0.25f;  // an empty room learns thr_w ~0.04-0.06; a person in the room ~1.2
+    static constexpr float    PLAUSIBLE_THR_J = 0.60f;
     static constexpr uint8_t  ON_FRAMES      = 3;
     static constexpr uint8_t  OFF_FRAMES     = 20;
     static constexpr uint32_t HOLD_MS        = 3000;
@@ -104,6 +106,8 @@ public:
     void endCalibration() { _closeRequested = true; }
     bool     calibrating() const { return _phase != Phase::Idle; }
     bool     calibrated() const { return _calibrated; }
+    // False when the learned thresholds say the room was not empty during calibration (do not persist).
+    bool     calibrationPlausible() const { return _calibrated && _thrW <= PLAUSIBLE_THR_W && _thrJ <= PLAUSIBLE_THR_J; }
     Phase    phase() const { return _phase; }
     const char* phaseName() const;
     uint32_t calibSecondsLeft(uint32_t nowMs) const;   // 0 while open-ended past its minimum, or done

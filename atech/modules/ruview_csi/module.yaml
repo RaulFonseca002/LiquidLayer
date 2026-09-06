@@ -101,6 +101,9 @@ actions:
   - key: "{{ instance }}_forget"
     value_type: "null"
     description: "Clear the calibration stored in flash (templates + thresholds, tagged with the AP BSSID and channel) and relearn now. Calibrations are saved automatically when they complete and restored at boot when the AP matches."
+  - key: "{{ instance }}_reboot"
+    value_type: "null"
+    description: "Software reset (ESP.restart) — e.g. to verify that the stored calibration is restored at boot."
   - key: "{{ instance }}_stream"
     value_type: int
     description: "1 = send ADR-018 CSI frames to the sink, 0 = stop (default 1)."

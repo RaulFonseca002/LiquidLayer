@@ -145,6 +145,8 @@ static void testSynthetic() {
     CHECK(fAgain > 0.9f, "detects again after recalibration (%.1f%%)", 100 * fAgain);
     // (f2) calibration export/import round trip: a fresh engine restored from the blob detects at once
     { RuViewEdge::Calibration cal; CHECK(e.exportCalibration(cal), "export while calibrated");
+      CHECK(e.calibrationPlausible(), "empty-room calibration is plausible (thr_w %.3f)", e.thresholdWander());
+      RuViewEdge::Calibration poisoned = cal; poisoned.thrW = 1.2f; RuViewEdge e3; e3.reset(); CHECK(!e3.importCalibration(poisoned), "implausible calibration rejected");
       RuViewEdge e2; e2.reset(); RuViewEdge::Calibration bad = cal; bad.magic = 1; CHECK(!e2.importCalibration(bad), "bad magic rejected");
       CHECK(e2.importCalibration(cal) && e2.calibrated() && !e2.calibrating(), "import makes the engine calibrated");
       CHECK(e2.thresholdWander() == e.thresholdWander() && e2.templates() == e.templates(), "thresholds/templates restored");

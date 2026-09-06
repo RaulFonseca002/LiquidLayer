@@ -73,6 +73,7 @@ code:
       // right column: calibration phase/countdown or the vitals confidences; segment; presence score
       if (csi.vitalsCalibrating()) snprintf(line, sizeof line, "cal %s %lus", csi.calibPhaseName(), (unsigned long)csi.calibSecondsLeft());
       else if (present) snprintf(line, sizeof line, "hr c%.2f", csi.heartConfidence());
+      else if (csi.wander() >= 0 && csi.snap().thrW > 0.25f) snprintf(line, sizeof line, "cal SUSPECT");   // learned with someone in the room: press the button and leave
       else line[0] = 0;
       tftA.displayText(line, 96, 18, 1, csi.vitalsCalibrating() ? ST7735_TFT::COLOR_ORANGE : ST7735_TFT::COLOR_GREEN);
       snprintf(line, sizeof line, "%s %lus", csi.segmentName(), (unsigned long)csi.segmentElapsedS());

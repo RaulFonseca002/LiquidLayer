@@ -381,6 +381,12 @@ bool RuViewCsi::tryRestoreCalibration() {
 void RuViewCsi::saveCalibration() {
     struct __attribute__((packed)) Blob { uint8_t bssid[6]; uint8_t channel; RuViewEdge::Calibration cal; } b;
     if (!_edge.exportCalibration(b.cal)) return;
+    if (!_edge.calibrationPlausible()) {
+        char m[96];
+        snprintf(m, sizeof m, "calibration NOT stored: room was not empty (thr_w=%.3f > %.2f); press the button and leave", b.cal.thrW, RuViewEdge::PLAUSIBLE_THR_W);
+        logEvent(m);
+        return;
+    }
     uint8_t* cur = WiFi.BSSID();
     if (!cur) return;
     memcpy(b.bssid, cur, 6); b.channel = (uint8_t)WiFi.channel();
@@ -446,9 +452,10 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
         case 7: m = snprintf(out + n, left, "\"status_tx=%lu status_fail=%lu usb_up=%d usb_host=%d heap=%u reset=%d\"",
                               (unsigned long)_statusTx, (unsigned long)_statusFail, (int)atechUsb().ready(), (int)(bool)atechUsb(),
                               (unsigned)ESP.getFreeHeap(), (int)esp_reset_reason()); break;
-        default: m = snprintf(out + n, left, "\"j=%.4f/%.4f w=%.4f/%.4f fs=%.1f cal=%s/%lus lay=%u seg=%s hrc=%.2f brc=%.2f\"",
+        default: m = snprintf(out + n, left, "\"j=%.4f/%.4f w=%.4f/%.4f fs=%.1f cal=%s/%lus lay=%u seg=%s hrc=%.2f brc=%.2f %s\"",
                               _snap.jitter, _snap.thrJ, _snap.wander, _snap.thrW, _snap.fs, calibPhaseName(), (unsigned long)_snap.calibLeft,
-                              (unsigned)_snap.layout, segmentName(), _snap.hrConf, _snap.brConf); break;
+                              (unsigned)_snap.layout, segmentName(), _snap.hrConf, _snap.brConf,
+                              _snap.calibrating ? "" : (_snap.thrW <= RuViewEdge::PLAUSIBLE_THR_W ? "ok" : "SUSPECT")); break;
     }
     if (m < 0 || (size_t)m >= left) return false;
     n += m; left = cap - (size_t)n;
@@ -638,6 +645,10 @@ void RuViewCsi::onAction(const char* action, const char* value) {
         calibrate();
     } else if (strcmp(sub, "forget") == 0) {
         forgetCalibration();
+    } else if (strcmp(sub, "reboot") == 0) {
+        logEvent("rebooting (software reset)");
+        delay(200);
+        ESP.restart();
     } else if (strcmp(sub, "stream") == 0) {
         setStreaming(strtod(value, nullptr) != 0);
     }
