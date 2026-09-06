@@ -51,20 +51,20 @@ events:
     type: sensor
     value_type: float
     unit: bpm
-    description: "Heuristic heart rate from CSI phase (40-120 bpm). RuView Tier-2; noisy, not medical."
+    description: "Best-effort heart rate (45-180 bpm) from the 0.8-2 Hz amplitude band, autocorrelation with breathing-harmonic rejection. Read with its confidence; single-antenna 2.4 GHz CSI rarely resolves it. Not medical."
   - key: breathing_rate
     type: sensor
     value_type: float
     unit: bpm
-    description: "Heuristic breathing rate from CSI phase (6-30 bpm). RuView Tier-2; noisy, not medical."
+    description: "Breathing rate (6-30 bpm) from band-passed subcarrier amplitude, autocorrelation over 30 s; 0 until confident. Heuristic, not medical."
   - key: activity
     type: sensor
     value_type: float
-    description: "Motion energy: EMA of mean subcarrier amplitude change between frames (0 = still room)."
+    description: "Motion (jitter): 1 - correlation of the normalised subcarrier-amplitude vector with the previous frame, EMA-smoothed (0 = still room)."
   - key: presence
     type: state
     value_type: int
-    description: "1 when activity exceeds the ambient threshold learned in the first 10 s."
+    description: "1 when jitter (motion) or wander (distance to the empty-room amplitude template) exceeds mean + 4 sigma learned during calibration (60 s at boot, or the button-driven empty-room segment). A still person is detected through wander."
   - key: link
     type: state
     value_type: string
@@ -79,16 +79,16 @@ actions:
     description: 'Object {"ip": "192.168.1.20", "port": 5005, "node_id": 1} RuView aggregator; stored in NVS.'
   - key: "{{ instance }}_wifi_enable"
     value_type: int
-    description: "1 = start the radio (default), 0 = never start WiFi (stage test; module still runs). Persisted in NVS. Runtime only, not persisted (defaults on at every boot)."
+    description: "1 = start the radio (default), 0 = never start WiFi (stage test; module still runs). Runtime only, not persisted (defaults on at every boot)."
   - key: "{{ instance }}_csi_enable"
     value_type: int
-    description: "1 = capture CSI + run the DSP task + stream to the sink (default), 0 = WiFi only. Persisted in NVS. Runtime only, not persisted (defaults on at every boot)."
+    description: "1 = capture CSI + run the DSP task + stream to the sink (default), 0 = WiFi only. Runtime only, not persisted (defaults on at every boot)."
   - key: "{{ instance }}_scan"
     value_type: "null"
     description: "Scan 2.4 GHz networks; each SSID is reported as a log event (RSSI, channel, security)."
   - key: "{{ instance }}_diag"
     value_type: "null"
-    description: "Report frame/drop/tx counters, rate, IP, gateway, sink, heap as log events."
+    description: "Report frame/drop/tx counters, rate, IP, gateway, sink, heap, and the edge state (jitter/wander vs thresholds, calibration phase, layout, segment, HR/BR with confidence) as log events."
   - key: "{{ instance }}_promisc"
     value_type: int
     description: "0 = CSI from frames addressed to this station (default; the only mode that works on the Arduino core), 1 = MGMT promiscuous (experimental)."
@@ -97,10 +97,13 @@ actions:
     description: "Probe-request injection: -1 auto (default), 0 off, 1 on."
   - key: "{{ instance }}_calibrate"
     value_type: "null"
-    description: "Relearn the ambient activity threshold (10 s)."
+    description: "Relearn the empty-room template and thresholds now (60 s automatic window; leave the room)."
   - key: "{{ instance }}_stream"
     value_type: int
     description: "1 = send ADR-018 CSI frames to the sink, 0 = stop (default 1)."
+  - key: "{{ instance }}_segment"
+    value_type: int
+    description: "Session segment 0 live, 1 empty (starts an open-ended calibration after a 10 s leave delay), 2 still, 3 walk; normally cycled by the button. Carried in NodeStatus so host/csi_sink.py --record can label frames."
 
 lib_deps: []
 
@@ -116,16 +119,20 @@ usage: |
   // Sensing runs on its own task; every getter below reads a snapshot refreshed by update().
   float hz     = {{ instance }}.frameRateHz();     // CSI frames/s (aim for >= 15)
   int   rssi   = {{ instance }}.rssi();            // dBm of last frame
-  float act    = {{ instance }}.activity();        // motion energy, 0 = still
-  bool  here   = {{ instance }}.presence();        // activity above learned ambient
-  float hr     = {{ instance }}.heartRate();       // bpm (heuristic; 0 until warmed up)
-  float br     = {{ instance }}.breathingRate();   // bpm (heuristic)
-  bool  fall   = {{ instance }}.fall();            // sudden phase acceleration
-  bool  beat   = {{ instance }}.consumeBeat();     // true once per detected heartbeat (LED pulse)
-  bool  cal    = {{ instance }}.isCalibrating();   // first 10 s after (re)connect
+  float act    = {{ instance }}.activity();        // jitter (motion), 0 = still
+  float w      = {{ instance }}.presenceScore();   // wander / threshold: >= 1 means "someone is here"
+  bool  here   = {{ instance }}.presence();        // jitter or wander above the learned thresholds
+  float hr     = {{ instance }}.heartRate();       // bpm, best-effort; always read heartConfidence() with it
+  float hrc    = {{ instance }}.heartConfidence(); // 0..1 autocorrelation confidence (single antenna: usually low)
+  float br     = {{ instance }}.breathingRate();   // bpm, 0 until confident (breathingConfidence() >= 0.3)
+  bool  fall   = {{ instance }}.fall();            // always false: fall detection is disabled (never validated)
+  bool  beat   = {{ instance }}.consumeBeat();     // true once per positive crossing of the heart-band signal (LED pulse)
+  bool  cal    = {{ instance }}.isCalibrating();   // 60 s after the first CSI frame, or during the "empty" segment
+  const char* ph = {{ instance }}.calibPhaseName(); // leave|template|stats|ready, plus calibSecondsLeft()
+  uint8_t seg  = {{ instance }}.segment();         // 0 live, 1 empty, 2 still, 3 walk; segmentName(), nextSegment() from a button
   uint32_t n   = {{ instance }}.framesTotal();     // frames since boot
   uint32_t tx  = {{ instance }}.packetsSent();     // UDP packets to the sink
   const char* ip = {{ instance }}.sinkIp();        // configured sink
-  {{ instance }}.calibrate();                      // relearn ambient threshold
+  {{ instance }}.calibrate();                      // relearn the empty-room template (60 s; leave the room)
   {{ instance }}.setStreaming(true);               // ADR-018 UDP on/off
   // Never call display code from anything but loop(); update() is cheap.

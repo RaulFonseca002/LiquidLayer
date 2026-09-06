@@ -105,9 +105,10 @@ void RuViewCsi::enableCsi() {
              (int)eCfg, (int)eCb, (int)eOn, (int)_promisc, (int)eFilt, (int)eProm, (int)WiFi.channel());
     logEvent(msg);
 
-    // Reset consumer-side state before the task exists (no race).
+    // Reset consumer-side state before the task exists (no race). The edge engine keeps its
+    // calibration across re-arms (a WiFi blip must not restart the 60 s window); it is reset once.
     _tail = _head;
-    _edge.reset();
+    if (!_edgeInit) { _edge.reset(); _edgeInit = true; }
     _rateWindowStartMs = millis();
     _framesAtWindowStart = _framesTotal;
     _lastVitalsMs = 0;
@@ -188,7 +189,12 @@ void RuViewCsi::_dspLoop() {
         uint32_t now = millis();
         drainRing(now);
         updateRate(now);
-        if (_calibRequest) { _edge.forceCalibrate(); _calibRequest = false; }
+        if (_calibCmd) {
+            uint8_t c = _calibCmd; _calibCmd = 0;
+            if (c == 1) _edge.forceCalibrate(now, 0, false);
+            else if (c == 2) _edge.forceCalibrate(now, RuViewEdge::LEAVE_MS, true);
+            else if (c == 3) _edge.endCalibration();
+        }
         if (_probeInject && now - _lastProbeMs >= PROBE_INTERVAL_MS) { _lastProbeMs = now; injectProbe(); }
         if (_streaming && _sinkValid && now - _lastVitalsMs >= 1000) { _lastVitalsMs = now; sendVitalsPacket(now); }
         publish();
@@ -234,7 +240,7 @@ void RuViewCsi::updateRate(uint32_t now) {
 
 void RuViewCsi::sendVitalsPacket(uint32_t nowMs) {
     ruview_wire::Vitals v;
-    ruview_wire::fillVitals(v, _nodeId, _edge.presence(), _edge.fall() && _edge.presence(), _edge.motionEnergy() > 0.02f,
+    ruview_wire::fillVitals(v, _nodeId, _edge.presence(), false, _edge.jitter() > _edge.thresholdJitter(),
                             _edge.breathingBpm(), _edge.heartRateBpm(), (int8_t)_lastRssi,
                             _edge.presence() ? 1 : 0, _edge.motionEnergy(), _edge.presenceScore(), nowMs);
     if (_udp.beginPacket(_sinkAddr, _sinkPort)) {
@@ -251,14 +257,18 @@ void RuViewCsi::publish() {
     s.rateHz = _rateHz;
     s.rssi = _lastRssi;
     s.presence = _edge.presence();
-    s.fall = _edge.fall() && _edge.presence();   // a fall needs a person: never flag an empty room
+    s.fall = false;                              // fall detection disabled: never validated on hardware
     s.calibrating = _edge.calibrating();
-    s.thr = _edge.threshold();
-    s.ambMean = _edge.ambientMean();
-    s.ambSigma = _edge.ambientSigma();
+    s.hrConf = _edge.heartConfidence();
+    s.brConf = _edge.breathingConfidence();
+    s.jitter = _edge.jitter();
+    s.wander = _edge.wander();
+    s.thrJ = _edge.thresholdJitter();
+    s.thrW = _edge.thresholdWander();
     s.fs = _edge.sampleRateHz();
-    s.calibLeft = _edge.calibFramesLeft();
-    s.layout = _layout;
+    s.calibLeft = _edge.calibSecondsLeft(millis());
+    s.layout = _edge.layout() ? _edge.layout() : _layout;
+    s.phase = (uint8_t)_edge.phase();
     s.frames = _framesTotal;
     s.gateDrops = _gateDrops;
     s.ringDrops = _ringDrops;
@@ -397,9 +407,9 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
         case 7: m = snprintf(out + n, left, "\"status_tx=%lu status_fail=%lu usb_up=%d usb_host=%d heap=%u reset=%d\"",
                               (unsigned long)_statusTx, (unsigned long)_statusFail, (int)atechUsb().ready(), (int)(bool)atechUsb(),
                               (unsigned)ESP.getFreeHeap(), (int)esp_reset_reason()); break;
-        default: m = snprintf(out + n, left, "\"motion=%.3f thr=%.3f mean=%.3f sigma=%.3f fs=%.1f calib_left=%lu layout=%u seg=%s\"",
-                              _snap.motion, _snap.thr, _snap.ambMean, _snap.ambSigma, _snap.fs, (unsigned long)_snap.calibLeft,
-                              (unsigned)_snap.layout, segmentName()); break;
+        default: m = snprintf(out + n, left, "\"j=%.4f/%.4f w=%.4f/%.4f fs=%.1f cal=%s/%lus lay=%u seg=%s hrc=%.2f brc=%.2f\"",
+                              _snap.jitter, _snap.thrJ, _snap.wander, _snap.thrW, _snap.fs, calibPhaseName(), (unsigned long)_snap.calibLeft,
+                              (unsigned)_snap.layout, segmentName(), _snap.hrConf, _snap.brConf); break;
     }
     if (m < 0 || (size_t)m >= left) return false;
     n += m; left = cap - (size_t)n;
@@ -410,12 +420,21 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
 
 void RuViewCsi::setSegment(uint8_t s) {
     s &= 3;
+    uint8_t prev = _segment;
     _segment = s;
     _segmentStartMs = millis();
-    if (s == 1) calibrate();   // empty room: relearn the ambient baseline
+    if (s == 1) _calibCmd = 2;               // empty room: leave delay, then relearn for as long as the segment lasts
+    else if (prev == 1) _calibCmd = 3;       // back in: close the calibration (after its minimum)
     char msg[48];
     snprintf(msg, sizeof msg, "segment: %u %s", (unsigned)s, segmentName());
     logEvent(msg);
+}
+
+const char* RuViewCsi::calibPhaseName() const {
+    switch ((RuViewEdge::Phase)_snap.phase) {
+        case RuViewEdge::Phase::Leave: return "leave"; case RuViewEdge::Phase::Template: return "template";
+        case RuViewEdge::Phase::Stats: return "stats"; default: return "ready";
+    }
 }
 
 const char* RuViewCsi::segmentName() const {
@@ -557,8 +576,9 @@ void RuViewCsi::onAction(const char* action, const char* value) {
                  WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), _sinkIp,
                  (unsigned)_sinkPort, (unsigned)ESP.getFreeHeap(), stateName(), (int)WiFi.RSSI());
         logEvent(msg);
-        snprintf(msg, sizeof msg, "diag: motion=%.3f thr=%.3f mean=%.3f sigma=%.3f fs=%.1f calib_left=%lu layout=%u seg=%s presence=%d",
-                 s.motion, s.thr, s.ambMean, s.ambSigma, s.fs, (unsigned long)s.calibLeft, (unsigned)s.layout, segmentName(), (int)s.presence);
+        snprintf(msg, sizeof msg, "diag: jitter=%.4f/%.4f wander=%.4f/%.4f fs=%.1f calib=%s left=%lus layout=%u seg=%s presence=%d hr=%.0f/%.2f br=%.0f/%.2f",
+                 s.jitter, s.thrJ, s.wander, s.thrW, s.fs, calibPhaseName(), (unsigned long)s.calibLeft, (unsigned)s.layout, segmentName(),
+                 (int)s.presence, s.hr, s.hrConf, s.br, s.brConf);
         logEvent(msg);
     } else if (strcmp(sub, "segment") == 0) {
         setSegment((uint8_t)strtod(value, nullptr));

@@ -52,9 +52,11 @@ public:
     // What the DSP task publishes and loop() reads (copied under a spinlock).
     struct Snapshot {
         float    hr = 0, br = 0, motion = 0, rateHz = 0;
-        float    thr = 0, ambMean = 0, ambSigma = 0, fs = 0;   // edge diagnostics (learned threshold, ambient stats, DSP sample rate)
-        uint32_t calibLeft = 0;                                // frames still to calibrate
-        uint8_t  layout = 0;                                   // CSI bytes / 128 of the last frame
+        float    hrConf = 0, brConf = 0;                       // autocorrelation confidence 0..1
+        float    jitter = 0, wander = 0, thrJ = 0, thrW = 0, fs = 0;   // edge features, on-thresholds, DSP sample rate
+        uint32_t calibLeft = 0;                                // seconds until the calibration closes (0 = open / done)
+        uint8_t  layout = 0;                                   // CSI bytes / 128 of the calibrated layout
+        uint8_t  phase = 0;                                    // RuViewEdge::Phase
         int      rssi = 0;
         bool     presence = false, fall = false, calibrating = true;
         uint32_t frames = 0, gateDrops = 0, ringDrops = 0, tx = 0;
@@ -83,6 +85,13 @@ public:
     uint32_t    packetsSent() const { return _snap.tx; }
     float       heartRate() const { return _snap.hr; }
     float       breathingRate() const { return _snap.br; }
+    float       heartConfidence() const { return _snap.hrConf; }
+    float       breathingConfidence() const { return _snap.brConf; }
+    float       jitter() const { return _snap.jitter; }
+    float       wander() const { return _snap.wander; }
+    float       presenceScore() const { return _snap.thrW > 0 ? _snap.wander / _snap.thrW : 0; }
+    uint32_t    calibSecondsLeft() const { return _snap.calibLeft; }
+    const char* calibPhaseName() const;
     bool        fall() const { return _snap.fall; }
     bool        consumeBeat() { bool b = _beatPending; _beatPending = false; return b; }
     const char* sinkIp() const { return _sinkIp; }
@@ -98,7 +107,7 @@ public:
     void setCsiEnabled(bool on);                                // persists; applies live
     void setWifiEnabled(bool on);                               // persists; 0 = radio never starts (stage test)
     void setStreaming(bool on) { _streaming = on; }
-    void calibrate() { _calibRequest = true; }
+    void calibrate() { _calibCmd = 1; }        // relearn now (automatic 60 s window)
     // Session segments, cycled by the button: 0 live, 1 empty room (calibrating), 2 sitting still, 3 walking.
     // Entering EMPTY relearns the ambient baseline. The segment rides in NodeStatus so the host recorder
     // can label CSI frames without touching USB.
@@ -201,7 +210,8 @@ private:
     uint32_t    _packetsSent = 0;
     uint32_t    _lastVitalsMs = 0;
     uint8_t     _txBuf[ruview_wire::CSI_HEADER + ruview_wire::MAX_IQ_BYTES];
-    volatile bool _calibRequest = false;   // loop -> task
+    volatile uint8_t _calibCmd = 0;        // loop -> task: 1 auto recalibrate, 2 button start (leave delay, open-ended), 3 end
+    bool        _edgeInit = false;
     volatile bool _beatPending = false;    // task -> loop
 
     // published results

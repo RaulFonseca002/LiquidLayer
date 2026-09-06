@@ -11,8 +11,11 @@ Algorithm (Espressif esp-radar style, single antenna):
   a_t[k]   = |CSI_t[k]| over the data bins of one LTF block, L2-normalised per frame
   jitter_t = 1 - corr(a_t, a_{t-1})           motion, needs no calibration
   wander_t = 1 - corr(a_t, a_ref)             presence vs. the empty-room template a_ref
-  both EMA-smoothed (alpha 0.2); thresholds = mean + K*sigma of the SMOOTHED values over the
-  empty-room calibration; Schmitt trigger with N-frame confirmation and a hold time.
+  both EMA-smoothed (alpha 0.2); on threshold = mean + 4*sigma, off = mean + 2*sigma of the
+  SMOOTHED values over the empty-room calibration; Schmitt trigger with N-frame confirmation and
+  a hold time. The breathing report here is informational (plain autocorrelation peak); the
+  firmware additionally subtracts the band-pass filter's own noise autocorrelation from the
+  confidence, so use the native replay (tests/edge/run.sh REC.csirec) for the authoritative numbers.
 
     python3 edge_proto.py REC.csirec [--leave-s 10] [--k-sigma 4] [--alpha 0.2]
     python3 edge_proto.py REC.csirec --dump-features OUT.tsv     # t seg jitter wander (raw) per frame
@@ -85,10 +88,10 @@ def stats(xs: list[float]) -> tuple[float, float, float, float]:
 class Engine:
     """Python twin of RuViewEdge's presence path (constants are the planned firmware defaults)."""
 
-    def __init__(self, alpha=0.2, k_sigma=4.0, on_frames=3, off_frames=20, hold_s=3.0,
-                 floor_j=0.002, floor_w=0.005, off_ratio=0.6, default_thr_j=0.05):
-        self.alpha, self.k, self.on_n, self.off_n, self.hold_s = alpha, k_sigma, on_frames, off_frames, hold_s
-        self.floor_j, self.floor_w, self.off_ratio, self.default_thr_j = floor_j, floor_w, off_ratio, default_thr_j
+    def __init__(self, alpha=0.2, k_sigma=4.0, k_off=2.0, on_frames=3, off_frames=20, hold_s=3.0,
+                 floor_j=0.002, floor_w=0.005, default_thr_j=0.05):
+        self.alpha, self.k, self.k_off, self.on_n, self.off_n, self.hold_s = alpha, k_sigma, k_off, on_frames, off_frames, hold_s
+        self.floor_j, self.floor_w, self.default_thr_j = floor_j, floor_w, default_thr_j
         self.reset()
 
     def reset(self):
@@ -97,7 +100,9 @@ class Engine:
         self.sj = self.sw = 0.0
         self.have_s = False
         self.thr_j = self.default_thr_j
+        self.off_j = 0.5 * self.default_thr_j
         self.thr_w = None
+        self.off_w = None
         self.presence = False
         self.above = self.below = 0
         self.on_since = None
@@ -151,12 +156,19 @@ class Engine:
         mw, sdw, _, _ = stats(self.cal_w)
         self.thr_j = max(self.floor_j, min(1.5, mj + self.k * sdj))
         self.thr_w = max(self.floor_w, min(1.5, mw + self.k * sdw))
+        # off levels = mean + k_off*sigma, always below the on level (RuViewEdge::finishCalibration)
+        self.off_j = mj + self.k_off * sdj
+        if self.off_j >= self.thr_j:
+            self.off_j = 0.5 * (mj + self.thr_j)
+        self.off_w = mw + self.k_off * sdw
+        if self.off_w >= self.thr_w:
+            self.off_w = 0.5 * (mw + self.thr_w)
         return (mj, sdj, mw, sdw)
 
     # ---- detection ----
     def step(self, t_s):
         hi = self.sj > self.thr_j or (self.thr_w is not None and self.sw > self.thr_w)
-        lo = self.sj < self.off_ratio * self.thr_j and (self.thr_w is None or self.sw < self.off_ratio * self.thr_w)
+        lo = self.sj < self.off_j and (self.off_w is None or self.sw < self.off_w)
         if not self.presence:
             self.above = self.above + 1 if hi else 0
             if self.above >= self.on_n:
@@ -333,8 +345,8 @@ def main() -> None:
                 eng.calib_stats()
         mj, sdj, mw, sdw = eng.finish_thresholds()
         print(f"calibration: {len(cal)} frames ({cal[-1][0] - cal[0][0]:.0f} s) after skipping {args.leave_s:.0f} s")
-        print(f"  smoothed jitter  mean {mj:.4f} sigma {sdj:.4f} -> thr_j {eng.thr_j:.4f}")
-        print(f"  smoothed wander  mean {mw:.4f} sigma {sdw:.4f} -> thr_w {eng.thr_w:.4f}")
+        print(f"  smoothed jitter  mean {mj:.4f} sigma {sdj:.4f} -> on {eng.thr_j:.4f} off {eng.off_j:.4f}")
+        print(f"  smoothed wander  mean {mw:.4f} sigma {sdw:.4f} -> on {eng.thr_w:.4f} off {eng.off_w:.4f}")
 
     # full replay
     eng.prev, eng.have_s, eng.presence = None, False, False
