@@ -38,3 +38,16 @@ reset shows as 0/UNKNOWN.
 | S3 | + vitals view, button on port 9 swaps views | pending | | |
 | S4 | + NeoPixel pulse (throttled, after render) + speaker tick | pending | | |
 | S5 | Milestone C: second TFT rail + Liquid bridge | deferred | | separate plan |
+
+
+## Phase 1 — hang locator (2026-09-06)
+
+Faithful S1b config (display + ruview_csi, radio off) + monotonic RTC marker `g_hlPhase`, each step painted to the panel so a freeze shows its phase; boot card shows PREV phase, reset reason, and a WDT-reboot tally. Watchdog ON only to auto-recover between trials; a WDT reboot is logged as a masked hang.
+
+Phase legend: 90 begin-enter, 92 after loadConfig(NVS), 93 after subscribe, 94 begin-done; 95 post-begin(user setup), 96 pins, 97 card shown, 98 setup-end(return); 101 loop/update entry (before Serial touch), 102 after (bool)Serial, 103 after poll, 104/105 update tail; 110 loop entry, 111 past 2Hz gate, 112/113 render.
+
+FINDING (tooling): the SDK build tree (`<project>/build/lib/`) is NOT purged between builds, so a renamed/removed module lingers and the linker can bind the WRONG object (two modules both defining `RuViewCsi` → old one linked, `undefined reference to g_hlPhase`). Fixed by clearing stale module libs before build. This may have contaminated any earlier rung that reused the liquid-node build dir after a module-set change — treat borderline earlier passes with suspicion; the Phase 1 data below is from a purged build.
+
+| Locator run | PREV phase | reason | wdt tally | reading |
+|---|---|---|---|---|
+| (pending owner) | | | | |

@@ -1,75 +1,64 @@
-# Liquid node — ground-up rebuild v2 (see ../../STAGES.md).
-# CONTROL LC-nodelay: same as LC but without the 2 s boot-card pause. instrumented base + the old ruview_csi module exactly as in S1b (radio off, serial gated). Loop watchdog, RTC boot counter + boot card,
-# NeoPixel loop heartbeat (off-panel liveness), reset reason on screen.
-# The ONLY change vs L0 is the paced serial print below.
+# Liquid node — Phase 1 hang locator (see ../../STAGES.md).
+# Faithful to the failing S1b config (display + ruview_csi, radio off) PLUS pure
+# instrumentation. One monotonic RTC marker (g_hlPhase, owned by the module)
+# advances through every step; each setup step is also painted to the panel, so a
+# FROZEN screen shows the exact phase with no reset. The boot card reports where
+# the PREVIOUS boot died (g_hlPrev) and how many task-WDT reboots have happened
+# (g_hlWdt) — a WDT reboot is a masked hang.
 name: liquid-node
 board: 14port
-modules_path: ../../modules
+modules_path: /tmp/claude-1000/-home-raul-Desktop-tcc/b57e5cbc-6ba9-4617-a8ef-06d7fdf6ff42/scratchpad/diag_modules
 modules:
-  - {id: st7735_tft, instance: tftA, ports: [1, 2]}
-  - {id: neopixel,   instance: led,  port: 10}
-  - {id: ruview_csi, instance: csi,  port: 11}
+  - {id: st7735_tft,    instance: tftA, ports: [1, 2]}
+  - {id: ruview_csi_hl, instance: csi,  port: 11}
 code:
   setup: |
-    // --- instrumentation -------------------------------------------------
-    // A hung loop() reboots the board after 5 s (reset reason 6 on screen,
-    // splash flicker to the eye).
-    enableLoopWDT();
-    // Boot counter in RTC slow memory: survives warm resets, not power loss.
-    static RTC_DATA_ATTR uint32_t bootMagic;
-    static RTC_DATA_ATTR uint32_t bootCount;
-    bool coldBoot = (bootMagic != 0xB007C0DEu);
-    if (coldBoot) { bootMagic = 0xB007C0DEu; bootCount = 0; }
-    bootCount++;
+    // markers owned by the module (RTC_NOINIT, survive warm/WDT resets)
+    extern uint32_t g_hlPhase, g_hlPrev, g_hlWdt, g_hlBoots;
+    // begin() already ran (module marker 90..94) and captured g_hlPrev.
+    #define PHASE(n, label) do { g_hlPhase = (n); tftA.clear(); \
+      tftA.displayText("locator P" #n, 2, 2, 1, ST7735_TFT::COLOR_CYAN); \
+      tftA.displayText(label, 2, 22, 2, ST7735_TFT::COLOR_WHITE); \
+      tftA.display(); } while (0)
 
-    // --- panel warm-reset hygiene (S0) ------------------------------------
+    PHASE(95, "post begin");
     pinMode(4, OUTPUT); digitalWrite(4, HIGH);
     pinMode(5, OUTPUT); digitalWrite(5, HIGH);
     pinMode(8, OUTPUT); digitalWrite(8, LOW);
     pinMode(9, OUTPUT); digitalWrite(9, LOW);
+    PHASE(96, "pins done");
     delay(50);
-    tftA.clear(); tftA.display();
-    delay(100);
-
-    // --- boot card: 2 s, so the owner can read it after each press ---------
+    // Boot card: where the PREVIOUS run died, and the WDT-reboot tally.
     tftA.clear();
-    tftA.displayText("LC boot card", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
+    tftA.displayText("LOCATOR boot card", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
     char line[40];
-    snprintf(line, sizeof line, "boot #%lu  %s", (unsigned long)bootCount, coldBoot ? "rtc cleared" : "rtc kept");
-    tftA.displayText(line, 2, 16, 2, coldBoot ? ST7735_TFT::COLOR_ORANGE : ST7735_TFT::COLOR_WHITE);
-    snprintf(line, sizeof line, "reason %d  heap %luK", (int)esp_reset_reason(), (unsigned long)(ESP.getFreeHeap() / 1024));
-    tftA.displayText(line, 2, 40, 1, ST7735_TFT::COLOR_YELLOW);
-    snprintf(line, sizeof line, "sketch %luK", (unsigned long)(ESP.getSketchSize() / 1024));
-    tftA.displayText(line, 2, 54, 1, ST7735_TFT::COLOR_YELLOW);
+    snprintf(line, sizeof line, "boot #%lu reason %d", (unsigned long)g_hlBoots, (int)esp_reset_reason());
+    tftA.displayText(line, 2, 16, 1, ST7735_TFT::COLOR_WHITE);
+    snprintf(line, sizeof line, "PREV died P%lu", (unsigned long)g_hlPrev);
+    tftA.displayText(line, 2, 30, 2, (esp_reset_reason() == 6) ? ST7735_TFT::COLOR_RED : ST7735_TFT::COLOR_YELLOW);
+    snprintf(line, sizeof line, "wdt reboots %lu", (unsigned long)g_hlWdt);
+    tftA.displayText(line, 2, 56, 1, g_hlWdt ? ST7735_TFT::COLOR_RED : ST7735_TFT::COLOR_GREEN);
     tftA.display();
-    // LC-nodelay: no boot-card pause; loop starts right after init (as in S1b).
-    led.setBrightness(30);
+    g_hlPhase = 97;      // card shown
+    delay(2500);
+    g_hlPhase = 98;      // setup end (setup() about to return)
   loop: |
-    // L1 probe: one short line to USB serial every 200 ms, exactly like a
-    // module's paced event stream. Nothing reads it unless a host is attached.
-    // L2: no serial, no radio; the link_probe module merely links WiFi/lwIP.
-
-    // render() at 2 Hz is the ONLY thing that touches the panel; the NeoPixel
-    // blink right after it is the off-panel loop heartbeat.
+    extern uint32_t g_hlPhase;
+    g_hlPhase = 110;     // loop entered
     static uint32_t lastDraw = 0;
     if (millis() - lastDraw < 500) return;
     lastDraw = millis();
+    g_hlPhase = 111;
     static uint32_t frames = 0; frames++;
     static bool hb = false; hb = !hb;
-
     tftA.clear();
-    tftA.displayText("LCnd old module, no pause", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
+    tftA.displayText("locator RUNNING", 2, 2, 1, ST7735_TFT::COLOR_GREEN);
     char line[40];
     snprintf(line, sizeof line, "frame %lu", (unsigned long)frames);
-    tftA.displayText(line, 2, 18, 2, ST7735_TFT::COLOR_WHITE);
-    snprintf(line, sizeof line, "up %lus  reset %d", (unsigned long)(millis() / 1000), (int)esp_reset_reason());
-    tftA.displayText(line, 2, 44, 1, ST7735_TFT::COLOR_YELLOW);
-    tftA.displayText(csi.stateName(), 2, 56, 1, ST7735_TFT::COLOR_ORANGE);
-    tftA.displayText("heartbeat ->", 76, 66, 1, 0x8410);
+    tftA.displayText(line, 2, 22, 2, ST7735_TFT::COLOR_WHITE);
+    snprintf(line, sizeof line, "%s up %lus", csi.stateName(), (unsigned long)(millis()/1000));
+    tftA.displayText(line, 2, 48, 1, ST7735_TFT::COLOR_YELLOW);
+    g_hlPhase = 112;
     tftA.fillRect(154, 74, 6, 6, hb ? ST7735_TFT::COLOR_YELLOW : 0x2104);
     tftA.display();
-
-    // off-panel loop heartbeat: centre pixel blinks in step with the square
-    led.clear();
-    if (hb) led.setPixel(4, 0, 40, 0);
-    led.show();
+    g_hlPhase = 113;

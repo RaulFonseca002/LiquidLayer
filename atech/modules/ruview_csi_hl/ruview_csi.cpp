@@ -21,9 +21,13 @@
 #include <math.h>
 #include <ping/ping_sock.h>
 
-RTC_DATA_ATTR uint32_t g_hlCsi = 0;
-RTC_DATA_ATTR uint32_t g_hlTpl = 0;
-RTC_DATA_ATTR uint32_t g_hlLoop = 0;
+// RTC_DATA_ATTR (initialised) persists across warm/WDT resets and is zeroed on a
+// true cold power-on — exactly the semantics we need, and it links cleanly
+// (an uninitialised global in a custom section becomes a non-placeable common symbol).
+RTC_DATA_ATTR uint32_t g_hlPhase = 0;
+RTC_DATA_ATTR uint32_t g_hlPrev = 0;
+RTC_DATA_ATTR uint32_t g_hlWdt = 0;
+RTC_DATA_ATTR uint32_t g_hlBoots = 0;
 
 static void promiscNoop(void* buf, wifi_promiscuous_pkt_type_t type) { (void)buf; (void)type; }
 
@@ -44,16 +48,19 @@ RuViewCsi::RuViewCsi(const char* instanceName) {
 // ------------------------------------------------------------------ lifecycle
 
 void RuViewCsi::begin() {
-    g_hlCsi = 91;
+    g_hlPrev = g_hlPhase;                       // 0 on a cold boot, retained on a warm/WDT reboot                       // where the PREVIOUS boot got to
+    if (esp_reset_reason() == 6) g_hlWdt++;     // task-WDT reboot = a masked hang
+    g_hlBoots++;
+    g_hlPhase = 90;
     loadConfig();
-    g_hlCsi = 92;
+    g_hlPhase = 92;
     atech_actions::subscribe(_name, &RuViewCsi::onActionStatic, this);
-    g_hlCsi = 93;
+    g_hlPhase = 93;
     _bootMs = millis();
     _lastTickMs = _bootMs;
     // WiFi starts late from update(): the display gets to paint first.
     _state = _ssid[0] ? State::Idle : State::Unconfigured;
-    g_hlCsi = 94;
+    g_hlPhase = 94;
 }
 
 void RuViewCsi::loadConfig() {
@@ -310,11 +317,11 @@ void RuViewCsi::injectProbe() {
 // ------------------------------------------------------------------ loop side
 
 void RuViewCsi::update() {
-    g_hlCsi = 101;
+    g_hlPhase = 101;
     bool host = (bool)Serial;
-    g_hlCsi = 102;
+    g_hlPhase = 102;
     if (host) atech_actions::poll();
-    g_hlCsi = 103;
+    g_hlPhase = 103;
     uint32_t now = millis();
 
     switch (_state) {
@@ -339,7 +346,7 @@ void RuViewCsi::update() {
             break;
     }
 
-    g_hlCsi = 104;
+    g_hlPhase = 104;
     // Copy the latest published results for the getters (cheap, lock-guarded).
     if (_csiOn) {
         portENTER_CRITICAL(&_mux);
@@ -349,7 +356,7 @@ void RuViewCsi::update() {
         _snap.rssi = isConnected() ? WiFi.RSSI() : 0;
         _snap.rateHz = 0;
     }
-    g_hlCsi = 105;
+    g_hlPhase = 105;
 }
 
 bool RuViewCsi::tick1Hz() {

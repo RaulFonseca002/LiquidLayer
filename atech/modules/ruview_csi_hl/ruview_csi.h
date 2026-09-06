@@ -29,10 +29,14 @@
 #include "ruview_wire.h"
 #include "ruview_edge.h"
 
-// Hang-locator markers (RTC memory: survive a watchdog reboot). Read + reset by the boot card.
-extern RTC_DATA_ATTR uint32_t g_hlCsi;   // last step inside RuViewCsi
-extern RTC_DATA_ATTR uint32_t g_hlTpl;   // last step in the module's loop template
-extern RTC_DATA_ATTR uint32_t g_hlLoop;  // last step in user loop
+// Hang locator: ONE monotonic phase marker for the whole boot, in RTC_NOINIT
+// memory (survives a warm/WDT reset, not a full power loss). begin() captures the
+// previous boot's furthest phase into g_hlPrev before zeroing g_hlPhase, so the
+// boot card can show exactly where the last run died. No mid-boot clearing.
+extern RTC_DATA_ATTR uint32_t g_hlPhase;   // this boot's furthest phase
+extern RTC_DATA_ATTR uint32_t g_hlPrev;    // previous boot's furthest phase
+extern RTC_DATA_ATTR uint32_t g_hlWdt;     // count of reason-6 (task-WDT) reboots = masked hangs
+extern RTC_DATA_ATTR uint32_t g_hlBoots;   // total boots since power-on
 
 class RuViewCsi {
 public:
