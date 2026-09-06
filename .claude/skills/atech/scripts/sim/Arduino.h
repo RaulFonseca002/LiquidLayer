@@ -136,9 +136,22 @@ inline HardwareSerial Serial;
 inline HardwareSerial Serial1;
 inline HardwareSerial Serial2;
 
+// ---- loop watchdog + RTC memory (instrumentation used by the node firmware) ----
+inline void enableLoopWDT() { sim::trace("wdt   ", "loop WDT enabled"); }
+inline void disableLoopWDT() {}
+inline void feedLoopWDT() {}
+#ifndef RTC_DATA_ATTR
+#define RTC_DATA_ATTR
+#endif
+#ifndef RTC_NOINIT_ATTR
+#define RTC_NOINIT_ATTR
+#endif
+
 // ---- ESP object ----
 struct EspClass {
     uint32_t getFreeHeap() { return 250000; }
+    uint32_t getSketchSize() { return 276 * 1024; }
+    uint32_t getFreeSketchSpace() { return 3 * 1024 * 1024; }
     uint32_t getMinFreeHeap() { return 200000; }
     uint32_t getCpuFreqMHz() { return 240; }
     void restart() { sim::trace("esp   ", "restart() requested"); }

@@ -24,7 +24,10 @@ templates:
     {{ instance }}.begin();
   loop: |
     {{ instance }}.update();
-    {
+    // Only talk on USB when a host is actually reading (HWCDC operator bool).
+    // Writing into the CDC with no reader is suspected of killing the bit-banged
+    // display after a warm reset (rebuild stage S1b).
+    if (Serial) {
       char ev[192];
       if ({{ instance }}.nextEvent(ev, sizeof ev)) Serial.println(ev);
     }
@@ -70,6 +73,9 @@ actions:
   - key: "{{ instance }}_set_sink"
     value_type: json
     description: 'Object {"ip": "192.168.1.20", "port": 5005, "node_id": 1} RuView aggregator; stored in NVS.'
+  - key: "{{ instance }}_wifi_enable"
+    value_type: int
+    description: "1 = start the radio (default), 0 = never start WiFi (stage test; module still runs). Persisted in NVS."
   - key: "{{ instance }}_csi_enable"
     value_type: int
     description: "1 = capture CSI + run the DSP task + stream to the sink (default), 0 = WiFi only. Persisted in NVS."

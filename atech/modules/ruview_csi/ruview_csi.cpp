@@ -56,6 +56,7 @@ void RuViewCsi::loadConfig() {
     _sinkPort = (uint16_t)_prefs.getUShort("sink_port", ruview_wire::DEFAULT_PORT);
     _nodeId = (uint8_t)_prefs.getUChar("node_id", 1);
     _csiEnabled = _prefs.getUChar("csi_en", 1) != 0;
+    _wifiEnabled = _prefs.getUChar("wifi_en", 1) != 0;
     strncpy(_ssid, s.c_str(), sizeof _ssid - 1);
     strncpy(_pass, p.c_str(), sizeof _pass - 1);
     strncpy(_sinkIp, ip.c_str(), sizeof _sinkIp - 1);
@@ -301,14 +302,14 @@ void RuViewCsi::injectProbe() {
 // ------------------------------------------------------------------ loop side
 
 void RuViewCsi::update() {
-    atech_actions::poll();
+    if (Serial) atech_actions::poll();   // serial I/O only while a host is connected
     uint32_t now = millis();
 
     switch (_state) {
         case State::Unconfigured:
             break;
         case State::Idle:
-            if (now - _bootMs >= LATE_START_MS) startWifi();
+            if (_wifiEnabled && now - _bootMs >= LATE_START_MS) startWifi();
             break;
         case State::Connecting:
             if (WiFi.status() == WL_CONNECTED) onConnected();
@@ -380,7 +381,7 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
 const char* RuViewCsi::stateName() const {
     switch (_state) {
         case State::Unconfigured: return "unconfigured";
-        case State::Idle:         return "idle";
+        case State::Idle:         return _wifiEnabled ? "idle" : "wifi off";
         case State::Connecting:   return "connecting";
         case State::Connected:    return "connected";
         case State::Streaming:    return "streaming";
@@ -405,6 +406,20 @@ void RuViewCsi::setSink(const char* ip, uint16_t port, uint8_t nodeId) {
     if (port) { _sinkPort = port; _prefs.putUShort("sink_port", port); }
     if (nodeId) { _nodeId = nodeId; _prefs.putUChar("node_id", nodeId); }
     _sinkValid = _sinkAddr.fromString(_sinkIp);
+}
+
+void RuViewCsi::setWifiEnabled(bool on) {
+    _wifiEnabled = on;
+    _prefs.putUChar("wifi_en", on ? 1 : 0);
+    if (!on) {
+        disableCsi();
+        WiFi.disconnect(true, false);
+        WiFi.mode(WIFI_OFF);
+        _state = State::Idle;
+    } else if (_state == State::Idle) {
+        startWifi();
+    }
+    logEvent(on ? "wifi: enabled" : "wifi: disabled (radio off)");
 }
 
 void RuViewCsi::setCsiEnabled(bool on) {
@@ -482,6 +497,8 @@ void RuViewCsi::onAction(const char* action, const char* value) {
         logEvent(msg);
     } else if (strcmp(sub, "csi_enable") == 0) {
         setCsiEnabled(strtod(value, nullptr) != 0);
+    } else if (strcmp(sub, "wifi_enable") == 0) {
+        setWifiEnabled(strtod(value, nullptr) != 0);
     } else if (strcmp(sub, "scan") == 0) {
         scanNetworks();
     } else if (strcmp(sub, "diag") == 0) {

@@ -63,6 +63,7 @@ public:
     bool        isConnected() const { return _state == State::Connected || _state == State::Streaming; }
     bool        isStreaming() const { return _state == State::Streaming; }
     bool        csiEnabled() const { return _csiEnabled; }
+    bool        wifiEnabled() const { return _wifiEnabled; }
     const Snapshot& snap() const { return _snap; }
     float       frameRateHz() const { return _snap.rateHz; }
     int         rssi() const { return _snap.rssi; }
@@ -87,6 +88,7 @@ public:
     void setWifi(const char* ssid, const char* pass);          // persists + reconnects
     void setSink(const char* ip, uint16_t port, uint8_t nodeId); // persists
     void setCsiEnabled(bool on);                                // persists; applies live
+    void setWifiEnabled(bool on);                               // persists; 0 = radio never starts (stage test)
     void setStreaming(bool on) { _streaming = on; }
     void calibrate() { _calibRequest = true; }
     void scanNetworks();   // list 2.4 GHz networks as log events (blocking ~3 s)
@@ -128,6 +130,7 @@ private:
     State       _state = State::Unconfigured;
     bool        _csiOn = false;
     bool        _csiEnabled = true;
+    bool        _wifiEnabled = true;
     bool        _streaming = true;
     bool        _probeInject = false;
     bool        _promisc = false;     // promiscuous mode kills CSI on Arduino core 2.0.17 (S3); keep off
