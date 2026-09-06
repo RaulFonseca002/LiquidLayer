@@ -1,5 +1,5 @@
 # Liquid node — ground-up rebuild v2 (see ../../STAGES.md).
-# RUNG L1: L0 + Serial.println("tick") every 200 ms. Nothing else. Loop watchdog, RTC boot counter + boot card,
+# RUNG L2: L0 + link_probe (links WiFi/lwIP, does nothing). Nothing else. Loop watchdog, RTC boot counter + boot card,
 # NeoPixel loop heartbeat (off-panel liveness), reset reason on screen.
 # The ONLY change vs L0 is the paced serial print below.
 name: liquid-node
@@ -8,6 +8,7 @@ modules_path: ../../modules
 modules:
   - {id: st7735_tft, instance: tftA, ports: [1, 2]}
   - {id: neopixel,   instance: led,  port: 10}
+  - {id: link_probe, instance: lp,   port: 11}
 code:
   setup: |
     // --- instrumentation -------------------------------------------------
@@ -32,7 +33,7 @@ code:
 
     // --- boot card: 2 s, so the owner can read it after each press ---------
     tftA.clear();
-    tftA.displayText("L1 boot card", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
+    tftA.displayText("L2 boot card", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
     char line[40];
     snprintf(line, sizeof line, "boot #%lu  %s", (unsigned long)bootCount, coldBoot ? "rtc cleared" : "rtc kept");
     tftA.displayText(line, 2, 16, 2, coldBoot ? ST7735_TFT::COLOR_ORANGE : ST7735_TFT::COLOR_WHITE);
@@ -46,8 +47,7 @@ code:
   loop: |
     // L1 probe: one short line to USB serial every 200 ms, exactly like a
     // module's paced event stream. Nothing reads it unless a host is attached.
-    static uint32_t lastTick = 0;
-    if (millis() - lastTick >= 200) { lastTick = millis(); Serial.println("tick"); }
+    // L2: no serial, no radio; the link_probe module merely links WiFi/lwIP.
 
     // render() at 2 Hz is the ONLY thing that touches the panel; the NeoPixel
     // blink right after it is the off-panel loop heartbeat.
@@ -58,7 +58,7 @@ code:
     static bool hb = false; hb = !hb;
 
     tftA.clear();
-    tftA.displayText("L1  + serial tick", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
+    tftA.displayText("L2  + wifi linked", 2, 2, 1, ST7735_TFT::COLOR_CYAN);
     char line[40];
     snprintf(line, sizeof line, "frame %lu", (unsigned long)frames);
     tftA.displayText(line, 2, 18, 2, ST7735_TFT::COLOR_WHITE);
