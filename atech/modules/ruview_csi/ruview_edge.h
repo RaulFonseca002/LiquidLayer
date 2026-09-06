@@ -14,14 +14,16 @@
  * Frame layouts: the access point switches between 256-byte (HT) and 384-byte (HT + STBC) frames
  * with link conditions, and their HT-LTF blocks describe different channels (measured corr -0.35),
  * so each layout keeps its own template and its own previous frame; the noise statistics are shared.
- * A layout never seen during calibration gets its template lazily, only while the room is quiet and
- * judged empty through a templated layout. 128-byte (LLTF-only) frames are ignored: the LLTF block
- * measured as pure noise against its own template.
+ * 128-byte (LLTF-only) frames are ignored: the LLTF block measured as pure noise against its own
+ * template (with ltf_merge on).
  *
- * Both features are EMA-smoothed; thresholds are learned as mean + K*sigma of the SMOOTHED values
- * during an empty-room calibration (template phase builds a_ref, stats phase measures the noise),
- * then a Schmitt trigger (off level mean + 2 sigma) with N-frame confirmation and a hold time decides
- * presence. No presence decisions are made while calibrating.
+ * Decision (candidate F of atech/analysis, chosen on labelled recordings): after a 15 s warm-up the
+ * engine tracks a baseline of each feature (fast while absent and quiet, slowly otherwise so a new
+ * router regime is absorbed; the wander baseline moves only while absent). A motion event is jitter > 4x its baseline in 3 of 5 frames; presence
+ * is an event within 60 s, or wander > 6x its baseline while an event happened within 120 s (a still
+ * person got there by moving); "moving" is an event within 5 s. Templates per frame layout bootstrap
+ * from the first 300 frames of that layout and then learn only while absent and quiet. No stored
+ * calibration: 30 s after boot the engine is live, and a `csi_calibrate` restarts the warm-up.
  *
  * Vitals: the primary layout's normalised amplitudes are resampled onto a uniform 20 Hz grid,
  * detrended and clamped, and accumulated into a Hann-windowed 30 s block DFT per bin over the
@@ -51,34 +53,28 @@ public:
     static constexpr float    FS             = 20.0f;   // uniform vitals grid (Hz)
     static constexpr uint32_t GRID_MS        = 50;
     static constexpr uint16_t BLOCK_LEN      = 600;     // 30 s DFT block
-    // ---- presence
-    static constexpr float    ALPHA          = 0.2f;    // EMA of jitter/wander (~250 ms at 20 Hz)
-    static constexpr float    K_SIGMA        = 4.0f;    // on threshold  = mean + K*sigma
-    static constexpr float    K_OFF          = 2.0f;    // off threshold = mean + K_OFF*sigma
-    // Floors from real rooms: empty wander 0.02 +- 0.009 (p95 0.04), jitter 0.037 +- 0.013. A single very
-    // quiet window learned thr_w 0.012 and then flickered on normal room noise; a still person 1-2 m
-    // away gives 0.7-1.1, a person at a desk off the router-board path ~0.06.
-    static constexpr float    FLOOR_J        = 0.08f;
-    static constexpr float    FLOOR_W        = 0.04f;
-    static constexpr float    MEAN_RATIO     = 1.75f;   // on threshold also >= MEAN_RATIO * ambient mean
-    static constexpr float    CAP_THR        = 1.5f;    // metric is 1 - corr in [0, 2]; keep thresholds reachable
-    static constexpr float    PLAUSIBLE_THR_W = 0.25f;  // an empty room learns thr_w ~0.04-0.06; a person in the room ~1.2
-    static constexpr float    PLAUSIBLE_THR_J = 1.0f;   // jitter is only the secondary detector; mixed frame layouts inflate its sigma (0.49 seen)
-    static constexpr uint8_t  ON_FRAMES      = 3;
-    static constexpr uint8_t  OFF_FRAMES     = 20;
-    static constexpr uint32_t HOLD_MS        = 3000;
-    static constexpr float    REF_TAU_MS     = 600000.0f;  // baseline drift adaptation while absent
+    // ---- presence: adaptive baseline ratios (candidate F of analysis/candidates.py)
+    // The router changes its transmit mode and with it the empty-room noise level (jitter 0.005 in one
+    // period, 0.8 in another); absolute thresholds do not survive that, ratios to a tracked baseline do.
+    static constexpr float    ALPHA          = 0.2f;    // EMA of jitter/wander for diagnostics
+    static constexpr float    R_J            = 4.0f;    // motion event: jitter > R_J x baseline
+    static constexpr float    R_W            = 6.0f;    // still body: wander > R_W x baseline (with a recent event)
+    static constexpr uint8_t  EV_K           = 3;       // k of the last n frames must be events
+    static constexpr uint8_t  EV_N           = 5;
+    static constexpr uint32_t HOLD_MS        = 60000;   // presence after the last motion event
+    static constexpr uint32_t MEMORY_MS      = 120000;  // wander may keep presence this long after an event
+    static constexpr uint32_t MOVING_MS      = 5000;    // "moving" = event within this window
+    static constexpr float    TAU_FAST_S     = 20.0f;   // baseline tracking while absent and quiet
+    static constexpr float    TAU_SLOW_S     = 900.0f;  // otherwise (absorbs a new router regime)
+    static constexpr float    QUIET_RATIO    = 2.0f;
+    static constexpr float    FLOOR_J        = 0.003f;
+    static constexpr float    FLOOR_W        = 0.01f;    // empty rooms measure 0.003-0.02; a template built with a person
+                                                        // present would otherwise learn a near-zero baseline against itself
+    static constexpr float    TAU_TEMPLATE_S = 120.0f;  // template drift while absent and quiet (converges to the empty room in minutes)
+    static constexpr uint16_t TEMPLATE_FRAMES = 300;    // frames of a layout that bootstrap its template
+    static constexpr uint32_t WARMUP_MS      = 15000;   // no decisions; baselines = medians of the warm-up
+    static constexpr uint16_t WARM_N         = 200;
     static constexpr uint32_t GAP_RESET_MS   = 1000;
-    static constexpr uint16_t LAZY_TEMPLATE_FRAMES = 100;  // quiet frames needed to adopt a template for a new layout
-    // ---- calibration timing
-    static constexpr uint32_t LEAVE_MS       = 10000;   // button-started calibration: time to leave the room
-    static constexpr uint32_t TEMPLATE_MS    = 15000;   // builds a_ref
-    static constexpr uint32_t STATS_MIN_MS   = 15000;   // minimum noise-statistics phase
-    static constexpr uint32_t CALIB_AUTO_MS  = 60000;   // total for the automatic (boot) calibration
-    static constexpr uint32_t CALIB_MAX_MS   = 600000;  // safety cap for an open-ended one
-    static constexpr float    RETURN_K_SIGMA = 6.0f;    // wander above mean + 6 sigma (and above RETURN_MIN_W) during stats = someone came back
-    static constexpr float    RETURN_MIN_W   = 0.05f;   // a real body gives 0.7-1.4, an empty room 0.02; primary-layout frames only
-    static constexpr uint8_t  RETURN_FRAMES  = 5;
     // ---- vitals
     static constexpr uint8_t  BR_BINS = 33;   // 0.100 .. 0.500 Hz step 0.0125 (6 .. 30 bpm, 0.75 bpm)
     static constexpr uint8_t  HR_BINS = 37;   // 0.70 .. 2.50 Hz step 0.05 (42 .. 150 bpm, 3 bpm)
@@ -105,41 +101,31 @@ public:
     void reset();
     // One CSI frame: raw int8 (imag, real) pairs, `iqLen` bytes, arrival time `nowMs`.
     void push(const int8_t* iq, uint16_t iqLen, uint32_t nowMs);
-
-    // Calibration control. Automatic: started by the first frame if never calibrated (60 s).
-    // Button ("empty" segment): forceCalibrate(nowMs, LEAVE_MS, true) then endCalibration() on the
-    // next press; the stats phase lasts at least STATS_MIN_MS.
-    void forceCalibrate(uint32_t nowMs, uint32_t leaveDelayMs = 0, bool openEnded = false);
-    void endCalibration() { _closeRequested = true; }
-    bool     calibrating() const { return _phase != Phase::Idle; }
-    bool     calibrated() const { return _calibrated; }
-    // False when the learned thresholds say the room was not empty during calibration (do not persist).
-    bool     calibrationPlausible() const { return _calibrated && _thrW <= PLAUSIBLE_THR_W && _thrJ <= PLAUSIBLE_THR_J; }
-    bool     calibrationClosedByReturn() const { return _closedByReturn; }   // the last calibration ended because someone re-entered
-    Phase    phase() const { return _phase; }
-    const char* phaseName() const;
-    uint32_t calibSecondsLeft(uint32_t nowMs) const;   // 0 while open-ended past its minimum, or done
+    // Forget templates and baselines and warm up again (csi_calibrate / csi_forget).
+    void restart() { reset(); }
+    bool     calibrating() const { return _warm; }                 // warming up: no decisions yet
+    const char* phaseName() const { return _warm ? "warmup" : "ready"; }
+    uint32_t calibSecondsLeft(uint32_t nowMs) const { return (!_warm || _t0Ms == 0) ? 0 : (nowMs - _t0Ms >= WARMUP_MS ? 0 : (WARMUP_MS - (nowMs - _t0Ms) + 999) / 1000); }
 
     // ---- outputs
     bool     presence() const { return _presence; }
-    float    jitter() const { return _sj; }
+    bool     moving() const { return _moving; }                    // motion event within MOVING_MS
+    float    jitter() const { return _sj; }                        // smoothed features (diagnostics)
     float    wander() const { return _sw; }
-    float    thresholdJitter() const { return _thrJ; }
-    float    thresholdWander() const { return _thrW; }
-    float    offJitter() const { return _offJ; }
-    float    offWander() const { return _offW; }
-    float    ambientJitter() const { return _meanJ; }
-    float    ambientWander() const { return _meanW; }
-    float    sigmaJitter() const { return _sigJ; }
-    float    sigmaWander() const { return _sigW; }
-    float    motionEnergy() const { return _sj; }
-    float    presenceScore() const { return _thrW > 0 ? _sw / _thrW : 0.0f; }  // >= 1 means over threshold
+    float    baselineJitter() const { return _bj; }
+    float    baselineWander() const { return _bw; }
+    float    ratioJitter() const { return _rj; }                   // last frame's jitter / baseline
+    float    ratioWander() const { return _rw; }
+    float    thresholdJitter() const { return R_J * (_bj > FLOOR_J ? _bj : FLOOR_J); }
+    float    thresholdWander() const { return R_W * (_bw > FLOOR_W ? _bw : FLOOR_W); }
+    float    motionEnergy() const { return _sj; }                  // RuView wire: motion_energy
+    float    presenceScore() const { return _rw; }                 // RuView wire: presence_score (>= R_W means over)
     float    heartRateBpm() const { return _hrBpm; }
     float    heartConfidence() const { return _hrConf; }
-    float    breathingBpm() const { return _brBpm; }          // 0 until a prominent, in-band peak was seen
-    float    breathingConfidence() const { return _brConf; }  // (prominence - 1) / 4, clamped 0..1
-    bool     vitalsValid() const { return _presence && !calibrating() && _brBpm > 0.0f; }
-    bool     fall() const { return false; }                   // disabled: never validated on hardware
+    float    breathingBpm() const { return _brBpm; }
+    float    breathingConfidence() const { return _brConf; }
+    bool     vitalsValid() const { return _presence && !_warm && _brBpm > 0.0f; }
+    bool     fall() const { return false; }                        // disabled: never validated on hardware
     bool     consumeBeat() { bool b = _beat; _beat = false; return b; }
 
     // ---- diagnostics
@@ -160,16 +146,8 @@ public:
     static float corr(const float* a, const float* b, uint8_t n);
 
 private:
-    struct Welford { double mean, m2; uint32_t count; };
-    static void   welfordReset(Welford& w) { w.mean = 0; w.m2 = 0; w.count = 0; }
-    static void   welfordUpdate(Welford& w, double x);
-    static double welfordVar(const Welford& w) { return w.count > 1 ? w.m2 / (double)(w.count - 1) : 0.0; }
-    static float  medianOf(float* v, uint8_t n);   // sorts v in place
+    static float  medianOf(float* v, uint16_t n);  // sorts v in place
 
-    void startCalibration(uint32_t nowMs, uint32_t leaveDelayMs, bool openEnded);
-    void updateCalibration(uint32_t nowMs, uint8_t lay, const float* a);
-    void finishCalibration();
-    void updatePresence(uint32_t nowMs);
     void resetBlock();
     void processGridSample(const float* v);
     void finishBlock();
@@ -189,31 +167,27 @@ private:
     uint32_t _rateMs = 0;
     uint16_t _rateFrames = 0;
 
-    // ---- features
-    float    _sj = 0, _sw = 0;
+    // ---- features and adaptive baselines
+    float    _sj = 0, _sw = 0;            // EMA-smoothed jitter / wander (diagnostics)
     bool     _haveS = false;
     float    _ref[LAYOUTS][MAX_BINS] = {};
     bool     _haveRef[LAYOUTS] = {false, false};
-    uint32_t _lastTemplatedMs = 0;        // last frame judged through a templated layout
-    float    _lastTemplatedW = 0;
-    double   _lazySum[LAYOUTS][MAX_BINS] = {};
-    uint16_t _lazyCount[LAYOUTS] = {0, 0};
-
-    // ---- calibration
-    Phase    _phase = Phase::Idle;
-    bool     _calibrated = false, _openEnded = false, _closeRequested = false;
-    uint32_t _calibStartMs = 0, _phaseStartMs = 0, _leaveMs = 0;
-    uint8_t  _returnFrames = 0;
-    bool     _closedByReturn = false;
     double   _tplSum[LAYOUTS][MAX_BINS] = {};
-    uint32_t _tplCount[LAYOUTS] = {0, 0};
-    Welford  _statJ{}, _statW{};
-    float    _thrJ = 0, _thrW = 0, _offJ = 0, _offW = 0;
-    float    _meanJ = 0, _sigJ = 0, _meanW = 0, _sigW = 0;
+    uint16_t _tplCount[LAYOUTS] = {0, 0};
+    uint32_t _t0Ms = 0;
+    bool     _warm = true;
+    float    _warmJ[WARM_N] = {0}, _warmW[WARM_N] = {0};
+    uint16_t _nWarmJ = 0, _nWarmW = 0;
+    float    _bj = 0, _bw = 0;            // tracked baselines (0 = unknown)
+    float    _rj = 0, _rw = 0;            // last ratios (0 = unknown)
+    bool     _evHist[EV_N] = {false};
+    uint8_t  _evPos = 0;
+    uint32_t _lastEventMs = 0;
+    bool     _haveEvent = false;
 
     // ---- presence
     bool     _presence = false;
-    uint8_t  _above = 0, _below = 0;
+    bool     _moving = false;
     uint32_t _onSinceMs = 0;
 
     // ---- vitals: uniform grid + block DFT accumulators

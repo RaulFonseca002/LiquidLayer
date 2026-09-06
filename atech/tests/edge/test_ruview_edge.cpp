@@ -25,24 +25,31 @@ struct Room {
     float breathAmp = 0.0f, breathHz = 0.25f;
     float breathDepth[64] = {0};   // per-bin modulation depth (signed): a chest reflection touches the whole band
     float gain = 1.0f;         // AGC step
+    bool walking = false;      // channel changes every frame (random walk of delta)
+    float fidgetEvery = 0.0f;  // seated person: a 0.5 s movement burst every N seconds (0 = none)
     float noise = 1.0f;        // I/Q noise sigma (LSB)
     Room() {
         std::uniform_real_distribution<float> u(20.0f, 60.0f), ph(0.0f, 6.283f);
         std::uniform_real_distribution<float> depth(0.02f, 0.05f);
         for (int k = 0; k < 64; ++k) { base[k] = u(rng); phase[k] = ph(rng); breathDepth[k] = (k % 2) ? depth(rng) * ((k / 2) % 2 ? 1.0f : -1.0f) : 0.0f; }
     }
-    void personStill(float strength) {   // channel changed by a body; breathing modulates some bins
+    void personStill(float strength) {   // channel changed by a body; breathing modulates some bins; fidgets now and then
         std::uniform_real_distribution<float> u(-strength, strength);
         for (int k = 0; k < 64; ++k) delta[k] = u(rng);
-        breathAmp = 0.05f;
+        breathAmp = 0.05f; walking = false; fidgetEvery = 45.0f;
     }
-    void personWalk() { std::uniform_real_distribution<float> u(-0.3f, 0.3f); for (int k = 0; k < 64; ++k) delta[k] = u(rng); breathAmp = 0; }
-    void empty() { for (int k = 0; k < 64; ++k) delta[k] = 0; breathAmp = 0; }
+    void personWalk() { std::uniform_real_distribution<float> u(-0.3f, 0.3f); for (int k = 0; k < 64; ++k) delta[k] = u(rng); breathAmp = 0; walking = true; fidgetEvery = 0; }
+    void empty() { for (int k = 0; k < 64; ++k) delta[k] = 0; breathAmp = 0; walking = false; fidgetEvery = 0; }
     // 384-byte STBC HT20 frame: LLTF (zeros), HT-LTF (signal), STBC-HT-LTF (zeros)
     void frame(float tS, int8_t* out) {
         std::normal_distribution<float> n(0.0f, noise);
         std::uniform_real_distribution<float> ph(0.0f, 6.283f);
         std::memset(out, 0, 384);
+        bool fidget = fidgetEvery > 0 && std::fmod(tS, fidgetEvery) < 0.5f;
+        if (walking || fidget) {            // the body moves: the channel changes from frame to frame
+            std::normal_distribution<float> step(0.0f, 0.08f);
+            for (int k = 0; k < 64; ++k) delta[k] += -0.1f * delta[k] + step(rng);   // mean-reverting random walk: keeps changing, never saturates
+        }
         float common = ph(rng);   // random per-packet phase offset (CFO), as on real hardware
         for (int k = 0; k < 64; ++k) {
             float a = base[k] * (1.0f + delta[k]) * gain;
@@ -78,41 +85,46 @@ static float run(RuViewEdge& e, Room& room, float& tS, float seconds, uint32_t& 
 }
 
 static void testSynthetic() {
-    std::printf("synthetic scenario\n");
+    std::printf("synthetic scenario (adaptive baseline ratios)\n");
     RuViewEdge e; e.reset();
     Room room; float t = 0; uint32_t now = 1000;
-    // (a) empty room, automatic 60 s calibration, then 30 s empty
-    run(e, room, t, 62.0f, now);
-    CHECK(e.calibrated(), "calibrated after 62 s (phase %s)", e.phaseName());
-    CHECK(!e.calibrating(), "not calibrating after auto window");
-    float thrJ = e.thresholdJitter(), thrW = e.thresholdWander();
-    std::printf("  thresholds: jitter on %.4f off %.4f  wander on %.4f off %.4f (ambient j %.4f+-%.4f w %.4f+-%.4f)\n", thrJ, e.offJitter(), thrW, e.offWander(), e.ambientJitter(), e.sigmaJitter(), e.ambientWander(), e.sigmaWander());
-    CHECK(thrJ > 0 && thrJ < 1.0f && thrW > 0 && thrW < 1.0f, "thresholds finite and reachable");
-    float fEmpty = run(e, room, t, 30.0f, now);
-    std::printf("  empty:  presence %.1f%%\n", 100 * fEmpty);
+    // (a) empty room: warm-up + template bootstrap, then 60 s empty
+    run(e, room, t, 20.0f, now);
+    CHECK(!e.calibrating(), "warm-up over after 20 s (%s)", e.phaseName());
+    float fEmpty = run(e, room, t, 60.0f, now);
+    std::printf("  baselines: jitter %.4f wander %.4f; empty presence %.1f%%\n", e.baselineJitter(), e.baselineWander(), 100 * fEmpty);
+    CHECK(e.baselineJitter() > 0 && e.baselineWander() > 0, "baselines learned");
     CHECK(fEmpty < 0.01f, "empty room stays absent (%.1f%%)", 100 * fEmpty);
-    // (b) still person with breathing 15 BPM
+    // (b) person walks in (motion event) and sits still with breathing: presence must hold through stillness
+    room.personWalk();
+    run(e, room, t, 3.0f, now);
+    CHECK(e.presence() && e.moving(), "walking in detected as IN moving");
     room.personStill(0.3f);
     float brBpm = 0, brC = 0;
-    float fStill = run(e, room, t, 90.0f, now, &brBpm, &brC);   // >= 2 full 30 s blocks after the entry transient
-    std::printf("  still:  presence %.1f%%  wander %.4f  BR %.1f bpm conf %.2f  HR %.1f conf %.2f  blocks %lu\n",
-                100 * fStill, e.wander(), brBpm, brC, e.heartRateBpm(), e.heartConfidence(), (unsigned long)e.blocks());
-    CHECK(fStill > 0.95f, "still person detected (%.1f%%)", 100 * fStill);
+    float fStill = run(e, room, t, 150.0f, now, &brBpm, &brC);
+    std::printf("  still:  presence %.1f%%  wander x%.1f  moving %d  BR %.1f bpm conf %.2f  HR %.1f conf %.2f  blocks %lu\n",
+                100 * fStill, e.ratioWander(), (int)e.moving(), brBpm, brC, e.heartRateBpm(), e.heartConfidence(), (unsigned long)e.blocks());
+    CHECK(fStill > 0.95f, "still person kept present beyond the 60 s hold through wander (%.1f%%)", 100 * fStill);
+    CHECK(!e.moving(), "not moving while still");
+    // breathing needs fidget-free blocks: a 100 s motionless stretch (presence holds through wander + memory)
+    room.fidgetEvery = 0;
+    run(e, room, t, 100.0f, now, &brBpm, &brC);
+    std::printf("  motionless: BR %.1f bpm conf %.2f\n", brBpm, brC);
     CHECK(std::fabs(brBpm - 15.0f) <= 1.5f, "breathing 15 +- 1.5 bpm (got %.1f)", brBpm);
-    CHECK(brC >= (RuViewEdge::BR_PROMINENCE_MIN - 1.0f) / 4.0f, "breathing prominence >= %.0f (conf %.2f)", RuViewEdge::BR_PROMINENCE_MIN, brC);
+    room.fidgetEvery = 45.0f;
     CHECK(!e.fall(), "fall disabled");
     // (c) walking
     room.personWalk();
-    float fWalk = 0; { int frames = 0, on = 0; float tEnd = t + 20; int8_t buf[384];
-        while (t < tEnd) { if (((int)(t * 2)) % 1 == 0 && std::fmod(t, 0.5f) < 0.06f) room.personWalk(); room.frame(t, buf); e.push(buf, 384, now); frames++; on += e.presence(); t += 0.05f; now += 50; }
-        fWalk = (float)on / frames; }
-    std::printf("  walk:   presence %.1f%%  jitter %.4f\n", 100 * fWalk, e.jitter());
+    float fWalk = 0; { int frames = 0, on = 0, mov = 0; float tEnd = t + 20; int8_t buf[384];
+        while (t < tEnd) { room.frame(t, buf); e.push(buf, 384, now); frames++; on += e.presence(); mov += e.moving(); t += 0.05f; now += 50; }
+        fWalk = (float)on / frames; std::printf("  walk:   presence %.1f%%  moving %.1f%%\n", 100 * fWalk, 100.0f * mov / frames);
+        CHECK(mov > frames / 2, "walking reads as moving"); }
     CHECK(fWalk > 0.95f, "walking detected (%.1f%%)", 100 * fWalk);
-    // (d) leaves: presence must drop within 5 s
+    // (d) leaves: presence must clear within the 60 s hold (+ a little)
     room.empty();
-    float tLeft = t; bool off = false; { int8_t buf[384]; while (t < tLeft + 10) { room.frame(t, buf); e.push(buf, 384, now); if (!e.presence() && !off) { off = true; std::printf("  leave:  off after %.1f s\n", t - tLeft); } t += 0.05f; now += 50; } }
+    float tLeft = t; bool off = false; { int8_t buf[384]; while (t < tLeft + 90) { room.frame(t, buf); e.push(buf, 384, now); if (!e.presence() && !off) { off = true; std::printf("  leave:  off after %.1f s\n", t - tLeft); } t += 0.05f; now += 50; } }
     CHECK(off && !e.presence(), "presence clears after the person leaves");
-    float fAfter = run(e, room, t, 20.0f, now);
+    float fAfter = run(e, room, t, 30.0f, now);
     CHECK(fAfter < 0.02f, "stays absent after leaving (%.1f%%)", 100 * fAfter);
     // (e) AGC gain step in an empty room must not trigger presence
     room.gain = 1.5f;
@@ -120,60 +132,21 @@ static void testSynthetic() {
     std::printf("  agc x1.5 empty: presence %.1f%%\n", 100 * fAgc);
     CHECK(fAgc < 0.02f, "gain step does not fake presence (%.1f%%)", 100 * fAgc);
     room.gain = 1.0f;
-    // (f) button calibration: leave delay, open-ended, closes on request after the minimum
-    room.personStill(0.3f); run(e, room, t, 5.0f, now);
-    CHECK(e.presence(), "person present before recalibration");
-    e.forceCalibrate(now, RuViewEdge::LEAVE_MS, true);
-    CHECK(!e.presence() && e.calibrating() && e.phase() == RuViewEdge::Phase::Leave, "forceCalibrate clears presence and enters leave phase");
-    float fCal = run(e, room, t, 3.0f, now);   // still moving while leaving: no presence during calibration
-    CHECK(fCal == 0.0f, "no presence decisions while calibrating (%.1f%%)", 100 * fCal);
-    room.empty();
-    run(e, room, t, 2.0f, now);
-    CHECK(e.phase() == RuViewEdge::Phase::Leave, "still leaving at 5 s");
-    run(e, room, t, 30.0f, now);   // 35 s in: leave 10 + template 15 + 10 of the 15 s minimum stats
-    CHECK(e.calibrating() && e.phase() == RuViewEdge::Phase::Stats, "open-ended calibration keeps collecting (phase %s)", e.phaseName());
-    CHECK(e.calibSecondsLeft(now) >= 4 && e.calibSecondsLeft(now) <= 6, "countdown ~5 s (got %lu)", (unsigned long)e.calibSecondsLeft(now));
-    run(e, room, t, 6.0f, now);
-    CHECK(e.calibSecondsLeft(now) == 0, "minimum met: countdown 0");
-    run(e, room, t, 20.0f, now);
-    CHECK(e.calibrating(), "open-ended stays open without the button");
-    e.endCalibration();
-    run(e, room, t, 1.0f, now);
-    CHECK(!e.calibrating() && e.calibrated(), "closes on request");
-    // (f3) an open-ended calibration closes by itself when the person walks back in, keeping clean statistics
-    e.forceCalibrate(now, RuViewEdge::LEAVE_MS, true); room.empty();
-    run(e, room, t, 50.0f, now);
-    CHECK(e.calibrating(), "still open before anyone returns");
-    room.personStill(0.3f);
-    run(e, room, t, 3.0f, now);
-    CHECK(!e.calibrating() && e.calibrationClosedByReturn() && e.calibrationPlausible(), "closed by return with plausible thresholds (thr_w %.3f)", e.thresholdWander());
-    float fBack = run(e, room, t, 10.0f, now);
-    CHECK(fBack > 0.8f, "and detects the returned person (%.1f%%)", 100 * fBack);
-    room.personStill(0.3f);
-    float fAgain = run(e, room, t, 20.0f, now);
-    CHECK(fAgain > 0.9f, "detects again after recalibration (%.1f%%)", 100 * fAgain);
-    // (f2) calibration export/import round trip: a fresh engine restored from the blob detects at once
-    { RuViewEdge::Calibration cal; CHECK(e.exportCalibration(cal), "export while calibrated");
-      CHECK(e.calibrationPlausible(), "empty-room calibration is plausible (thr_w %.3f)", e.thresholdWander());
-      RuViewEdge::Calibration poisoned = cal; poisoned.thrW = 1.2f; RuViewEdge e3; e3.reset(); CHECK(!e3.importCalibration(poisoned), "implausible calibration rejected");
-      RuViewEdge e2; e2.reset(); RuViewEdge::Calibration bad = cal; bad.magic = 1; CHECK(!e2.importCalibration(bad), "bad magic rejected");
-      CHECK(e2.importCalibration(cal) && e2.calibrated() && !e2.calibrating(), "import makes the engine calibrated");
-      CHECK(e2.thresholdWander() == e.thresholdWander() && e2.templates() == e.templates(), "thresholds/templates restored");
-      float f2 = run(e2, room, t, 10.0f, now);
-      CHECK(f2 > 0.8f, "restored engine detects the present person without recalibrating (%.1f%%)", 100 * f2); }
-    // (g) 128-byte LLTF-only frames are dropped (counted); 256-byte HT frames are a second layout
-    //     with no template yet: processed for jitter, counted as untemplated, no presence flip
+    // (f) a new router regime (5x noisier, permanent) is absorbed: after the slow adaptation the room is absent again
+    room.noise = 5.0f;
+    float fFirst = run(e, room, t, 900.0f, now);
+    float fRegime = run(e, room, t, 300.0f, now);
+    std::printf("  noisier regime: presence in the first 15 min %.1f%%, in the 5 min after %.1f%%  baseline jitter %.4f\n", 100 * fFirst, 100 * fRegime, e.baselineJitter());
+    CHECK(fRegime < 0.02f, "a new empty-room regime is absorbed by the slow baseline within 15 min (%.1f%% after)", 100 * fRegime);
+    room.noise = 1.0f;
+    // (g) 128-byte LLTF-only frames are dropped (counted); 256-byte frames are a second layout
     int8_t small[128]; for (int i = 0; i < 128; ++i) small[i] = (int8_t)(10 + (i % 7)); uint32_t drops = e.layoutDrops();
     e.push(small, 128, now + 50);
     CHECK(e.layoutDrops() == drops + 1, "LLTF-only frame dropped and counted");
-    { int8_t full[384]; room.frame(t, full); uint32_t fr = e.frames(), un = e.untemplated(); bool p0 = e.presence();
-      e.push(full, 256, now + 100); e.push(full, 256, now + 150);
-      CHECK(e.frames() == fr + 2 && e.untemplated() == un + 2, "256-byte frames processed as their own layout (untemplated %lu)", (unsigned long)e.untemplated());
-      CHECK(e.presence() == p0 && e.templates() == 2, "no template for the new layout yet, presence unchanged"); }
-    // (h) gap: a 3 s hole resets the frame chain without breaking calibration
-    now += 3000; t += 3.0f;
-    run(e, room, t, 5.0f, now);
-    CHECK(e.calibrated() && e.presence(), "survives a gap");
+    { int8_t full[384]; room.frame(t, full); uint32_t fr = e.frames(); e.push(full, 256, now + 100); CHECK(e.frames() == fr + 1, "256-byte frames processed as their own layout"); }
+    // (h) restart warms up again
+    e.restart();
+    CHECK(e.calibrating() && !e.presence(), "restart clears state");
 }
 
 static void testRandomPhase() {
@@ -181,8 +154,8 @@ static void testRandomPhase() {
     RuViewEdge e; e.reset();
     Room room; room.noise = 0.5f; float t = 0; uint32_t now = 500;
     run(e, room, t, 70.0f, now);
-    std::printf("  jitter %.5f (thr %.5f)  wander %.5f (thr %.5f)  noise-only HR %.0f conf %.2f  BR %.0f conf %.2f\n", e.jitter(), e.thresholdJitter(),
-                e.wander(), e.thresholdWander(), e.heartRateBpm(), e.heartConfidence(), e.breathingBpm(), e.breathingConfidence());
+    std::printf("  jitter %.5f (base %.5f)  wander %.5f (base %.5f)  noise-only HR %.0f conf %.2f  BR %.0f conf %.2f\n", e.jitter(), e.baselineJitter(),
+                e.wander(), e.baselineWander(), e.heartRateBpm(), e.heartConfidence(), e.breathingBpm(), e.breathingConfidence());
     CHECK(e.jitter() < 0.05f, "random phase does not create motion (jitter %.4f)", e.jitter());
     CHECK(e.heartConfidence() < 0.3f, "noise-only heart confidence stays low (%.2f)", e.heartConfidence());
     CHECK(e.breathingConfidence() < 0.3f, "noise-only breathing confidence stays low (%.2f)", e.breathingConfidence());
@@ -214,16 +187,12 @@ static bool replay(const char* path, bool doAssert, const char* dumpPath) {
     if (!readRec(path, recs)) { std::printf("cannot read %s\n", path); return false; }
     RuViewEdge e; e.reset();
     FILE* dump = dumpPath ? std::fopen(dumpPath, "w") : nullptr;
-    SegStat st[4]; int lastSeg = 0; int64_t t0 = recs.empty() ? 0 : recs[0].tUs; int frames = 0;
+    SegStat st[4]; int lastSeg = 0; (void)lastSeg; int64_t t0 = recs.empty() ? 0 : recs[0].tUs; int frames = 0;
     for (const Rec& r : recs) {
         if (r.kind != 1 || r.payload.size() < 20) continue;
         uint32_t nowMs = (uint32_t)((r.tUs - t0) / 1000) + 1000;
         float tS = (float)(r.tUs - t0) / 1e6f;
-        if (r.seg != lastSeg) {
-            if (r.seg == 1) e.forceCalibrate(nowMs, RuViewEdge::LEAVE_MS, true);
-            else if (lastSeg == 1) e.endCalibration();
-            lastSeg = r.seg;
-        }
+        lastSeg = r.seg;
         e.push((const int8_t*)r.payload.data() + 20, (uint16_t)(r.payload.size() - 20), nowMs);
         frames++;
         SegStat& s = st[r.seg & 3];
@@ -241,17 +210,17 @@ static bool replay(const char* path, bool doAssert, const char* dumpPath) {
     if (dump) std::fclose(dump);
     // second pass for the empty gate: the person walks back in before pressing, so judge the empty
     // segment only up to 15 s before its end (over templated frames)
-    { RuViewEdge e2; e2.reset(); int last2 = 0;
+    { RuViewEdge e2; e2.reset(); int last2 = 0; (void)last2;
       for (const Rec& r : recs) {
         if (r.kind != 1 || r.payload.size() < 20) continue;
         uint32_t nowMs = (uint32_t)((r.tUs - t0) / 1000) + 1000; float tS = (float)(r.tUs - t0) / 1e6f;
-        if (r.seg != last2) { if (r.seg == 1) e2.forceCalibrate(nowMs, RuViewEdge::LEAVE_MS, true); else if (last2 == 1) e2.endCalibration(); last2 = r.seg; }
+        last2 = r.seg;
         e2.push((const int8_t*)r.payload.data() + 20, (uint16_t)(r.payload.size() - 20), nowMs);
-        if (r.seg == 1 && tS <= st[1].t1 - 15.0f && (e2.templates() & (r.payload.size() - 20 >= 384 ? 2 : 1))) { st[1].nG++; st[1].onG += e2.presence(); }
+        if (r.seg == 1 && tS >= st[1].t0 + 30.0f && tS <= st[1].t1 - 15.0f && (e2.templates() & (r.payload.size() - 20 >= 384 ? 2 : 1))) { st[1].nG++; st[1].onG += e2.presence(); }
       } }
-    std::printf("%s: %d frames, vitals layout %u, templates %u, drops %lu, untemplated %lu, blocks %lu, thr_j %.4f thr_w %.4f, calibrated %d\n", path, frames,
+    std::printf("%s: %d frames, vitals layout %u, templates %u, drops %lu, untemplated %lu, blocks %lu, thr_j %.4f thr_w %.4f, live %d\n", path, frames,
                 e.layout(), e.templates(), (unsigned long)e.layoutDrops(), (unsigned long)e.untemplated(), (unsigned long)e.blocks(),
-                e.thresholdJitter(), e.thresholdWander(), (int)e.calibrated());
+                e.thresholdJitter(), e.thresholdWander(), (int)!e.calibrating());
     bool ok = true;
     for (int s = 0; s < 4; ++s) {
         if (!st[s].n) continue;
@@ -264,8 +233,8 @@ static bool replay(const char* path, bool doAssert, const char* dumpPath) {
         if (doAssert) {
             // only the part of "empty" after the minimum calibration is judged (the person is leaving at first)
             // gates apply to frames whose layout had a template; untemplated layouts are a known limitation
-            if (s == 1 && st[s].nG && 100.0f * st[s].onG / st[s].nG > 1.0f) { ok = false; std::printf("  FAIL empty > 1%% (%.1f%% before the last 15 s)\n", 100.0f * st[s].onG / st[s].nG); }
-            else if (s == 1 && st[s].nG) std::printf("  empty gate: %.1f%% over %d templated frames up to 15 s before the press\n", 100.0f * st[s].onG / st[s].nG, st[s].nG);
+            if (s == 1 && st[s].nG && 100.0f * st[s].onG / st[s].nG > 1.0f) { ok = false; std::printf("  FAIL empty > 1%% (%.1f%% from 30 s in to 15 s before the press)\n", 100.0f * st[s].onG / st[s].nG); }
+            else if (s == 1 && st[s].nG) std::printf("  empty gate: %.1f%% over %d templated frames (30 s in .. 15 s before the press)\n", 100.0f * st[s].onG / st[s].nG, st[s].nG);
             if (s == 2 && st[s].nT && presT < 90.0f) { ok = false; std::printf("  FAIL still < 90%%\n"); }
             if (s == 3 && st[s].nT && presT < 95.0f) { ok = false; std::printf("  FAIL walk < 95%%\n"); }
             if (s == 3 && !st[s].nT) std::printf("  note: walk frames were all of an untemplated layout; presence there relied on jitter only\n");

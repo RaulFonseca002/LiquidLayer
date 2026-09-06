@@ -36,7 +36,7 @@ PILOTS = {7, 21, 43, 57}
 HT_BINS = np.array([i for i in list(range(1, 29)) + list(range(36, 64)) if i not in PILOTS])
 
 P = {"R_j": 4.0, "R_w": 6.0, "k": 3, "n": 5, "hold_s": 60.0, "memory_s": 120.0,
-     "tau_fast_s": 20.0, "tau_slow_s": 900.0, "floor_j": 0.003, "floor_w": 0.002,
+     "tau_fast_s": 20.0, "tau_slow_s": 900.0, "tau_template_s": 120.0, "floor_j": 0.003, "floor_w": 0.01,
      "template_frames": 300, "warmup_s": 15.0}
 
 
@@ -123,12 +123,12 @@ class Detector:
         tau = p["tau_fast_s"] if (not self.on and quiet) else p["tau_slow_s"]
         g = min(1.0, dt / tau)
         if not np.isnan(j): self.bj += g * (j - self.bj)
-        if not np.isnan(w): self.bw += g * (w - self.bw)
+        if not np.isnan(w) and not self.on: self.bw += g * (w - self.bw)   # wander baseline only while absent
         n = self.tpl_n[lay]
         if n < p["template_frames"]:
             gt = 1.0 / n
         elif not self.on and quiet:
-            gt = min(1.0, dt / p["tau_slow_s"])
+            gt = min(1.0, dt / p["tau_template_s"])
         else:
             gt = 0.0
         if gt > 0:

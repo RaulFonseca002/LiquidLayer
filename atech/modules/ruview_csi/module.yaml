@@ -64,7 +64,7 @@ events:
   - key: presence
     type: state
     value_type: int
-    description: "1 when jitter (motion) or wander (distance to the empty-room amplitude template) exceeds mean + 4 sigma learned during calibration (60 s at boot, or the button-driven empty-room segment). A still person is detected through wander."
+    description: "1 when a motion event (jitter > 4x its tracked baseline, 3 of 5 frames) happened within 60 s, or wander (distance to the per-layout empty-room template) exceeds 6x its baseline within 120 s of an event. Baselines track fast while absent and quiet, slowly otherwise. 15 s warm-up after boot; no stored calibration."
   - key: link
     type: state
     value_type: string
@@ -97,10 +97,7 @@ actions:
     description: "Probe-request injection: -1 auto (default), 0 off, 1 on."
   - key: "{{ instance }}_calibrate"
     value_type: "null"
-    description: "Relearn the empty-room template and thresholds now (60 s automatic window; leave the room)."
-  - key: "{{ instance }}_forget"
-    value_type: "null"
-    description: "Clear the calibration stored in flash (templates + thresholds, tagged with the AP BSSID and channel) and relearn now. Calibrations are saved automatically when they complete and restored at boot when the AP matches."
+    description: "Forget templates and baselines and warm up again (15 s). Alias: {{ instance }}_forget."
   - key: "{{ instance }}_reboot"
     value_type: "null"
     description: "Software reset (ESP.restart) — e.g. to verify that the stored calibration is restored at boot."
@@ -136,12 +133,14 @@ usage: |
   float br     = {{ instance }}.breathingRate();   // bpm, 0 until confident (breathingConfidence() >= 0.3)
   bool  fall   = {{ instance }}.fall();            // always false: fall detection is disabled (never validated)
   bool  beat   = {{ instance }}.consumeBeat();     // true once per positive crossing of the heart-band signal (LED pulse)
-  bool  cal    = {{ instance }}.isCalibrating();   // 60 s after the first CSI frame (or csi_calibrate)
+  bool  cal    = {{ instance }}.isCalibrating();   // warming up (15 s after the first CSI frame or csi_calibrate)
+  bool  mov    = {{ instance }}.moving();          // motion event within 5 s
+  const char* v = {{ instance }}.verdict();        // "warming up" | "OUT" | "IN still" | "IN moving"
   const char* ph = {{ instance }}.calibPhaseName(); // leave|template|stats|ready, plus calibSecondsLeft()
   uint8_t seg  = {{ instance }}.segment();         // ground-truth label 0 live, 1 out, 2 still, 3 walk; segmentName(), nextSegment() from a button
   uint32_t n   = {{ instance }}.framesTotal();     // frames since boot
   uint32_t tx  = {{ instance }}.packetsSent();     // UDP packets to the sink
   const char* ip = {{ instance }}.sinkIp();        // configured sink
-  {{ instance }}.calibrate();                      // relearn the empty-room template (60 s; leave the room)
+  {{ instance }}.calibrate();                      // forget templates/baselines, warm up again
   {{ instance }}.setStreaming(true);               // ADR-018 UDP on/off
   // Never call display code from anything but loop(); update() is cheap.

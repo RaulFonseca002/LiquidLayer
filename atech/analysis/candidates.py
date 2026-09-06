@@ -216,7 +216,7 @@ def run_logreg(F, p):
 # R_w * baseline_w while a motion event happened within memory_s (a still person got there by moving).
 
 def fit_adaptive(Fs, masks, R_j=4.0, R_w=6.0, k=3, n=5, hold_s=60.0, memory_s=120.0,
-                 tau_fast_s=20.0, tau_slow_s=900.0, floor_j=0.003, floor_w=0.002):
+                 tau_fast_s=20.0, tau_slow_s=900.0, floor_j=0.003, floor_w=0.01):
     return {"R_j": R_j, "R_w": R_w, "k": k, "n": n, "hold_s": hold_s, "memory_s": memory_s,
             "tau_fast_s": tau_fast_s, "tau_slow_s": tau_slow_s, "floor_j": floor_j, "floor_w": floor_w}
 
@@ -268,7 +268,7 @@ def run_adaptive(F, p):
         g = min(1.0, dt / tau)
         if not np.isnan(ji):
             bj = bj + g * (ji - bj)
-        if not np.isnan(wi):
+        if not np.isnan(wi) and not on:      # wander baseline only while absent (mirrors RuViewEdge)
             bw = bw + g * (wi - bw)
     F["ratio_j"] = ratio_j; F["ratio_w"] = ratio_w
     return pres

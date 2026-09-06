@@ -108,11 +108,7 @@ void RuViewCsi::enableCsi() {
     // Reset consumer-side state before the task exists (no race). The edge engine keeps its
     // calibration across re-arms (a WiFi blip must not restart the 60 s window); it is reset once.
     _tail = _head;
-    if (!_edgeInit) {
-        _edge.reset(); _edgeInit = true;
-        _calRestored = tryRestoreCalibration();
-        logEvent(_calRestored ? "calibration restored from flash (same AP + channel)" : "no stored calibration for this AP: learning (60 s)");
-    }
+    if (!_edgeInit) { _edge.reset(); _edgeInit = true; logEvent("edge: warming up (15 s), then live"); }
     _rateWindowStartMs = millis();
     _framesAtWindowStart = _framesTotal;
     _lastVitalsMs = 0;
@@ -203,20 +199,9 @@ void RuViewCsi::_dspLoop() {
         uint32_t now = millis();
         drainRing(now);
         updateRate(now);
-        if (_calibCmd) {
-            uint8_t c = _calibCmd; _calibCmd = 0;
-            if (c == 1) _edge.forceCalibrate(now, 0, false);
-            else if (c == 2) _edge.forceCalibrate(now, RuViewEdge::LEAVE_MS, true);
-            else if (c == 3) _edge.endCalibration();
-        }
+        if (_restartRequest) { _restartRequest = false; _edge.restart(); }
         if (_probeInject && now - _lastProbeMs >= PROBE_INTERVAL_MS) { _lastProbeMs = now; injectProbe(); }
         if (_streaming && _sinkValid && now - _lastVitalsMs >= 1000) { _lastVitalsMs = now; sendVitalsPacket(now); }
-        bool cal = _edge.calibrating();
-        if (_wasCalibrating && !cal && _edge.calibrated()) {
-            _calSaveRequest = true;   // just finished: persist (loop side checks plausibility)
-            // label-only mode: a calibration closed by someone returning does not touch the label
-        }
-        _wasCalibrating = cal;
         publish();
         vTaskDelay(pdMS_TO_TICKS(5));
     }
@@ -260,7 +245,7 @@ void RuViewCsi::updateRate(uint32_t now) {
 
 void RuViewCsi::sendVitalsPacket(uint32_t nowMs) {
     ruview_wire::Vitals v;
-    ruview_wire::fillVitals(v, _nodeId, _edge.presence(), false, _edge.jitter() > _edge.thresholdJitter(),
+    ruview_wire::fillVitals(v, _nodeId, _edge.presence(), false, _edge.moving(),
                             _edge.breathingBpm(), _edge.heartRateBpm(), (int8_t)_lastRssi,
                             _edge.presence() ? 1 : 0, _edge.motionEnergy(), _edge.presenceScore(), nowMs);
     if (_udp.beginPacket(_sinkAddr, _sinkPort)) {
@@ -285,10 +270,12 @@ void RuViewCsi::publish() {
     s.wander = _edge.wander();
     s.thrJ = _edge.thresholdJitter();
     s.thrW = _edge.thresholdWander();
+    s.ratioJ = _edge.ratioJitter();
+    s.ratioW = _edge.ratioWander();
+    s.moving = _edge.moving();
     s.fs = _edge.sampleRateHz();
     s.calibLeft = _edge.calibSecondsLeft(millis());
     s.layout = _edge.layout() ? _edge.layout() : _layout;
-    s.phase = (uint8_t)_edge.phase();
     s.frames = _framesTotal;
     s.gateDrops = _gateDrops;
     s.ringDrops = _ringDrops;
@@ -377,48 +364,6 @@ void RuViewCsi::update() {
         _snap.rateHz = 0;
     }
     sendStatus(now);
-    if (_calSaveRequest) { _calSaveRequest = false; saveCalibration(); }
-}
-
-// ---- calibration persistence: blob = 6-byte BSSID + channel + RuViewEdge::Calibration
-bool RuViewCsi::tryRestoreCalibration() {
-    struct __attribute__((packed)) Blob { uint8_t bssid[6]; uint8_t channel; uint32_t savedUptimeS; RuViewEdge::Calibration cal; } b;
-    size_t n = _prefs.getBytesLength("cal");
-    if (n != sizeof b) { if (n) logEvent("stored calibration has another format: ignored"); return false; }
-    if (_prefs.getBytes("cal", &b, sizeof b) != sizeof b) return false;
-    _calSavedUptimeS = b.savedUptimeS;
-    uint8_t* cur = WiFi.BSSID();
-    char m[96];
-    if (!cur || memcmp(cur, b.bssid, 6) != 0 || b.channel != (uint8_t)WiFi.channel()) {
-        snprintf(m, sizeof m, "stored calibration is for channel %u, now on %u: not restored", (unsigned)b.channel, (unsigned)WiFi.channel());
-        logEvent(m);
-        return false;
-    }
-    bool ok = _edge.importCalibration(b.cal);
-    snprintf(m, sizeof m, "stored calibration (saved at uptime %lus, thr_w=%.4f thr_j=%.3f): %s", (unsigned long)b.savedUptimeS, b.cal.thrW, b.cal.thrJ, ok ? "restored" : "rejected as implausible");
-    logEvent(m);
-    return ok;
-}
-
-void RuViewCsi::saveCalibration() {
-    struct __attribute__((packed)) Blob { uint8_t bssid[6]; uint8_t channel; uint32_t savedUptimeS; RuViewEdge::Calibration cal; } b;
-    if (!_edge.exportCalibration(b.cal)) return;
-    b.savedUptimeS = millis() / 1000;
-    if (!_edge.calibrationPlausible()) {
-        char m[96];
-        snprintf(m, sizeof m, "calibration NOT stored: room was not empty (thr_w=%.3f > %.2f); press the button and leave", b.cal.thrW, RuViewEdge::PLAUSIBLE_THR_W);
-        logEvent(m);
-        return;
-    }
-    uint8_t* cur = WiFi.BSSID();
-    if (!cur) return;
-    memcpy(b.bssid, cur, 6); b.channel = (uint8_t)WiFi.channel();
-    bool ok = _prefs.putBytes("cal", &b, sizeof b) == sizeof b;
-    if (ok) _calSavedUptimeS = b.savedUptimeS;
-    char msg[96];
-    snprintf(msg, sizeof msg, "calibration %s to flash at uptime %lus: thr_j=%.4f thr_w=%.4f templates=%u",
-             ok ? "saved" : "NOT saved", (unsigned long)b.savedUptimeS, b.cal.thrJ, b.cal.thrW, (unsigned)b.cal.haveRef);
-    logEvent(msg);
 }
 
 void RuViewCsi::setCsiConfig(uint8_t id) {
@@ -429,12 +374,6 @@ void RuViewCsi::setCsiConfig(uint8_t id) {
     logEvent(_csiCfg ? "csi cfg 1: LLTF only, no merge, manu_scale shift 4 (experiment)" : "csi cfg 0: RuView all-LTF layout");
 }
 
-void RuViewCsi::forgetCalibration() {
-    _prefs.remove("cal");
-    _calRestored = false;
-    _calibCmd = 1;   // relearn now
-    logEvent("stored calibration cleared; relearning (60 s)");
-}
 
 void RuViewCsi::sendStatus(uint32_t now) {
     if (!isConnected() || !_sinkValid || (uint32_t)WiFi.localIP() == 0 || now - _lastStatusMs < 1000) return;
@@ -484,10 +423,9 @@ bool RuViewCsi::nextEvent(char* out, size_t cap) {
         case 7: m = snprintf(out + n, left, "\"status_tx=%lu status_fail=%lu usb_up=%d usb_host=%d heap=%u reset=%d\"",
                               (unsigned long)_statusTx, (unsigned long)_statusFail, (int)atechUsb().ready(), (int)(bool)atechUsb(),
                               (unsigned)ESP.getFreeHeap(), (int)esp_reset_reason()); break;
-        default: m = snprintf(out + n, left, "\"j=%.4f/%.4f w=%.4f/%.4f fs=%.1f cal=%s/%lus lay=%u seg=%s hrc=%.2f brc=%.2f %s\"",
-                              _snap.jitter, _snap.thrJ, _snap.wander, _snap.thrW, _snap.fs, calibPhaseName(), (unsigned long)_snap.calibLeft,
-                              (unsigned)_snap.layout, segmentName(), _snap.hrConf, _snap.brConf,
-                              _snap.calibrating ? "" : (_snap.thrW <= RuViewEdge::PLAUSIBLE_THR_W ? "ok" : "SUSPECT")); break;
+        default: m = snprintf(out + n, left, "\"%s j=%.4f x%.1f w=%.4f x%.1f base=%.4f/%.4f fs=%.1f lay=%u seg=%s hrc=%.2f brc=%.2f\"",
+                              verdict(), _snap.jitter, _snap.ratioJ, _snap.wander, _snap.ratioW, _snap.thrJ / RuViewEdge::R_J, _snap.thrW / RuViewEdge::R_W,
+                              _snap.fs, (unsigned)_snap.layout, segmentName(), _snap.hrConf, _snap.brConf); break;
     }
     if (m < 0 || (size_t)m >= left) return false;
     n += m; left = cap - (size_t)n;
@@ -507,12 +445,7 @@ void RuViewCsi::setSegment(uint8_t s) {
     logEvent(msg);
 }
 
-const char* RuViewCsi::calibPhaseName() const {
-    switch ((RuViewEdge::Phase)_snap.phase) {
-        case RuViewEdge::Phase::Leave: return "leave"; case RuViewEdge::Phase::Template: return "template";
-        case RuViewEdge::Phase::Stats: return "stats"; default: return "ready";
-    }
-}
+const char* RuViewCsi::calibPhaseName() const { return _snap.calibrating ? "warmup" : "ready"; }
 
 const char* RuViewCsi::segmentName() const {
     switch (_segment) { case 1: return "out"; case 2: return "still"; case 3: return "walk"; default: return "live"; }
@@ -653,13 +586,11 @@ void RuViewCsi::onAction(const char* action, const char* value) {
                  WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), _sinkIp,
                  (unsigned)_sinkPort, (unsigned)ESP.getFreeHeap(), stateName(), (int)WiFi.RSSI());
         logEvent(msg);
-        snprintf(msg, sizeof msg, "diag: jitter=%.4f/%.4f wander=%.4f/%.4f fs=%.1f calib=%s left=%lus layout=%u seg=%s presence=%d hr=%.0f/%.2f br=%.0f/%.2f",
-                 s.jitter, s.thrJ, s.wander, s.thrW, s.fs, calibPhaseName(), (unsigned long)s.calibLeft, (unsigned)s.layout, segmentName(),
-                 (int)s.presence, s.hr, s.hrConf, s.br, s.brConf);
+        snprintf(msg, sizeof msg, "diag: %s jitter=%.4f x%.1f wander=%.4f x%.1f fs=%.1f %s layout=%u seg=%s hr=%.0f/%.2f br=%.0f/%.2f",
+                 verdict(), s.jitter, s.ratioJ, s.wander, s.ratioW, s.fs, calibPhaseName(), (unsigned)s.layout, segmentName(), s.hr, s.hrConf, s.br, s.brConf);
         logEvent(msg);
-        snprintf(msg, sizeof msg, "diag: edge templates=%u untemplated=%lu lltf_drops=%lu blocks=%lu restored=%d stored=%d stored_at=%lus up=%lus",
-                 (unsigned)_edge.templates(), (unsigned long)_edge.untemplated(), (unsigned long)_edge.layoutDrops(), (unsigned long)_edge.blocks(),
-                 (int)_calRestored, (int)(_prefs.getBytesLength("cal") > 0), (unsigned long)_calSavedUptimeS, (unsigned long)(millis() / 1000));
+        snprintf(msg, sizeof msg, "diag: edge templates=%u untemplated=%lu lltf_drops=%lu blocks=%lu",
+                 (unsigned)_edge.templates(), (unsigned long)_edge.untemplated(), (unsigned long)_edge.layoutDrops(), (unsigned long)_edge.blocks());
         logEvent(msg);
     } else if (strcmp(sub, "segment") == 0 || strcmp(sub, "label") == 0) {
         setSegment((uint8_t)strtod(value, nullptr));
@@ -677,7 +608,7 @@ void RuViewCsi::onAction(const char* action, const char* value) {
     } else if (strcmp(sub, "calibrate") == 0) {
         calibrate();
     } else if (strcmp(sub, "forget") == 0) {
-        forgetCalibration();
+        calibrate();
     } else if (strcmp(sub, "reboot") == 0) {
         logEvent("rebooting (software reset)");
         delay(200);

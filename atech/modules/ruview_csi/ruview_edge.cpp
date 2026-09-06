@@ -54,16 +54,9 @@ float RuViewEdge::corr(const float* a, const float* b, uint8_t n) {
     return d > 1e-12f ? sab / d : 0.0f;
 }
 
-void RuViewEdge::welfordUpdate(Welford& w, double x) {
-    w.count++;
-    double d = x - w.mean;
-    w.mean += d / (double)w.count;
-    w.m2 += d * (x - w.mean);
-}
-
-float RuViewEdge::medianOf(float* v, uint8_t n) {
-    for (uint8_t i = 1; i < n; ++i) { float x = v[i]; int8_t j = (int8_t)(i - 1); while (j >= 0 && v[j] > x) { v[j + 1] = v[j]; --j; } v[j + 1] = x; }
-    return v[n / 2];
+float RuViewEdge::medianOf(float* v, uint16_t n) {
+    for (uint16_t i = 1; i < n; ++i) { float x = v[i]; int32_t j = (int32_t)i - 1; while (j >= 0 && v[j] > x) { v[j + 1] = v[j]; --j; } v[j + 1] = x; }
+    return n ? v[n / 2] : 0.0f;
 }
 
 void RuViewEdge::designHighpass(Biquad& bq, float fs, float fc) {
@@ -80,16 +73,16 @@ void RuViewEdge::designHighpass(Biquad& bq, float fs, float fc) {
 void RuViewEdge::reset() {
     _frameCount = _layoutDrops = _untemplated = 0;
     for (uint8_t l = 0; l < LAYOUTS; ++l) {
-        _havePrev[l] = false; _prevMs[l] = 0; _haveRef[l] = false; _lazyCount[l] = 0; _tplCount[l] = 0;
-        for (uint8_t k = 0; k < MAX_BINS; ++k) { _prev[l][k] = _ref[l][k] = 0; _lazySum[l][k] = 0; _tplSum[l][k] = 0; }
+        _havePrev[l] = false; _prevMs[l] = 0; _haveRef[l] = false; _tplCount[l] = 0;
+        for (uint8_t k = 0; k < MAX_BINS; ++k) { _prev[l][k] = _ref[l][k] = 0; _tplSum[l][k] = 0; }
     }
     _primary = -1; _lastMs = 0; _fs = FS; _rateMs = 0; _rateFrames = 0;
-    _sj = _sw = 0; _haveS = false; _lastTemplatedMs = 0; _lastTemplatedW = 0;
-    _phase = Phase::Idle; _calibrated = _openEnded = _closeRequested = false;
-    _calibStartMs = _phaseStartMs = _leaveMs = 0; _returnFrames = 0; _closedByReturn = false;
-    welfordReset(_statJ); welfordReset(_statW);
-    _thrJ = _thrW = _offJ = _offW = 0; _meanJ = _sigJ = _meanW = _sigW = 0;
-    _presence = false; _above = _below = 0; _onSinceMs = 0;
+    _sj = _sw = 0; _haveS = false;
+    _t0Ms = 0; _warm = true; _nWarmJ = _nWarmW = 0; _bj = _bw = 0; _rj = _rw = 0;
+    for (uint8_t i = 0; i < EV_N; ++i) _evHist[i] = false;
+    _evPos = 0; _lastEventMs = 0; _haveEvent = false;
+    _presence = false; _moving = false; _onSinceMs = 0;
+    // vitals
     _gridValid = false; _nextGridMs = 0;
     for (uint8_t k = 0; k < MAX_BINS; ++k) { designHighpass(_hp[k], FS, HP_FC_HZ); _absEma[k] = 0; }
     for (uint8_t f = 0; f < BR_BINS; ++f) { float w = 2.0f * (float)M_PI * (BR_F0 + BR_DF * f) / FS; _brCw[f] = cosf(w); _brSw[f] = sinf(w); }
@@ -100,142 +93,6 @@ void RuViewEdge::reset() {
     _lastBeatMs = 0; _beat = false;
 }
 
-const char* RuViewEdge::phaseName() const {
-    switch (_phase) { case Phase::Leave: return "leave"; case Phase::Template: return "template"; case Phase::Stats: return "stats"; default: return _calibrated ? "ready" : "idle"; }
-}
-
-uint32_t RuViewEdge::calibSecondsLeft(uint32_t nowMs) const {
-    if (_phase == Phase::Idle) return 0;
-    uint32_t el = nowMs - _calibStartMs;
-    uint32_t minEnd = _leaveMs + TEMPLATE_MS + STATS_MIN_MS;
-    uint32_t end = _openEnded ? minEnd : (CALIB_AUTO_MS > minEnd ? CALIB_AUTO_MS : minEnd);
-    return el >= end ? 0 : (end - el + 999) / 1000;
-}
-
-// ------------------------------------------------------------------ calibration
-
-void RuViewEdge::forceCalibrate(uint32_t nowMs, uint32_t leaveDelayMs, bool openEnded) {
-    startCalibration(nowMs, leaveDelayMs, openEnded);
-}
-
-void RuViewEdge::startCalibration(uint32_t nowMs, uint32_t leaveDelayMs, bool openEnded) {
-    _phase = leaveDelayMs ? Phase::Leave : Phase::Template;
-    _openEnded = openEnded; _closeRequested = false; _leaveMs = leaveDelayMs;
-    _returnFrames = 0; _closedByReturn = false;
-    _calibStartMs = _phaseStartMs = nowMs;
-    for (uint8_t l = 0; l < LAYOUTS; ++l) {
-        _tplCount[l] = 0; _lazyCount[l] = 0; _haveRef[l] = false;   // wander is meaningless until the new templates exist
-        for (uint8_t k = 0; k < MAX_BINS; ++k) { _tplSum[l][k] = 0; _lazySum[l][k] = 0; }
-    }
-    welfordReset(_statJ); welfordReset(_statW);
-    _presence = false; _above = _below = 0;
-    _thrJ = _thrW = _offJ = _offW = 0;
-}
-
-void RuViewEdge::updateCalibration(uint32_t nowMs, uint8_t lay, const float* a) {
-    switch (_phase) {
-        case Phase::Idle:
-            return;
-        case Phase::Leave:
-            if (nowMs - _phaseStartMs >= _leaveMs) { _phase = Phase::Template; _phaseStartMs = nowMs; }
-            return;
-        case Phase::Template: {
-            for (uint8_t k = 0; k < MAX_BINS; ++k) _tplSum[lay][k] += a[k];
-            _tplCount[lay]++;
-            uint32_t total = _tplCount[0] + _tplCount[1];
-            if (nowMs - _phaseStartMs >= TEMPLATE_MS && total >= 20) {
-                int8_t best = -1;
-                for (uint8_t l = 0; l < LAYOUTS; ++l) {
-                    if (_tplCount[l] < 20) continue;
-                    float norm = 0;
-                    for (uint8_t k = 0; k < MAX_BINS; ++k) { _ref[l][k] = (float)(_tplSum[l][k] / (double)_tplCount[l]); norm += _ref[l][k] * _ref[l][k]; }
-                    norm = norm > 1e-12f ? 1.0f / sqrtf(norm) : 0.0f;
-                    for (uint8_t k = 0; k < MAX_BINS; ++k) _ref[l][k] *= norm;
-                    _haveRef[l] = true;
-                    if (best < 0 || _tplCount[l] > _tplCount[best]) best = (int8_t)l;
-                }
-                if (best >= 0 && best != _primary) { _primary = best; _gridValid = false; resetBlock(); }
-                _phase = Phase::Stats; _phaseStartMs = nowMs;
-                _haveS = false;        // restart the EMAs so the stats are not biased by the template phase
-            }
-            return;
-        }
-        case Phase::Stats: {
-            uint32_t inStats = nowMs - _phaseStartMs;
-            uint32_t total = nowMs - _calibStartMs;
-            // Someone re-entering ends the window at once (an open-ended calibration would otherwise
-            // absorb their return and learn a ceiling threshold). Needs the minimum statistics first.
-            if (_haveS && _haveRef[lay] && (int8_t)lay == _primary && inStats >= STATS_MIN_MS && _statW.count > 100) {
-                float mw = (float)_statW.mean, sw = sqrtf((float)welfordVar(_statW));
-                if (_sw > mw + RETURN_K_SIGMA * sw && _sw > RETURN_MIN_W) {
-                    if (++_returnFrames >= RETURN_FRAMES) { _closedByReturn = true; finishCalibration(); return; }
-                } else _returnFrames = 0;
-            }
-            if (_haveS && _haveRef[lay]) { welfordUpdate(_statJ, _sj); welfordUpdate(_statW, _sw); }
-            bool done;
-            if (_openEnded) done = (inStats >= STATS_MIN_MS && _closeRequested) || total >= CALIB_MAX_MS;
-            else done = total >= CALIB_AUTO_MS && inStats >= STATS_MIN_MS;
-            if (done) finishCalibration();
-            return;
-        }
-    }
-}
-
-void RuViewEdge::finishCalibration() {
-    _meanJ = (float)_statJ.mean; _sigJ = sqrtf((float)welfordVar(_statJ));
-    _meanW = (float)_statW.mean; _sigW = sqrtf((float)welfordVar(_statW));
-    _thrJ = _meanJ + K_SIGMA * _sigJ; if (_thrJ < MEAN_RATIO * _meanJ) _thrJ = MEAN_RATIO * _meanJ; if (_thrJ < FLOOR_J) _thrJ = FLOOR_J; if (_thrJ > CAP_THR) _thrJ = CAP_THR;
-    _thrW = _meanW + K_SIGMA * _sigW; if (_thrW < MEAN_RATIO * _meanW) _thrW = MEAN_RATIO * _meanW; if (_thrW < FLOOR_W) _thrW = FLOOR_W; if (_thrW > CAP_THR) _thrW = CAP_THR;
-    // Off levels sit between the ambient mean and the on level (mean + 2 sigma); with a degenerate
-    // sigma they fall back to the midpoint so the trigger still has a dead band.
-    // ... and never below 60 % of the on level: when the floor lifted the on level far above a very
-    // quiet calibration, mean + 2 sigma would sit under normal room noise and presence could never clear.
-    _offJ = _meanJ + K_OFF * _sigJ; if (_offJ < 0.6f * _thrJ) _offJ = 0.6f * _thrJ; if (_offJ >= _thrJ) _offJ = 0.5f * (_meanJ + _thrJ);
-    _offW = _meanW + K_OFF * _sigW; if (_offW < 0.6f * _thrW) _offW = 0.6f * _thrW; if (_offW >= _thrW) _offW = 0.5f * (_meanW + _thrW);
-    _phase = Phase::Idle; _calibrated = true; _closeRequested = false;
-    _presence = false; _above = _below = 0;
-}
-
-bool RuViewEdge::exportCalibration(Calibration& out) const {
-    if (!_calibrated) return false;
-    out.magic = CAL_MAGIC;
-    memcpy(out.ref, _ref, sizeof out.ref);
-    out.haveRef = templates(); out.primary = _primary;
-    out.thrJ = _thrJ; out.thrW = _thrW; out.offJ = _offJ; out.offW = _offW;
-    out.meanJ = _meanJ; out.sigJ = _sigJ; out.meanW = _meanW; out.sigW = _sigW;
-    return true;
-}
-
-bool RuViewEdge::importCalibration(const Calibration& in) {
-    if (in.magic != CAL_MAGIC || !(in.haveRef & 3) || !(in.thrJ > 0.0f) || !(in.thrW > 0.0f) || in.thrJ > CAP_THR || in.thrW > PLAUSIBLE_THR_W) return false;
-    if (in.primary < 0 || in.primary >= (int8_t)LAYOUTS || !(in.haveRef & (1 << in.primary))) return false;
-    memcpy(_ref, in.ref, sizeof _ref);
-    for (uint8_t l = 0; l < LAYOUTS; ++l) { _haveRef[l] = (in.haveRef >> l) & 1; _lazyCount[l] = 0; }
-    _primary = in.primary;
-    _thrJ = in.thrJ; _thrW = in.thrW; _offJ = in.offJ; _offW = in.offW;
-    _meanJ = in.meanJ; _sigJ = in.sigJ; _meanW = in.meanW; _sigW = in.sigW;
-    if (!(_offJ > 0.0f) || _offJ >= _thrJ) _offJ = 0.5f * (_meanJ + _thrJ);
-    if (!(_offW > 0.0f) || _offW >= _thrW) _offW = 0.5f * (_meanW + _thrW);
-    _phase = Phase::Idle; _calibrated = true; _openEnded = _closeRequested = false;
-    _presence = false; _above = _below = 0; _haveS = false;
-    _gridValid = false; resetBlock();
-    return true;
-}
-
-// ------------------------------------------------------------------ presence
-
-void RuViewEdge::updatePresence(uint32_t nowMs) {
-    bool hi = _sj > _thrJ || _sw > _thrW;
-    bool lo = _sj < _offJ && _sw < _offW;
-    if (!_presence) {
-        _above = hi ? (uint8_t)(_above + 1) : 0;
-        if (_above >= ON_FRAMES) { _presence = true; _onSinceMs = nowMs; _below = 0; _above = 0; }
-    } else {
-        _below = lo ? (uint8_t)(_below + 1) : 0;
-        if (_below >= OFF_FRAMES && nowMs - _onSinceMs >= HOLD_MS) { _presence = false; _below = 0; }
-    }
-}
-
 // ------------------------------------------------------------------ per frame
 
 void RuViewEdge::push(const int8_t* iq, uint16_t iqLen, uint32_t nowMs) {
@@ -243,6 +100,7 @@ void RuViewEdge::push(const int8_t* iq, uint16_t iqLen, uint32_t nowMs) {
     uint8_t n, lay;
     if (!amplitudeVector(iq, iqLen, a, n, lay)) { if (iqLen) _layoutDrops++; return; }
     _frameCount++;
+    if (_t0Ms == 0) _t0Ms = nowMs;
 
     // sample-rate estimate (diagnostic only; vitals run on the fixed grid)
     _rateFrames++;
@@ -252,55 +110,84 @@ void RuViewEdge::push(const int8_t* iq, uint16_t iqLen, uint32_t nowMs) {
         _fs += 0.25f * (inst - _fs);
         _rateFrames = 0; _rateMs = nowMs;
     }
+    float dtS = _lastMs ? (float)(nowMs - _lastMs) / 1000.0f : 0.05f;
+    if (dtS > 5.0f) { _bj = _bw = 0; }   // long gap: baselines restart from the next frames
 
-    if (!_calibrated && _phase == Phase::Idle) startCalibration(nowMs, 0, false);   // automatic boot calibration
-
-    // Same-layout previous frame for jitter; a long gap breaks the chain.
+    // jitter: previous frame of the same layout, within 1 s
     if (_havePrev[lay] && nowMs - _prevMs[lay] > GAP_RESET_MS) _havePrev[lay] = false;
     bool haveJ = _havePrev[lay];
     float j = haveJ ? 1.0f - corr(a, _prev[lay], n) : 0.0f; if (j < 0) j = 0;
+
+    // per-layout template: bootstrap from the first TEMPLATE_FRAMES frames of that layout
     bool haveW = _haveRef[lay];
-    float w = haveW ? 1.0f - corr(a, _ref[lay], n) : 0.0f; if (w < 0) w = 0;
+    float w = 0.0f;
+    if (!haveW) {
+        for (uint8_t k = 0; k < n; ++k) _tplSum[lay][k] += a[k];
+        if (++_tplCount[lay] >= TEMPLATE_FRAMES) {
+            float norm = 0;
+            for (uint8_t k = 0; k < n; ++k) { _ref[lay][k] = (float)(_tplSum[lay][k] / (double)_tplCount[lay]); norm += _ref[lay][k] * _ref[lay][k]; }
+            norm = norm > 1e-12f ? 1.0f / sqrtf(norm) : 0.0f;
+            for (uint8_t k = 0; k < n; ++k) _ref[lay][k] *= norm;
+            _haveRef[lay] = true;
+            if (_primary < 0) { _primary = (int8_t)lay; _gridValid = false; resetBlock(); }
+        }
+        if (!_warm) _untemplated++;
+    } else {
+        w = 1.0f - corr(a, _ref[lay], n); if (w < 0) w = 0;
+    }
     if (haveJ) {
         if (!_haveS) { _sj = j; _sw = haveW ? w : 0.0f; _haveS = true; }
         else { _sj += ALPHA * (j - _sj); if (haveW) _sw += ALPHA * (w - _sw); }
     }
-    if (haveW) { _lastTemplatedMs = nowMs; _lastTemplatedW = _sw; }
-    else if (_calibrated && _phase == Phase::Idle) {
-        _untemplated++;
-        // Wander is unknown for this layout: after 2 s without a templated frame let the smoothed value
-        // decay so a stale high reading cannot hold presence; jitter still drives the decision.
-        if (haveJ && nowMs - _lastTemplatedMs > 2000) _sw += ALPHA * (0.0f - _sw);
-        // Lazy template for a layout unseen during calibration: only while a templated layout judged
-        // the room empty and quiet within the last 2 s.
-        if (!_presence && nowMs - _lastTemplatedMs <= 2000 && _lastTemplatedW < _offW && _sj < _offJ) {
-            for (uint8_t k = 0; k < MAX_BINS; ++k) _lazySum[lay][k] += a[k];
-            if (++_lazyCount[lay] >= LAZY_TEMPLATE_FRAMES) {
-                float norm = 0;
-                for (uint8_t k = 0; k < MAX_BINS; ++k) { _ref[lay][k] = (float)(_lazySum[lay][k] / (double)_lazyCount[lay]); norm += _ref[lay][k] * _ref[lay][k]; }
-                norm = norm > 1e-12f ? 1.0f / sqrtf(norm) : 0.0f;
-                for (uint8_t k = 0; k < MAX_BINS; ++k) _ref[lay][k] *= norm;
-                _haveRef[lay] = true;
-            }
+
+    // warm-up: collect, learn robust baselines, decide nothing
+    if (_warm) {
+        if (nowMs - _t0Ms < WARMUP_MS) {
+            if (haveJ && _nWarmJ < WARM_N) _warmJ[_nWarmJ++] = j;
+            if (haveW && _nWarmW < WARM_N) _warmW[_nWarmW++] = w;
+        } else {
+            _bj = _nWarmJ ? medianOf(_warmJ, _nWarmJ) : 0; if (_bj < FLOOR_J) _bj = FLOOR_J;
+            _bw = _nWarmW ? medianOf(_warmW, _nWarmW) : 0; if (_bw < FLOOR_W) _bw = FLOOR_W;
+            _warm = false;
         }
     }
 
-    updateCalibration(nowMs, lay, a);
-    // No presence decisions until thresholds are learned: a provisional constant is meaningless in a
-    // real room (idle jitter ~0.04-0.07 here, 0.008 in the synthetic one). The screen shows "--" anyway.
-    if (_phase == Phase::Idle && _calibrated && haveJ) updatePresence(nowMs);
-
-    // Slow baseline drift while the room is empty (esp_wifi_sensing "dynamic baseline").
-    if (_calibrated && _phase == Phase::Idle && !_presence && haveW && _havePrev[lay]) {
-        float g = (float)(nowMs - _prevMs[lay]) / REF_TAU_MS;
-        float norm = 0;
-        for (uint8_t k = 0; k < MAX_BINS; ++k) { _ref[lay][k] += g * (a[k] - _ref[lay][k]); norm += _ref[lay][k] * _ref[lay][k]; }
-        norm = norm > 1e-12f ? 1.0f / sqrtf(norm) : 1.0f;
-        for (uint8_t k = 0; k < MAX_BINS; ++k) _ref[lay][k] *= norm;
+    if (!_warm) {
+        // ratios to the tracked baselines
+        float rj = 0, rw = 0;
+        if (haveJ) { if (_bj <= 0) _bj = j > FLOOR_J ? j : FLOOR_J; rj = j / (_bj > FLOOR_J ? _bj : FLOOR_J); }
+        if (haveW) { if (_bw <= 0) _bw = w > FLOOR_W ? w : FLOOR_W; rw = w / (_bw > FLOOR_W ? _bw : FLOOR_W); }
+        _rj = haveJ ? rj : 0; _rw = haveW ? rw : 0;
+        // motion event: k of the last n frames over R_J x baseline
+        _evHist[_evPos] = haveJ && rj > R_J; _evPos = (uint8_t)((_evPos + 1) % EV_N);
+        uint8_t cnt = 0; for (uint8_t i = 0; i < EV_N; ++i) cnt += _evHist[i] ? 1 : 0;
+        if (cnt >= EV_K) { _lastEventMs = nowMs; _haveEvent = true; }
+        bool moved = _haveEvent && nowMs - _lastEventMs <= HOLD_MS;
+        bool remembered = _haveEvent && nowMs - _lastEventMs <= MEMORY_MS;
+        bool stillBody = haveW && rw > R_W && remembered;
+        bool on = moved || stillBody;
+        if (on && !_presence) _onSinceMs = nowMs;
+        _presence = on;
+        _moving = _haveEvent && nowMs - _lastEventMs <= MOVING_MS;
+        // baseline tracking: jitter fast while absent and quiet, slow otherwise (a noisier router regime
+        // is absorbed within minutes); wander only while absent (a still person is never absorbed:
+        // presence cannot outlive MEMORY_MS without a motion event anyway).
+        bool quiet = haveJ && rj < QUIET_RATIO;
+        float tau = (!_presence && quiet) ? TAU_FAST_S : TAU_SLOW_S;
+        float g = dtS / tau; if (g > 1.0f) g = 1.0f;
+        if (haveJ) _bj += g * (j - _bj);
+        if (haveW && !_presence) _bw += g * (w - _bw);
+        // template drift only while absent and quiet
+        if (haveW && !_presence && quiet) {
+            float gt = dtS / TAU_TEMPLATE_S; if (gt > 1.0f) gt = 1.0f;
+            float norm = 0;
+            for (uint8_t k = 0; k < n; ++k) { _ref[lay][k] += gt * (a[k] - _ref[lay][k]); norm += _ref[lay][k] * _ref[lay][k]; }
+            norm = norm > 1e-12f ? 1.0f / sqrtf(norm) : 1.0f;
+            for (uint8_t k = 0; k < n; ++k) _ref[lay][k] *= norm;
+        }
     }
 
     // Vitals: uniform 20 Hz grid on the primary layout only (linear interpolation between its frames).
-    if (_primary < 0 && _phase == Phase::Idle && _calibrated) _primary = (int8_t)lay;
     if ((int8_t)lay == _primary) {
         if (!_havePrev[lay]) { _gridValid = false; _blockDirty = true; }
         if (!_gridValid) {

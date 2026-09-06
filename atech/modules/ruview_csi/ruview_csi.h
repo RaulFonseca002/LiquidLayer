@@ -53,10 +53,11 @@ public:
     struct Snapshot {
         float    hr = 0, br = 0, motion = 0, rateHz = 0;
         float    hrConf = 0, brConf = 0;                       // autocorrelation confidence 0..1
-        float    jitter = 0, wander = 0, thrJ = 0, thrW = 0, fs = 0;   // edge features, on-thresholds, DSP sample rate
-        uint32_t calibLeft = 0;                                // seconds until the calibration closes (0 = open / done)
-        uint8_t  layout = 0;                                   // CSI bytes / 128 of the calibrated layout
-        uint8_t  phase = 0;                                    // RuViewEdge::Phase
+        float    jitter = 0, wander = 0, thrJ = 0, thrW = 0, fs = 0;   // edge features, current thresholds (R x baseline), DSP sample rate
+        float    ratioJ = 0, ratioW = 0;                       // last frame's feature / baseline
+        bool     moving = false;                               // motion event within the last 5 s
+        uint32_t calibLeft = 0;                                // warm-up seconds left (0 = live)
+        uint8_t  layout = 0;                                   // CSI bytes / 128 of the vitals layout
         int      rssi = 0;
         bool     presence = false, fall = false, calibrating = true;
         uint32_t frames = 0, gateDrops = 0, ringDrops = 0, tx = 0;
@@ -89,7 +90,10 @@ public:
     float       breathingConfidence() const { return _snap.brConf; }
     float       jitter() const { return _snap.jitter; }
     float       wander() const { return _snap.wander; }
-    float       presenceScore() const { return _snap.thrW > 0 ? _snap.wander / _snap.thrW : 0; }
+    float       presenceScore() const { return _snap.ratioW; }   // wander / baseline (>= 6 means over)
+    float       ratioJitter() const { return _snap.ratioJ; }
+    bool        moving() const { return _snap.moving; }
+    const char* verdict() const { return _snap.calibrating ? "warming up" : (!_snap.presence ? "OUT" : (_snap.moving ? "IN moving" : "IN still")); }
     uint32_t    calibSecondsLeft() const { return _snap.calibLeft; }
     const char* calibPhaseName() const;
     bool        fall() const { return _snap.fall; }
@@ -107,15 +111,11 @@ public:
     void setCsiEnabled(bool on);                                // persists; applies live
     void setWifiEnabled(bool on);                               // persists; 0 = radio never starts (stage test)
     void setStreaming(bool on) { _streaming = on; }
-    void calibrate() { _calibCmd = 1; }        // relearn now (automatic 60 s window)
+    void calibrate() { _restartRequest = true; }   // forget templates/baselines, warm up again
     // Ground-truth labels, cycled by the button: 0 live, 1 out of the room, 2 sitting still, 3 walking.
     // Label-only: no calibration side effects (the data-first redesign learns from labelled recordings).
     // The label rides in NodeStatus so the host recorder can tag CSI frames without touching USB.
     void        setSegment(uint8_t s);
-    // Calibration persistence (NVS blob "cal", tagged with the AP BSSID + channel): restored on the
-    // first CSI arm when the tag matches, saved whenever a calibration completes, cleared by forget.
-    void        forgetCalibration();
-    bool        calibrationRestored() const { return _calRestored; }
     uint8_t     csiConfig() const { return _csiCfg; }
     void        setCsiConfig(uint8_t id);   // re-arms CSI with the other capture layout (experiment)
     void        nextSegment() { setSegment((uint8_t)((_segment + 1) & 3)); }
@@ -219,14 +219,8 @@ private:
     uint32_t    _packetsSent = 0;
     uint32_t    _lastVitalsMs = 0;
     uint8_t     _txBuf[ruview_wire::CSI_HEADER + ruview_wire::MAX_IQ_BYTES];
-    volatile uint8_t _calibCmd = 0;        // loop -> task: 1 auto recalibrate, 2 button start (leave delay, open-ended), 3 end
+    volatile bool _restartRequest = false; // loop -> task: restart the engine (warm-up again)
     bool        _edgeInit = false;
-    volatile bool _calSaveRequest = false; // task -> loop: a calibration just completed, persist it
-    bool        _wasCalibrating = false;   // task-side edge detector
-    bool        _calRestored = false;
-    uint32_t    _calSavedUptimeS = 0;   // when the stored calibration was written (board uptime, s), from the blob
-    bool        tryRestoreCalibration();
-    void        saveCalibration();
     volatile bool _beatPending = false;    // task -> loop
 
     // published results

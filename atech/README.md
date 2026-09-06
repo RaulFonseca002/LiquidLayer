@@ -108,9 +108,9 @@ replay of `tests/fixtures/*.csirec` with acceptance gates: empty 0.0 %, still
 99.9 %). Hardware acceptance status lives in `STAGES.md` ("Sensing fix").
 
 Data-first phase (from 2026-09-06 14:00): the button only labels (live → out → still →
-walk), the screen shows the label and the raw numbers, and the in/out decision is developed
-offline from labelled recordings (`analysis/`, numpy) and run live on the host
-(`host/presence_host.py`). Findings, protocol and candidate algorithms:
+walk); the in/out decision was chosen offline from labelled recordings (`analysis/`, numpy)
+and runs both on the board (screen: OUT / IN still / IN moving, 15 s warm-up, no stored
+calibration) and on the host (`host/presence_host.py`, which also records). Findings, protocol and candidate algorithms:
 `docs/CSI_PRESENCE_RESEARCH.md` and the "Data-first redesign" ladder in `STAGES.md`.
 
 ## Rebuild rules (after the frozen-display incident, 2026-09-05)
