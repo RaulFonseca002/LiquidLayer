@@ -6,7 +6,8 @@ Catches the traps we have actually hit:
     before the user loop runs, so the user's call almost never fires;
   * delay() in loop, which stalls every module's event stream;
   * setRotation() on the st7735_tft from user code, which blanked the panel
-    (only the boot splash stayed) on the 14port board.
+    (only the boot splash stayed) on the 14port board;
+  * setTxTimeoutMs(0), which spins the USB write loop forever with no reader.
 """
 from __future__ import annotations
 
@@ -57,6 +58,9 @@ def lint_project(project) -> list[tuple[str, str]]:
                         f"the firmware ran. Remove it and draw for the default orientation."))
     if re.search(r"\bdelay\s*\(", _strip_comments(project.loop_code or "")):
         out.append(("WARNING", "delay() inside loop blocks every module's event stream and button polling; use a millis() timer."))
+    if re.search(r"setTxTimeoutMs\s*\(\s*0\s*\)", user_code):
+        out.append(("WARNING", "Serial.setTxTimeoutMs(0) hangs the board: the ESP32-S3 USB write loop spins forever when it "
+                               "writes with no host reading. The pipeline sets a bounded non-zero timeout for you; never pass 0."))
     return out
 
 

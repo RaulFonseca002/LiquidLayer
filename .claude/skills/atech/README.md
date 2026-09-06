@@ -126,8 +126,15 @@ rule or a check in this skill.
 - **Actions:** the open SDK declares actions but generates no serial reader
   (our modules ship `atech_actions.h`); values arrive JSON-encoded twice; the
   SDK rejects `null`, so send `1`.
-- **Output pacing:** codegen sets a zero USB TX timeout, so bursts of lines are
-  truncated. Emit at most one line per loop pass.
+- **USB TX timeout (the big one):** the SDK's generated `Serial.setTxTimeoutMs(0)`
+  makes the ESP32-S3 USB write loop spin *forever* the instant the board writes
+  with no host reading (the TX buffer fills, its unplug-detection counter
+  underflows, and it never gives up). This froze the board on every standalone
+  boot — the whole "frozen display" saga. The pipeline (`build_flash.py` +
+  `atech_usb.h`) fixes it: a bounded non-zero TX timeout, USB brought up after
+  boot, `ARDUINO_USB_CDC_ON_BOOT=0`. So always flash through `deploy.sh`; a raw
+  `atech build` reintroduces the hang. Still emit at most one event line per
+  ~200 ms to keep the buffer healthy. **This is the #1 bug to report upstream.**
 - **Button template:** it consumes `wasPressed()` before user code; poll
   `isPressed()` and detect edges yourself.
 - **Reset footprint:** the `(Restart)` position is the EN line, not a port. A

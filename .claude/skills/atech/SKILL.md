@@ -90,8 +90,8 @@ Rules for `code:` (they come from the SDK authors):
 - Never hand-edit anything under `build/` — it is regenerated every build.
 - Keep it small. A few lines of behaviour is the intended shape.
 - **Keep `loop()` short.** Anything heavier than a few hundred microseconds (signal processing, network sends, big buffers) belongs in its own FreeRTOS task that publishes results for `loop()` to read. A long `loop()` starves everything else and interleaves badly with a bit-banged display refresh.
-- **On ESP32-S3, `ARDUINO_USB_CDC_ON_BOOT=1` (the Atech SDK default) can deadlock the boot when no USB host is attached** and the WiFi stack is linked — the board reaches setup but the first loop never runs (screen stuck on the splash/black). It is intermittent; a serial monitor attached HIDES it (a host keeps the USB-CDC stable). For a node that must run standalone, expect this and validate detached.
-- **Diagnosing an intermittent boot hang:** turn the loop watchdog OFF (with it on, a hang silently reboots and looks like a pass — it invalidates every "pass"). Read a frozen board through an OFF-panel channel (paint the phase to the screen, or an RTC marker shown on the next boot) — never by opening the serial port: on the S3 that both resets the board and, as a host, masks the bug. Isolate with matched single-variable controls and clean-purged builds.
+- **The USB-serial hang fix is automatic — always flash through `deploy.sh`, never raw `atech build`/`upload`.** The Atech SDK generates `Serial.setTxTimeoutMs(0)`. That zero makes the ESP32-S3 USB driver's write loop spin *forever* the moment the board writes to USB with no host reading (the TX buffer fills and never drains) — it froze the board for a full night of debugging. `deploy.sh`/`build_flash.py` fix it for every build: compile with `ARDUINO_USB_CDC_ON_BOOT=0`, route the generated `Serial` through `atech_usb.h` (deferred USB bring-up + a bounded non-zero TX timeout), and purge stale generated code. A serial monitor attached HIDES the bug (it drains the buffer), so any board that must run standalone MUST be validated detached (powered only, no monitor). Never write `setTxTimeoutMs(0)` in your own code.
+- **Diagnosing an intermittent boot/run hang:** turn the loop watchdog OFF (with it on, a hang silently reboots and looks like a pass — it invalidates every "pass"). Read a frozen board through an OFF-panel channel (paint the phase to the screen, or an RTC marker shown on the next boot) — never by opening the serial port: on the S3 that both resets the board and, as a host, masks the bug. Isolate with matched single-variable controls (change ONE thing per flash) and clean-purged builds; a value that "must be non-zero" or "assumed connected" in vendor driver source is a prime suspect.
 - **Purge the build tree when the module set changes.** The SDK does not clear `<project>/build/lib`, so a renamed/removed module lingers and the linker can bind the wrong object (two modules defining the same class → `undefined reference`, or silent wrong-code). `rm -rf <project>/build` before a module-set change.
 - **Build in stages and gate each one with a warm reset.** Add one module or behaviour at a time; after flashing, the user presses the board's reset once and watches for 60 s: text + heartbeat alive = pass. Never open the serial port during that watch (opening it resets the board). Cold power cycles do not count as a pass: the display panel keeps power across a chip reset and only a warm reset shows the real state.
 
@@ -135,11 +135,14 @@ timing. It proves the control flow, which is where the bugs are.
 bash $SKILL_DIR/scripts/deploy.sh <project-dir> --port <PORT> --monitor 8
 ```
 
-This validates, builds, uploads, then prints live events for 8 seconds. On a
-`[FAIL]` read the log tail: compile errors mean your `code:` used something
-not in `usage` — fix the yaml and rerun. Hints for serial permission and busy
-ports are printed automatically. Do not retry uploads in a loop; two attempts,
-then report.
+This validates, then builds through `build_flash.py` (purges stale generated
+code, then applies the USB-serial hang fix: `ARDUINO_USB_CDC_ON_BOOT=0` +
+`atech_usb.h`), uploads, and prints live events for 8 seconds. The `hardened:`
+line in the output confirms the fix was applied — always flash this way, never
+raw `atech build`/`upload`. On a `[FAIL]` read the log tail: compile errors
+mean your `code:` used something not in `usage` — fix the yaml and rerun. Hints
+for serial permission and busy ports are printed automatically. Do not retry
+uploads in a loop; two attempts, then report.
 
 Flashing with modules unplugged is fine for GPIO modules. I2C modules
 (sensors, displays) are probed at boot, so tell the user to press the board's

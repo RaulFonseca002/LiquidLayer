@@ -8,12 +8,15 @@ tree can be patched between generation and compilation:
      them, so a renamed or removed module lingers and the linker can bind the
      wrong object (two modules defining one class → `undefined reference`, or
      silently wrong code). The PlatformIO cache (build/.pio) is kept.
-  2. ARDUINO_USB_CDC_ON_BOOT=1 → 0 in platformio.ini. With 1, the USB-CDC driver
-     starts in the first lines of boot and intermittently deadlocks WiFi-linked
-     firmware before loop() runs (matched-control proof, atech/STAGES.md).
-  3. route the generated code's `Serial` to atechUsb() (atech_usb.h), which
-     brings the real USB-CDC up from loop() ~2 s after boot. USB events keep
-     working; UART0 (whose pins sit on port 11 of the 14port) is never started.
+  2 + 3. fix the frozen-board bug. Its true cause is the SDK's generated
+     `Serial.setTxTimeoutMs(0)`: the ESP32-S3 USB write loop seeds its
+     unplug-detection counter from that timeout, and 0 makes it underflow so the
+     loop spins forever the moment the board writes with no host reading (buffer
+     fills, never drains). Fix: set ARDUINO_USB_CDC_ON_BOOT=0 and route the
+     generated `Serial` through atechUsb() (atech_usb.h), which brings the USB-CDC
+     up from loop() ~2 s after boot AND sets a bounded non-zero TX timeout (the
+     operative fix). USB events keep working; UART0 (port-11 pins) never starts.
+     Proof and full story: atech/STAGES.md.
 
 Usage:
   build_flash.py <project-dir> [--no-upload | --port /dev/ttyACM0] [--stock-usb]
