@@ -37,7 +37,7 @@ HT_BINS = np.array([i for i in list(range(1, 29)) + list(range(36, 64)) if i not
 
 P = {"R_j": 4.0, "R_w": 6.0, "k": 3, "n": 5, "hold_s": 60.0, "memory_s": 120.0,
      "tau_fast_s": 20.0, "tau_slow_s": 900.0, "floor_j": 0.003, "floor_w": 0.002,
-     "template_frames": 300}
+     "template_frames": 300, "warmup_s": 15.0}
 
 
 def amp_vector(iq: bytes):
@@ -64,6 +64,8 @@ class Detector:
         self.bj = np.nan; self.bw = np.nan
         self.hist = []; self.last_event = -1e9; self.on = False; self.on_since = 0.0
         self.last_t = None
+        self.t0 = None   # first frame time: no events during the warm-up, baselines learn from medians
+        self.warm_j = []; self.warm_w = []
         self.rj = np.nan; self.rw = np.nan; self.j = np.nan; self.w = np.nan
 
     def push(self, a, lay, t):
@@ -86,6 +88,17 @@ class Detector:
             if self.tpl_n[lay] >= 30:
                 w = max(0.0, 1.0 - corr(a, T))
             self.tpl_n[lay] += 1
+        # warm-up: collect, learn robust baselines, decide nothing
+        if self.t0 is None:
+            self.t0 = t
+        warming = (t - self.t0) < p["warmup_s"]
+        if warming:
+            if not np.isnan(j): self.warm_j.append(j)
+            if not np.isnan(w): self.warm_w.append(w)
+            if self.warm_j: self.bj = max(float(np.median(self.warm_j)), p["floor_j"])
+            if self.warm_w: self.bw = max(float(np.median(self.warm_w)), p["floor_w"])
+            self.j, self.w = j, w
+            return self.on
         # ratios
         rj = rw = np.nan
         if not np.isnan(j):
