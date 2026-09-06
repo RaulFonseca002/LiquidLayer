@@ -26,7 +26,9 @@ reset shows as 0/UNKNOWN.
 | L3g | L3 + `bulk_probe` (old module's static footprint + WiFiUDP/Preferences ctors, idle) | **PASS** | 2026-09-06 00:14 | statics and global constructors are innocent. Every piece of the old module now passes alone → run the control |
 | LC | control: instrumented base + the real `ruview_csi` (radio off, serial gated) = S1b + WDT/boot card/LED | **PASS** | 2026-09-06 00:22 | the S1b failure does NOT reproduce on the instrumented base. Candidates for what fixed it: 2 s boot-card pause after display init (LCnd tests), NeoPixel blink from loop, WDT |
 | LCnd | LC without the 2 s boot-card pause | **PASS** | 2026-09-06 00:28 | pause not needed. NOTE: the `st7735_tft` override (extra SWRESET before init) has been active in every build since L3 (created 23:38) — a confound and a fix candidate |
-| LCndno | LCnd built with the STOCK st7735 driver (single SWRESET) — no override | pending | | if this fails, root cause = single SWRESET does not recover the panel after a warm chip reset; double SWRESET is the fix |
+| LCndno | LCnd built with the STOCK st7735 driver (single SWRESET) — no override | **PASS** | 2026-09-06 00:33 | double SWRESET is NOT the fixer. Left vs S1b: NeoPixel present + blinking from loop, loop WDT, boot card frame/RTC counter |
+| LCndno-noLED | LCndno without the NeoPixel module (= S1b + WDT + boot card) | pending | | |
+| LCndno-noWDT | LCndno without enableLoopWDT (= S1b + LED + boot card) | pending | | |
 | L4 | L3 + WiFi station late start + 1 Hz UDP alive beacon from loop | pending | | radio; beacon = loop liveness over the network |
 | L5 | L4 + CSI arm + ring + DSP task (no UDP) | pending | | |
 | L6 | L5 + ADR-018 + vitals UDP; sink ≥15/s, drops <5 % | pending | | |
