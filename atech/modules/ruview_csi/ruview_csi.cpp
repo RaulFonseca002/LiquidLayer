@@ -245,7 +245,7 @@ void RuViewCsi::updateRate(uint32_t now) {
 
 void RuViewCsi::sendVitalsPacket(uint32_t nowMs) {
     ruview_wire::Vitals v;
-    ruview_wire::fillVitals(v, _nodeId, _edge.presence(), false, _edge.moving(),
+    ruview_wire::fillVitals(v, _nodeId, _edge.presence() && !_edge.noSignal(nowMs), false, _edge.moving(),
                             _edge.breathingBpm(), _edge.heartRateBpm(), (int8_t)_lastRssi,
                             _edge.presence() ? 1 : 0, _edge.motionEnergy(), _edge.presenceScore(), nowMs);
     if (_udp.beginPacket(_sinkAddr, _sinkPort)) {
@@ -273,6 +273,7 @@ void RuViewCsi::publish() {
     s.ratioJ = _edge.ratioJitter();
     s.ratioW = _edge.ratioWander();
     s.moving = _edge.moving();
+    s.noSignal = _edge.noSignal(millis());
     s.fs = _edge.sampleRateHz();
     s.calibLeft = _edge.calibSecondsLeft(millis());
     s.layout = _edge.layout() ? _edge.layout() : _layout;

@@ -64,7 +64,7 @@ code:
       // Verdict from the on-device adaptive-ratio detector (docs/CSI_PRESENCE_RESEARCH.md), the button
       // label for the recordings, and the raw numbers. HR/BR stay off the screen (not recoverable here).
       const char* v = csi.verdict();
-      uint16_t vc = csi.vitalsCalibrating() ? ST7735_TFT::COLOR_ORANGE : (csi.presence() ? (csi.moving() ? ST7735_TFT::COLOR_YELLOW : ST7735_TFT::COLOR_GREEN) : 0x8410);
+      uint16_t vc = csi.noSignal() ? ST7735_TFT::COLOR_RED : csi.vitalsCalibrating() ? ST7735_TFT::COLOR_ORANGE : (csi.presence() ? (csi.moving() ? ST7735_TFT::COLOR_YELLOW : ST7735_TFT::COLOR_GREEN) : 0x8410);
       tftA.displayText(v, 2, 16, 2, vc);
       tftA.fillCircle(148, 8, 6, csi.presence() ? ST7735_TFT::COLOR_GREEN : 0x2104);   // presence lamp
       snprintf(line, sizeof line, "label %s %lus", csi.segmentName(), (unsigned long)csi.segmentElapsedS());

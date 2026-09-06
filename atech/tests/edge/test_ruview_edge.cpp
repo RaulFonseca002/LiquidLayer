@@ -162,6 +162,11 @@ static void testSynthetic() {
     CHECK(fAltStill > 0.9f, "person detected despite alternation (%.1f%%)", 100 * fAltStill);
     room.empty(); run(e, room, t, 90.0f, now); CHECK(!e.presence(), "clears after leaving under alternation");
     room.altAntenna = false;
+    // (j) a starving link is "no signal", not OUT
+    CHECK(!e.noSignal(now), "signal fine at 20 fps");
+    { int8_t buf[384]; for (int i = 0; i < 40; ++i) { room.frame(t, buf); e.push(buf, 384, now); t += 0.5f; now += 500; } }   // 2 fps for 20 s
+    CHECK(e.noSignal(now), "2 fps reads as no signal (fs %.1f)", e.sampleRateHz());
+    CHECK(e.noSignal(now + 3000), "silence reads as no signal");
     // (h) restart warms up again
     e.restart();
     CHECK(e.calibrating() && !e.presence(), "restart clears state");

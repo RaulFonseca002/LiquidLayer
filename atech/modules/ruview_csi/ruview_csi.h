@@ -56,6 +56,7 @@ public:
         float    jitter = 0, wander = 0, thrJ = 0, thrW = 0, fs = 0;   // edge features, current thresholds (R x baseline), DSP sample rate
         float    ratioJ = 0, ratioW = 0;                       // last frame's feature / baseline
         bool     moving = false;                               // motion event within the last 5 s
+        bool     noSignal = true;                              // too few frames to judge (weak link): presence is unknown
         uint32_t calibLeft = 0;                                // warm-up seconds left (0 = live)
         uint8_t  layout = 0;                                   // CSI bytes / 128 of the vitals layout
         int      rssi = 0;
@@ -93,7 +94,8 @@ public:
     float       presenceScore() const { return _snap.ratioW; }   // wander / baseline (>= 6 means over)
     float       ratioJitter() const { return _snap.ratioJ; }
     bool        moving() const { return _snap.moving; }
-    const char* verdict() const { return _snap.calibrating ? "warming up" : (!_snap.presence ? "OUT" : (_snap.moving ? "IN moving" : "IN still")); }
+    bool        noSignal() const { return _snap.noSignal; }
+    const char* verdict() const { return _snap.noSignal ? "NO SIGNAL" : (_snap.calibrating ? "warming up" : (!_snap.presence ? "OUT" : (_snap.moving ? "IN moving" : "IN still"))); }
     uint32_t    calibSecondsLeft() const { return _snap.calibLeft; }
     const char* calibPhaseName() const;
     bool        fall() const { return _snap.fall; }

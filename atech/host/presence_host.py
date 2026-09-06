@@ -179,7 +179,7 @@ def main():
     csv = open(args.csv, "a") if args.csv else None
     if csv and csv.tell() == 0:
         csv.write("t,hms,label,layout,rssi,jitter,wander,ratio_j,ratio_w,baseline_j,baseline_w,present\n")
-    label = 0; rssi = 0; last_status = 0.0; last_csv = 0.0; last_state = None; rev = 0; last_uptime = None
+    label = 0; rssi = 0; last_status = 0.0; last_csv = 0.0; last_state = None; rev = 0; last_uptime = None; frame_times = []; no_signal = True
     rec = None; rec_start = 0.0; rec_idx = 0
     def open_rec():
         nonlocal rec, rec_start, rec_idx
@@ -220,6 +220,8 @@ def main():
             continue
         rssi = p["rssi"]
         on = det.push(a, lay, now)
+        frame_times.append(now); frame_times = [x for x in frame_times if now - x <= 5.0]
+        no_signal = len(frame_times) < 25   # < 5 fps over the last 5 s: unobserved, not empty
         hms = time.strftime("%H:%M:%S")
         if on != last_state:
             print(f"{hms}  {'IN ' if on else 'OUT'}  jitter {det.j if not np.isnan(det.j) else 0:.3f} (x{det.rj if not np.isnan(det.rj) else 0:.1f})  wander {det.w if not np.isnan(det.w) else 0:.3f} (x{det.rw if not np.isnan(det.rw) else 0:.1f})  label {label}", flush=True)
@@ -230,7 +232,7 @@ def main():
             last_state = on
         if now - last_status >= 5.0:
             last_status = now
-            print(f"{hms}  {'in ' if on else 'out'}  j {det.j if not np.isnan(det.j) else 0:.3f}/{det.bj if not np.isnan(det.bj) else 0:.3f}  w {det.w if not np.isnan(det.w) else 0:.3f}/{det.bw if not np.isnan(det.bw) else 0:.3f}  lay {lay} states {det.n_states.get(lay, 0)} rssi {rssi} label {label}", flush=True)
+            print(f"{hms}  {'weak' if no_signal else ('in ' if on else 'out')}  j {det.j if not np.isnan(det.j) else 0:.3f}/{det.bj if not np.isnan(det.bj) else 0:.3f}  w {det.w if not np.isnan(det.w) else 0:.3f}/{det.bw if not np.isnan(det.bw) else 0:.3f}  lay {lay} states {det.n_states.get(lay, 0)} fps {len(frame_times)/5:.0f} rssi {rssi} label {label}", flush=True)
         if csv and now - last_csv >= 1.0:
             last_csv = now
             csv.write(f"{now:.3f},{hms},{label},{lay},{rssi},{det.j:.5f},{det.w:.5f},{det.rj:.3f},{det.rw:.3f},{det.bj:.5f},{det.bw:.5f},{int(on)}\n"); csv.flush()

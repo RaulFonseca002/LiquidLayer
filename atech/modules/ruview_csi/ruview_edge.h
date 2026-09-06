@@ -65,6 +65,7 @@ public:
     static constexpr uint32_t MEMORY_MS      = 120000;  // wander may keep presence this long after an event
     static constexpr uint32_t MOVING_MS      = 5000;    // "moving" = event within this window
     static constexpr uint8_t  OFF_FRAMES     = 20;      // presence clears only after this many consecutive frames without a reason
+    static constexpr float    MIN_FS_HZ      = 5.0f;    // below this frame rate the room is unobserved, not empty
     static constexpr float    TAU_FAST_S     = 20.0f;   // baseline tracking while absent and quiet
     static constexpr float    TAU_SLOW_S     = 900.0f;  // otherwise (absorbs a new router regime)
     static constexpr float    QUIET_RATIO    = 2.0f;
@@ -115,6 +116,9 @@ public:
 
     // ---- outputs
     bool     presence() const { return _presence; }
+    // True when too few CSI frames arrive to judge the room (ping starvation at weak RSSI): the verdict is
+    // "no signal", not OUT. Call with the current time so a silent link is noticed without frames.
+    bool     noSignal(uint32_t nowMs) const { return _lastMs == 0 || nowMs - _lastMs > 2000 || _fs < MIN_FS_HZ; }
     bool     moving() const { return _moving; }                    // motion event within MOVING_MS
     float    jitter() const { return _sj; }                        // smoothed features (diagnostics)
     float    wander() const { return _sw; }
