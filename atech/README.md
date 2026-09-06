@@ -107,11 +107,11 @@ Validated with the native harness `tests/edge/run.sh` (synthetic scenarios plus
 replay of `tests/fixtures/*.csirec` with acceptance gates: empty 0.0 %, still
 99.9 %). Hardware acceptance status lives in `STAGES.md` ("Sensing fix").
 
-Button protocol (port 3): press → *empty* (leave; the baseline is relearned for
-as long as the segment lasts, min 30 s after a 10 s leave delay) → press →
-*still* (sit 1-2 m away, breathe normally) → press → *walk* → press → *live*.
-The segment is shown on screen, logged, and carried in the NodeStatus beacon so
-the recorder labels frames without touching USB.
+Data-first phase (from 2026-09-06 14:00): the button only labels (live → out → still →
+walk), the screen shows the label and the raw numbers, and the in/out decision is developed
+offline from labelled recordings (`analysis/`, numpy) and run live on the host
+(`host/presence_host.py`). Findings, protocol and candidate algorithms:
+`docs/CSI_PRESENCE_RESEARCH.md` and the "Data-first redesign" ladder in `STAGES.md`.
 
 ## Rebuild rules (after the frozen-display incident, 2026-09-05)
 

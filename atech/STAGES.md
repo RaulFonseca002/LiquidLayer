@@ -159,3 +159,19 @@ Findings that changed the design during F4:
 - The LLTF block is unusable (wander 0.57 against its own template); only the HT-LTF block is used.
 - Autocorrelation confidence passed 25 % of empty-room frames as "confident breathing". Replaced by a Hann block DFT per bin, per-bin normalised and fused over the band: prominence = peak/median; a reading needs prominence ≥ 3 off the band edges in two consecutive blocks agreeing within 1.5 bpm. The owner's still run peaks at the 6 bpm edge (drift) or wanders (11, 21, 16 bpm): nothing to report, and the engine says so.
 - Real idle jitter is 0.037 ± 0.013 and idle wander 0.020 ± 0.009 (the synthetic room sits at 0.006 / 0.003); constants must be tuned from recordings, never from the synthetic tests.
+
+## Data-first redesign (2026-09-06 14:00 →)
+
+Live tuning failed because the empty room is non-stationary: the router flips 256/384-byte frame
+layouts with link quality and changes transmit mode (empty-room jitter 0.005 in one period, 0.8 in
+another); a seated person off the router-board path barely registers (Fresnel geometry). Decision:
+learn from labelled recordings, propose the algorithm from data, keep the board a labelled sensor.
+Research note: `docs/CSI_PRESENCE_RESEARCH.md`. Toolkit: `analysis/` (numpy in the atech venv).
+
+| Rung | What | Result | Evidence |
+|------|------|--------|----------|
+| G1 | firmware: label-only button (live/out/still/walk), collection screen, frame flags + rate in ADR-018 byte 18/19, 50 Hz pings (30-35 fps observed), `csi_cfg` LLTF-only experiment mode | **flashed 14:00** (`5a80093`) | `csi_edge`/screen show label + raw numbers, no verdict |
+| G2 | dataset: `analysis/sessions.json` (3 button protocols + 13:31 out run = 1011 s out, 509 s still, 323 s walk certain), `dataset.py`, `record.sh`, `note.py` | done | loads 164k frames in 1 s |
+| G3 | offline evaluation, leave-one-protocol-out, per-group templates from the first half of each out window | **done** | protocols 1+2: F adaptive ratio occupied 100 % / out 0 % / 0 FA; A current Schmitt 1-77 %; motion-only B misses a seated person (0-35 % still); protocol 3: every detector fails — router mode flapped every ~40 s after the 12:57 reflash (empty jitter 0.15↔1.6); 13:31 out run: 0 % for all. Report artifact "Room Presence Evaluation" |
+| G4 | `host/presence_host.py` live (adaptive ratio + hold, records .csirec, CSV, optional ExternalObservation) | running since 14:15 | `~/.atech/recordings/<date>/presence_host.log` |
+| G5 | next sessions: overnight out baselines, 3 seat positions, ≥40 enter/leave transitions, LLTF-only config sessions; key baselines on the router mode (rate/STBC flags now logged) | pending owner | |
