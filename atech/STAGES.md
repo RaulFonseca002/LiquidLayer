@@ -64,3 +64,13 @@ Conclusion: with the WiFi/lwIP stack linked, starting loop() too soon after boot
 
 Open: identify WHAT must be ready (a background task/timer/one-time init from the linked stack). Next: delay-threshold sweep (500/1000/1500/2000 ms) to find the settle boundary and implicate the actor, then replace the blind delay with a wait-on-actual-ready condition (the real fix, not a delay).
 
+### ROOT CAUSE CONFIRMED (2026-09-06 ~02:00): USB-CDC-on-boot deadlock, no host
+
+Matched-control proof (only one variable changed):
+- s1b control, ARDUINO_USB_CDC_ON_BOOT=1, WDT off, no USB host: froze reliably (logo then black).
+- SAME firmware, ARDUINO_USB_CDC_ON_BOOT=0 (Serial.setTxTimeoutMs line disabled since it is HWCDC-only), WDT off, no host: 15 cold resets, ZERO freezes.
+
+Root cause: the ESP32-S3 USB-Serial-JTAG HWCDC driver, auto-initialised at boot by ARDUINO_USB_CDC_ON_BOOT=1, intermittently deadlocks during early startup when NO USB host is attached, in the heavier WiFi-linked build. Corroborating evidence gathered this session: a USB host attached (serial monitor / logger) always prevented the freeze (steady SOF stream keeps HWCDC connection-detection stable); removing the user's own serial calls did NOT help (the core calls Serial.begin regardless); a longer pre-loop delay only shifted the probability; the loop watchdog masked it by rebooting. The Atech SDK hardcodes ARDUINO_USB_CDC_ON_BOOT=1 in its generated platformio.ini.
+
+Cost of the raw fix: with CDC_ON_BOOT=0, `Serial` is UART0, not USB — so `atech monitor`/`send` over USB break. Production fix must KEEP USB serial: build CDC_ON_BOOT=0 and bring the USB-CDC up DELIBERATELY after boot/settle (USBSerial/HWCDC begin from setup once past the fragile window), or equivalently defer/guard the CDC init. To design + validate next, then report upstream to Atech.
+
