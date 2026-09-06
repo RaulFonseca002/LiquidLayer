@@ -61,26 +61,17 @@ code:
       snprintf(line, sizeof line, "-> %s", csi.sinkIp());
       tftA.displayText(line, 2, 46, 1, ST7735_TFT::COLOR_YELLOW);
     } else {
-      // HR/BR only while someone is in the room (and not calibrating). HR is best-effort on a
-      // single antenna, so its autocorrelation confidence (0..1) is printed next to it.
-      bool present = csi.presence() && !csi.vitalsCalibrating();
-      char big[16];
-      if (present && csi.heartRate() > 0) snprintf(big, sizeof big, "HR %2.0f", csi.heartRate()); else snprintf(big, sizeof big, "HR --");
-      tftA.displayText(big, 2, 16, 3, present ? ST7735_TFT::COLOR_GREEN : 0x8410);
-      if (present && csi.breathingRate() > 0) snprintf(big, sizeof big, "BR %2.0f", csi.breathingRate()); else snprintf(big, sizeof big, "BR --");
-      tftA.displayText(big, 2, 42, 3, present ? ST7735_TFT::COLOR_WHITE : 0x8410);
-      tftA.fillCircle(148, 8, 6, csi.presence() ? ST7735_TFT::COLOR_GREEN : 0x2104);   // presence lamp
-      // right column: calibration phase/countdown or the vitals confidences; segment; presence score
-      if (csi.vitalsCalibrating()) snprintf(line, sizeof line, "cal %s %lus", csi.calibPhaseName(), (unsigned long)csi.calibSecondsLeft());
-      else if (present) snprintf(line, sizeof line, "hr c%.2f", csi.heartConfidence());
-      else if (csi.wander() >= 0 && csi.snap().thrW > 0.25f) snprintf(line, sizeof line, "cal SUSPECT");   // learned with someone in the room: press the button and leave
-      else line[0] = 0;
-      tftA.displayText(line, 96, 18, 1, csi.vitalsCalibrating() ? ST7735_TFT::COLOR_ORANGE : ST7735_TFT::COLOR_GREEN);
+      // Data-collection view: the ground-truth label (button) and the raw sensing numbers. No verdict,
+      // no HR/BR: the in/out decision is being redesigned from labelled recordings (docs/CSI_PRESENCE_RESEARCH.md).
       snprintf(line, sizeof line, "%s %lus", csi.segmentName(), (unsigned long)csi.segmentElapsedS());
-      tftA.displayText(line, 96, 30, 1, csi.segment() ? ST7735_TFT::COLOR_YELLOW : 0x8410);
-      if (present) { snprintf(line, sizeof line, "br c%.2f", csi.breathingConfidence()); tftA.displayText(line, 96, 44, 1, ST7735_TFT::COLOR_WHITE); }
-      snprintf(line, sizeof line, "w%.2f j%.3f", csi.presenceScore(), csi.jitter());   // wander/threshold (>=1 = over), jitter
-      tftA.displayText(line, 96, 56, 1, 0x8410);
+      tftA.displayText(line, 2, 16, 2, csi.segment() ? ST7735_TFT::COLOR_YELLOW : ST7735_TFT::COLOR_WHITE);
+      snprintf(line, sizeof line, "j %.3f  w %.3f", csi.jitter(), csi.wander());
+      tftA.displayText(line, 2, 36, 1, ST7735_TFT::COLOR_CYAN);
+      if (csi.vitalsCalibrating()) snprintf(line, sizeof line, "cal %s %lus", csi.calibPhaseName(), (unsigned long)csi.calibSecondsLeft());
+      else snprintf(line, sizeof line, "thr j %.3f w %.3f", csi.snap().thrJ, csi.snap().thrW);
+      tftA.displayText(line, 2, 46, 1, csi.vitalsCalibrating() ? ST7735_TFT::COLOR_ORANGE : 0x8410);
+      snprintf(line, sizeof line, "lay %u cfg %u %s", (unsigned)csi.snap().layout, (unsigned)csi.csiConfig(), csi.presence() ? "P" : "-");
+      tftA.displayText(line, 2, 56, 1, 0x8410);
     }
 
     // ---- footer: reset reason, watchdog-reboot count (must stay 0), frame counter, heartbeat square

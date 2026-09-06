@@ -130,13 +130,20 @@ void RuViewCsi::enableCsi() {
 
 void RuViewCsi::armCsi(esp_err_t* eCfg, esp_err_t* eCb, esp_err_t* eOn) {
     wifi_csi_config_t cfg = {};
-    cfg.lltf_en = true;
-    cfg.htltf_en = true;
-    cfg.stbc_htltf2_en = true;
-    cfg.ltf_merge_en = true;
-    cfg.channel_filter_en = false;
-    cfg.manu_scale = false;
-    cfg.shift = 0;
+    if (_csiCfg == 1) {
+        // Espressif esp-radar defaults: LLTF only, no merge, fixed scaling -> constant 128-byte frames
+        // whatever HT/STBC mode the router picks. Experimental capture mode for the data collection.
+        cfg.lltf_en = true; cfg.htltf_en = false; cfg.stbc_htltf2_en = false; cfg.ltf_merge_en = false;
+        cfg.channel_filter_en = false; cfg.manu_scale = true; cfg.shift = 4;
+    } else {
+        cfg.lltf_en = true;
+        cfg.htltf_en = true;
+        cfg.stbc_htltf2_en = true;
+        cfg.ltf_merge_en = true;
+        cfg.channel_filter_en = false;
+        cfg.manu_scale = false;
+        cfg.shift = 0;
+    }
     esp_err_t a = esp_wifi_set_csi_config(&cfg);
     esp_err_t b = esp_wifi_set_csi_rx_cb(&csiTrampoline, this);
     esp_err_t d = esp_wifi_set_csi(true);
@@ -176,6 +183,9 @@ void RuViewCsi::_onCsi(const wifi_csi_info_t* info) {
     if (len > ruview_wire::MAX_IQ_BYTES) len = ruview_wire::MAX_IQ_BYTES;
     memcpy(s.iq, info->buf, len);
     s.tMs = (uint32_t)(now / 1000);
+    s.flags = (uint8_t)((info->first_word_invalid ? 1 : 0) | (info->rx_ctrl.sig_mode == 1 ? 2 : 0) | (info->rx_ctrl.stbc ? 4 : 0)
+                        | (info->rx_ctrl.cwb ? 8 : 0) | (info->rx_ctrl.sgi ? 16 : 0) | ((_csiCfg & 3) << 6));
+    s.mcs = (uint8_t)info->rx_ctrl.rate;
     s.len = len;
     s.rssi = (int8_t)info->rx_ctrl.rssi;
     s.noise = (int8_t)info->rx_ctrl.noise_floor;
@@ -204,7 +214,7 @@ void RuViewCsi::_dspLoop() {
         bool cal = _edge.calibrating();
         if (_wasCalibrating && !cal && _edge.calibrated()) {
             _calSaveRequest = true;   // just finished: persist (loop side checks plausibility)
-            if (_edge.calibrationClosedByReturn() && _segment == 1) { _segment = 2; _segmentStartMs = millis(); }   // the person is back: on to "still"
+            // label-only mode: a calibration closed by someone returning does not touch the label
         }
         _wasCalibrating = cal;
         publish();
@@ -223,7 +233,7 @@ void RuViewCsi::drainRing(uint32_t now) {
         if (_edge.consumeBeat()) _beatPending = true;
         if (_streaming && _sinkValid) {
             size_t n = ruview_wire::serializeCsi(_txBuf, sizeof _txBuf, _nodeId, s.nAnt, s.channel,
-                                                 s.seq, s.rssi, s.noise, s.iq, s.len);
+                                                 s.seq, s.rssi, s.noise, s.iq, s.len, s.flags, s.mcs);
             if (n && _udp.beginPacket(_sinkAddr, _sinkPort)) {
                 _udp.write(_txBuf, n);
                 if (_udp.endPacket()) _packetsSent++;
@@ -411,6 +421,14 @@ void RuViewCsi::saveCalibration() {
     logEvent(msg);
 }
 
+void RuViewCsi::setCsiConfig(uint8_t id) {
+    id = id ? 1 : 0;
+    if (id == _csiCfg) return;
+    if (_csiOn) { disableCsi(); _csiCfg = id; _edgeInit = false; enableCsi(); }   // the engine restarts: the bin layout changed
+    else _csiCfg = id;
+    logEvent(_csiCfg ? "csi cfg 1: LLTF only, no merge, manu_scale shift 4 (experiment)" : "csi cfg 0: RuView all-LTF layout");
+}
+
 void RuViewCsi::forgetCalibration() {
     _prefs.remove("cal");
     _calRestored = false;
@@ -483,8 +501,7 @@ void RuViewCsi::setSegment(uint8_t s) {
     uint8_t prev = _segment;
     _segment = s;
     _segmentStartMs = millis();
-    if (s == 1) _calibCmd = 2;               // empty room: leave delay, then relearn for as long as the segment lasts
-    else if (prev == 1) _calibCmd = 3;       // back in: close the calibration (after its minimum)
+    (void)prev;                              // label-only: no calibration side effects
     char msg[48];
     snprintf(msg, sizeof msg, "segment: %u %s", (unsigned)s, segmentName());
     logEvent(msg);
@@ -498,7 +515,7 @@ const char* RuViewCsi::calibPhaseName() const {
 }
 
 const char* RuViewCsi::segmentName() const {
-    switch (_segment) { case 1: return "empty"; case 2: return "still"; case 3: return "walk"; default: return "live"; }
+    switch (_segment) { case 1: return "out"; case 2: return "still"; case 3: return "walk"; default: return "live"; }
 }
 
 const char* RuViewCsi::stateName() const {
@@ -628,9 +645,9 @@ void RuViewCsi::onAction(const char* action, const char* value) {
         uint32_t seen = s.frames + s.ringDrops;
         float dropPct = seen ? 100.0f * (float)s.ringDrops / (float)seen : 0.0f;
         char msg[120];
-        snprintf(msg, sizeof msg, "diag: frames=%lu ring_drops=%lu (%.1f%%) gate_drops=%lu tx=%lu rate=%.1f pump=%d csi_en=%d",
+        snprintf(msg, sizeof msg, "diag: frames=%lu ring_drops=%lu (%.1f%%) gate_drops=%lu tx=%lu rate=%.1f pump=%d csi_en=%d cfg=%u",
                  (unsigned long)s.frames, (unsigned long)s.ringDrops, dropPct, (unsigned long)s.gateDrops,
-                 (unsigned long)s.tx, s.rateHz, (int)(_ping != nullptr), (int)_csiEnabled);
+                 (unsigned long)s.tx, s.rateHz, (int)(_ping != nullptr), (int)_csiEnabled, (unsigned)_csiCfg);
         logEvent(msg);
         snprintf(msg, sizeof msg, "diag: ip=%s gw=%s sink=%s:%u heap=%u state=%s rssi=%d",
                  WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), _sinkIp,
@@ -644,8 +661,10 @@ void RuViewCsi::onAction(const char* action, const char* value) {
                  (unsigned)_edge.templates(), (unsigned long)_edge.untemplated(), (unsigned long)_edge.layoutDrops(), (unsigned long)_edge.blocks(),
                  (int)_calRestored, (int)(_prefs.getBytesLength("cal") > 0), (unsigned long)_calSavedUptimeS, (unsigned long)(millis() / 1000));
         logEvent(msg);
-    } else if (strcmp(sub, "segment") == 0) {
+    } else if (strcmp(sub, "segment") == 0 || strcmp(sub, "label") == 0) {
         setSegment((uint8_t)strtod(value, nullptr));
+    } else if (strcmp(sub, "cfg") == 0) {
+        setCsiConfig((uint8_t)strtod(value, nullptr));
     } else if (strcmp(sub, "promisc") == 0) {
         bool want = strtod(value, nullptr) != 0;
         if (_csiOn) { disableCsi(); _promisc = want; enableCsi(); }

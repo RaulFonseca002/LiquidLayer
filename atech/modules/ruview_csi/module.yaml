@@ -109,7 +109,10 @@ actions:
     description: "1 = send ADR-018 CSI frames to the sink, 0 = stop (default 1)."
   - key: "{{ instance }}_segment"
     value_type: int
-    description: "Session segment 0 live, 1 empty (starts an open-ended calibration after a 10 s leave delay), 2 still, 3 walk; normally cycled by the button. Carried in NodeStatus so host/csi_sink.py --record can label frames."
+    description: "Ground-truth label 0 live, 1 out of the room, 2 still, 3 walk; cycled by the button, label-only (no calibration side effects). Alias: {{ instance }}_label. Carried in NodeStatus so host/csi_sink.py --record tags frames."
+  - key: "{{ instance }}_cfg"
+    value_type: int
+    description: "CSI capture layout: 0 RuView all-LTF with ltf_merge (default, 256/384-byte frames that follow the router HT/STBC choice), 1 Espressif radar LLTF-only with manu_scale shift 4 (constant 128-byte frames). Re-arms CSI and restarts the engine. Experiment for the data collection."
 
 lib_deps: []
 
@@ -133,9 +136,9 @@ usage: |
   float br     = {{ instance }}.breathingRate();   // bpm, 0 until confident (breathingConfidence() >= 0.3)
   bool  fall   = {{ instance }}.fall();            // always false: fall detection is disabled (never validated)
   bool  beat   = {{ instance }}.consumeBeat();     // true once per positive crossing of the heart-band signal (LED pulse)
-  bool  cal    = {{ instance }}.isCalibrating();   // 60 s after the first CSI frame, or during the "empty" segment
+  bool  cal    = {{ instance }}.isCalibrating();   // 60 s after the first CSI frame (or csi_calibrate)
   const char* ph = {{ instance }}.calibPhaseName(); // leave|template|stats|ready, plus calibSecondsLeft()
-  uint8_t seg  = {{ instance }}.segment();         // 0 live, 1 empty, 2 still, 3 walk; segmentName(), nextSegment() from a button
+  uint8_t seg  = {{ instance }}.segment();         // ground-truth label 0 live, 1 out, 2 still, 3 walk; segmentName(), nextSegment() from a button
   uint32_t n   = {{ instance }}.framesTotal();     // frames since boot
   uint32_t tx  = {{ instance }}.packetsSent();     // UDP packets to the sink
   const char* ip = {{ instance }}.sinkIp();        // configured sink

@@ -1,0 +1,41 @@
+{
+  "_doc": "Labelled windows of the raw CSI recordings (host/csi_sink.py --record). Times are seconds from the first record of the file. Labels: out | still | walk | live | unknown; transition windows carry 'enter' / 'leave'. Only windows whose ground truth is certain are scored. Recordings live in ~/.atech/recordings (not in git); trimmed fixtures in tests/fixtures.",
+  "room": {
+    "name": "owner flat, main room",
+    "board": "Atech 14port, ESP32-S3, module ruview_csi, display ports 1-2, button port 3",
+    "csi_source": "router ICMP echo replies, HT20, channel 6, RSSI -39..-58 dBm",
+    "positions": {
+      "chair": "1-2 m from the board, on the router-board path (button protocol 'still')",
+      "desk": "owner's desk, off the router-board path (uncertain windows only)"
+    },
+    "notes": "Frame layout flips 256/384 bytes with link quality. Floor plan sketch: TODO owner."
+  },
+  "sessions": [
+    {
+      "file": "~/.atech/recordings/session-20260906-114218.csirec",
+      "date": "2026-09-06",
+      "firmware": "feat/atech 9a401aa..1ac9122 (20 Hz pings, all-LTF layout, csi_cfg 0)",
+      "windows": [
+        {"t0": 1898.3, "t1": 1913.3, "label": "leave", "note": "protocol 1: pressed 'out' then left"},
+        {"t0": 1913.3, "t1": 2086.0, "label": "out",   "note": "protocol 1 empty room"},
+        {"t0": 2086.0, "t1": 2096.2, "label": "enter", "note": "protocol 1 returning to press"},
+        {"t0": 2096.3, "t1": 2293.2, "label": "still", "position": "chair", "note": "protocol 1"},
+        {"t0": 2293.3, "t1": 2388.2, "label": "walk",  "note": "protocol 1"},
+        {"t0": 3424.5, "t1": 3439.5, "label": "leave", "note": "protocol 2"},
+        {"t0": 3439.5, "t1": 3640.0, "label": "out",   "note": "protocol 2 empty room"},
+        {"t0": 3640.0, "t1": 3650.4, "label": "enter", "note": "protocol 2"},
+        {"t0": 3650.5, "t1": 3801.4, "label": "still", "position": "chair", "note": "protocol 2"},
+        {"t0": 3801.5, "t1": 3916.4, "label": "walk",  "note": "protocol 2"},
+        {"t0": 4475.2, "t1": 4490.2, "label": "leave", "note": "protocol 3"},
+        {"t0": 4490.2, "t1": 4750.0, "label": "out",   "note": "protocol 3 empty room"},
+        {"t0": 4750.0, "t1": 4760.2, "label": "enter", "note": "protocol 3"},
+        {"t0": 4760.3, "t1": 4918.2, "label": "still", "position": "chair", "note": "protocol 3"},
+        {"t0": 4918.3, "t1": 5028.2, "label": "walk",  "note": "protocol 3"},
+        {"t0": 6546.0, "t1": 6561.0, "label": "leave", "note": "13:31 out run"},
+        {"t0": 6561.0, "t1": 6964.0, "label": "out",   "note": "13:31-13:38 empty room, 7 min"},
+        {"t0": 6964.0, "t1": 6974.0, "label": "enter", "note": "returned; label auto-jumped to still"}
+      ],
+      "unknown": "everything else in this file: owner at the desk or moving about; label 'still' from 6974 s onwards is not ground truth"
+    }
+  ]
+}

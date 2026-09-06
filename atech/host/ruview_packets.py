@@ -27,9 +27,11 @@ def parse(data: bytes) -> dict | None:
         return None
     magic = struct.unpack_from("<I", data, 0)[0]
     if magic == MAGIC_CSI and len(data) >= 20:
-        node, nant, nsub, freq, seq, rssi, noise = struct.unpack_from("<BBHIIbb", data, 4)
+        node, nant, nsub, freq, seq, rssi, noise, flags, mcs = struct.unpack_from("<BBHIIbbBB", data, 4)
         return {"kind": "csi", "node": node, "n_ant": nant, "n_sub": nsub, "freq_mhz": freq,
-                "seq": seq, "rssi": rssi, "noise": noise, "iq_bytes": len(data) - 20, "iq": data[20:]}
+                "seq": seq, "rssi": rssi, "noise": noise, "iq_bytes": len(data) - 20, "iq": data[20:],
+                "first_word_invalid": bool(flags & 1), "ht": bool(flags & 2), "stbc": bool(flags & 4),
+                "ht40": bool(flags & 8), "sgi": bool(flags & 16), "csi_cfg": (flags >> 6) & 3, "mcs": mcs}
     if magic == MAGIC_VITALS and len(data) == 32:
         node, flags, br, hr, rssi, npers = struct.unpack_from("<BBHIbB", data, 4)
         motion, score, ts = struct.unpack_from("<ffI", data, 16)

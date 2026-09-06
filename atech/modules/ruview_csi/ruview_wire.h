@@ -29,10 +29,13 @@ inline uint32_t channelToMHz(uint8_t ch) {
 
 // Serialize one CSI frame. Returns bytes written (0 if out is too small).
 //   out must hold CSI_HEADER + iqLen bytes.
+// Byte 18 of the header carries our frame flags (RuView accepts any value there):
+//   bit0 first_word_invalid, bit1 HT (sig_mode), bit2 STBC, bit3 HT40 (cwb), bit4 short GI,
+//   bits 6-7 CSI config id (0 = RuView all-LTF layout, 1 = Espressif radar LLTF-only). Byte 19 = rate/MCS.
 inline size_t serializeCsi(uint8_t* out, size_t outCap,
                            uint8_t nodeId, uint8_t nAntennas, uint8_t channel,
                            uint32_t seq, int8_t rssi, int8_t noiseFloor,
-                           const int8_t* iq, uint16_t iqLen) {
+                           const int8_t* iq, uint16_t iqLen, uint8_t flags = 0, uint8_t mcs = 0) {
     if (nAntennas == 0) nAntennas = 1;
     if (outCap < CSI_HEADER + iqLen) return 0;
     uint16_t nSub = (uint16_t)(iqLen / (2u * nAntennas));
@@ -44,8 +47,8 @@ inline size_t serializeCsi(uint8_t* out, size_t outCap,
     put32(out + 12, seq);
     out[16] = (uint8_t)rssi;
     out[17] = (uint8_t)noiseFloor;
-    out[18] = 0;  // reserved (ADR-110 PPDU tag on C6; zeros are accepted)
-    out[19] = 0;
+    out[18] = flags;
+    out[19] = mcs;
     memcpy(out + CSI_HEADER, iq, iqLen);
     return CSI_HEADER + iqLen;
 }

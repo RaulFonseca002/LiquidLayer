@@ -42,7 +42,7 @@ public:
 
     static constexpr uint8_t  RING_SLOTS        = 16;
     static constexpr uint32_t MIN_PROCESS_US    = 20 * 1000;  // 50 Hz early gate (RuView CSI_MIN_PROCESS_INTERVAL_US)
-    static constexpr uint32_t PUMP_INTERVAL_MS  = 50;         // ICMP ping to the gateway -> 20 CSI frames/s
+    static constexpr uint32_t PUMP_INTERVAL_MS  = 20;         // ICMP ping to the gateway -> up to 50 CSI frames/s (walking modulates at ~16 Hz; 20 Hz aliased it)
     static constexpr uint32_t PROBE_INTERVAL_MS = 100;        // probe-request injection fallback (10 Hz)
     static constexpr float    LOW_RATE_HZ       = 12.0f;      // below this, enable probe injection
     static constexpr uint32_t LATE_START_MS     = 1500;       // let the display paint before WiFi starts
@@ -108,14 +108,16 @@ public:
     void setWifiEnabled(bool on);                               // persists; 0 = radio never starts (stage test)
     void setStreaming(bool on) { _streaming = on; }
     void calibrate() { _calibCmd = 1; }        // relearn now (automatic 60 s window)
-    // Session segments, cycled by the button: 0 live, 1 empty room (calibrating), 2 sitting still, 3 walking.
-    // Entering EMPTY relearns the ambient baseline. The segment rides in NodeStatus so the host recorder
-    // can label CSI frames without touching USB.
+    // Ground-truth labels, cycled by the button: 0 live, 1 out of the room, 2 sitting still, 3 walking.
+    // Label-only: no calibration side effects (the data-first redesign learns from labelled recordings).
+    // The label rides in NodeStatus so the host recorder can tag CSI frames without touching USB.
     void        setSegment(uint8_t s);
     // Calibration persistence (NVS blob "cal", tagged with the AP BSSID + channel): restored on the
     // first CSI arm when the tag matches, saved whenever a calibration completes, cleared by forget.
     void        forgetCalibration();
     bool        calibrationRestored() const { return _calRestored; }
+    uint8_t     csiConfig() const { return _csiCfg; }
+    void        setCsiConfig(uint8_t id);   // re-arms CSI with the other capture layout (experiment)
     void        nextSegment() { setSegment((uint8_t)((_segment + 1) & 3)); }
     uint8_t     segment() const { return _segment; }
     const char* segmentName() const;
@@ -130,6 +132,8 @@ public:
 private:
     struct Slot {
         uint32_t tMs;      // arrival time (ms since boot), stamped in the WiFi callback
+        uint8_t  flags;    // frame flags (see ruview_wire.h serializeCsi)
+        uint8_t  mcs;      // rx_ctrl.rate
         uint16_t len;
         int8_t   rssi;
         int8_t   noise;
@@ -167,6 +171,7 @@ private:
     bool        _promisc = false;     // promiscuous mode kills CSI on Arduino core 2.0.17 (S3); keep off
     int8_t      _probeForce = -1;     // -1 auto, 0 off, 1 on (csi_probe action)
     uint8_t     _segment = 0;
+    uint8_t     _csiCfg = 0;          // 0 RuView all-LTF (merge on), 1 Espressif radar LLTF-only (manu_scale shift 4)
     uint32_t    _segmentStartMs = 0;
     volatile uint8_t _layout = 0;     // written by the DSP task
     uint32_t    _bootMs = 0;
