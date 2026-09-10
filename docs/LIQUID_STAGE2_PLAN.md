@@ -1,5 +1,9 @@
 # Liquid Stage 2 Plan
 
+Related research: [Semantic invariance in Liquid and MCP](SEMANTIC_INVARIANCE_RESEARCH.md)
+proposes evaluating paraphrases against verified outcomes and authority, with
+meaning-changing controls. It does not activate or expand an implementation milestone.
+
 **Status:** Stage 2 architecture and implementation roadmap  
 **Date:** 28 August 2026  
 **Foundation:** Solid v0.1.0  
