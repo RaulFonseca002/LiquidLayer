@@ -161,6 +161,7 @@ const context = {
     URLSearchParams,
     console,
     TextDecoder,
+    TextEncoder,
     fetch: () => Promise.reject(new Error("fetch is not available in the harness"))
 };
 context.globalThis = context;

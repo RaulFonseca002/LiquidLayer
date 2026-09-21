@@ -52,7 +52,7 @@ std::vector<RecordId> MemoryEventStore::append_batch(
 
     std::vector<RecordId> sequences;
     sequences.reserve(events.size());
-    records.reserve(records.size() + events.size());
+    events_detail::reserve_for_append(records, events.size(), maximumRecords);
 
     for (const EventData& event : events) {
         const RecordId sequence = nextSequence;

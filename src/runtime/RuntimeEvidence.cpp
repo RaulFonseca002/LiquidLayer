@@ -213,25 +213,74 @@ std::vector<ResolvedEffect> Runtime::apply_selections(
     return effects;
 }
 
+void Runtime::unbind_effect_component(const ComponentTarget& component) {
+    const auto binding = effectBindings.find(component);
+    if (binding == effectBindings.end())
+        return;
+    const auto reverse = componentsByEffectTarget.find({
+        binding->second.route.value(), binding->second.target.value()});
+    if (reverse != componentsByEffectTarget.end() &&
+        reverse->second == component) {
+        componentsByEffectTarget.erase(reverse);
+    }
+    effectBindings.erase(binding);
+}
+
+void Runtime::retire_dead_effect_bindings() {
+    std::vector<ComponentTarget> dead;
+    for (const auto& [component, binding] : effectBindings) {
+        if (!ownedWorld.component_exists(component))
+            dead.push_back(component);
+    }
+    for (const ComponentTarget& component : dead) {
+        unbind_effect_component(component);
+        componentControls.erase(component);
+    }
+}
+
+// Feedback for a physical (route, target) only gains authority over a
+// component while that component's current binding still names the same
+// route and target and the component itself is still live. Superseded
+// reverse keys are dropped here; the feedback remains valid evidence about
+// the physical target.
+const Runtime::ExternalComponentBinding* Runtime::current_effect_binding(
+    const AdapterRoute& route,
+    const EffectTarget& target
+) {
+    const auto bound = componentsByEffectTarget.find({
+        route.value(), target.value()});
+    if (bound == componentsByEffectTarget.end())
+        return nullptr;
+    const auto binding = effectBindings.find(bound->second);
+    if (binding == effectBindings.end() ||
+        binding->second.route != route ||
+        binding->second.target != target) {
+        componentsByEffectTarget.erase(bound);
+        return nullptr;
+    }
+    if (!ownedWorld.component_exists(binding->second.component)) {
+        const ComponentTarget component = bound->second;
+        unbind_effect_component(component);
+        componentControls.erase(component);
+        return nullptr;
+    }
+    return &binding->second;
+}
+
 void Runtime::project_authoritative_reports(
     const std::vector<EffectReport>& reports
 ) {
     for (const EffectReport& report : reports) {
         if (!effectsState->report_is_authoritative(report))
             continue;
-        const auto bound = componentsByEffectTarget.find({
-            report.adapterRoute.value(), report.target.value()});
-        if (bound == componentsByEffectTarget.end())
+        const ExternalComponentBinding* binding =
+            current_effect_binding(report.adapterRoute, report.target);
+        if (!binding)
             continue;
-        const auto binding = effectBindings.find(bound->second);
-        if (binding == effectBindings.end())
-            throw std::logic_error("effect target binding is inconsistent");
         Value projected = ownedWorld.decode_observed(
-            binding->second.component, *report.observedValue);
+            binding->component, *report.observedValue);
         ownedWorld.replace_component_value(
-            binding->second.component,
-            binding->second.name,
-            projected);
+            binding->component, binding->name, projected);
     }
 }
 
@@ -241,19 +290,14 @@ void Runtime::project_authoritative_observations(
     for (const ExternalObservation& observation : observations) {
         if (!effectsState->observation_is_authoritative(observation))
             continue;
-        const auto bound = componentsByEffectTarget.find({
-            observation.adapterRoute.value(), observation.target.value()});
-        if (bound == componentsByEffectTarget.end())
+        const ExternalComponentBinding* binding =
+            current_effect_binding(observation.adapterRoute, observation.target);
+        if (!binding)
             continue;
-        const auto binding = effectBindings.find(bound->second);
-        if (binding == effectBindings.end())
-            throw std::logic_error("effect target binding is inconsistent");
         Value projected = ownedWorld.decode_observed(
-            binding->second.component, observation.observedValue);
+            binding->component, observation.observedValue);
         ownedWorld.replace_component_value(
-            binding->second.component,
-            binding->second.name,
-            projected);
+            binding->component, binding->name, projected);
     }
 }
 

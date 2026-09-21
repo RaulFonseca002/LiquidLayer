@@ -7,6 +7,7 @@
 #include "liquid/world/World.hpp"
 
 #include <cstddef>
+#include <exception>
 #include <map>
 #include <memory>
 #include <optional>
@@ -102,6 +103,15 @@ private:
         const std::vector<EffectReport>& reports);
     void project_authoritative_observations(
         const std::vector<ExternalObservation>& observations);
+    void publish_frame_failure(
+        FrameLog& frame,
+        FrameNumber frameNumber,
+        IntentTime now,
+        const std::exception_ptr& failure);
+    void unbind_effect_component(const ComponentTarget& component);
+    void retire_dead_effect_bindings();
+    const ExternalComponentBinding* current_effect_binding(
+        const AdapterRoute& route, const EffectTarget& target);
 
 public:
     Runtime();
@@ -175,7 +185,7 @@ void Runtime::configure_component(
             "external components require bind_effect_component");
     const ComponentTarget target = ownedWorld.component_target(type, name);
     componentControls.insert_or_assign(target, control);
-    effectBindings.erase(target);
+    unbind_effect_component(target);
 }
 
 template <typename Component>
@@ -195,12 +205,14 @@ void Runtime::bind_effect_component(
     const AdapterRoute route = ownedWorld.effect_route(type.id);
     const std::pair<std::string, std::string> key{
         route.value(), target.value()};
-    const auto existing = componentsByEffectTarget.find(key);
-    if (existing != componentsByEffectTarget.end() &&
-        existing->second != component) {
+    const ExternalComponentBinding* existing = current_effect_binding(route, target);
+    if (existing && existing->component != component) {
         throw std::invalid_argument(
             "effect route and target are already bound");
     }
+    // Forward and reverse indexes change together: a rebind drops the
+    // superseded (route, target) key before the new pair is installed.
+    unbind_effect_component(component);
     componentControls.insert_or_assign(
         component, ComponentControl::ExternalEffect);
     effectBindings.insert_or_assign(component, ExternalComponentBinding{

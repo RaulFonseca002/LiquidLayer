@@ -697,7 +697,10 @@
     }
 
     function parseScenario() {
-        const brightness = Number(elements.initialBrightness.value);
+        // The form runs with novalidate, so a cleared required field must be
+        // rejected here: Number("") would otherwise read as a valid 0.
+        const rawBrightness = elements.initialBrightness.value.trim();
+        const brightness = rawBrightness === "" ? NaN : Number(rawBrightness);
         const latencyMs = Number(elements.latencyMs.value);
         const duplicateReports = Number(elements.duplicateReports.value);
         const rawTimes = elements.frameTimes.value.split(",");
@@ -889,8 +892,48 @@
         updatePlaybackButtons();
     }
 
+    function runParserSelfTest() {
+        const saved = {
+            brightness: elements.initialBrightness.value,
+            frameTimes: elements.frameTimes.value,
+            latency: elements.latencyMs.value,
+            duplicates: elements.duplicateReports.value
+        };
+        elements.frameTimes.value = "100, 105";
+        elements.latencyMs.value = "0";
+        elements.duplicateReports.value = "0";
+        try {
+            ["", "   ", "-1", "101", "1.5", "abc"].forEach(function (raw) {
+                elements.initialBrightness.value = raw;
+                let rejected = false;
+                try {
+                    parseScenario();
+                } catch (error) {
+                    rejected = String(error.message).startsWith("Initial brightness");
+                }
+                if (!rejected || elements.initialBrightness.getAttribute("aria-invalid") !== "true")
+                    throw new Error(`Solid Scope parser self-test accepted brightness ${JSON.stringify(raw)}.`);
+            });
+            [["0", 0], ["100", 100], ["57", 57], [" 7 ", 7]].forEach(function (pair) {
+                elements.initialBrightness.value = pair[0];
+                const parsed = parseScenario();
+                if (parsed.initial_brightness !== pair[1] || elements.initialBrightness.getAttribute("aria-invalid") !== null)
+                    throw new Error(`Solid Scope parser self-test mis-parsed brightness ${JSON.stringify(pair[0])}.`);
+            });
+        } finally {
+            elements.initialBrightness.value = saved.brightness;
+            elements.frameTimes.value = saved.frameTimes;
+            elements.latencyMs.value = saved.latency;
+            elements.duplicateReports.value = saved.duplicates;
+            elements.initialBrightness.removeAttribute("aria-invalid");
+            elements.frameTimes.removeAttribute("aria-invalid");
+            elements.formMessage.hidden = true;
+        }
+    }
+
     function runSelfTest() {
         stopActiveRun(false);
+        runParserSelfTest();
         resetView();
         const failureEvents = [
             { schema: TRACE_SCHEMA, event: "run_started", seq: 0, initial_brightness: 10, frame_times: [100], feedback_timing: "deferred", latency_ms: 0, adapter_outcome: "applied", duplicate_reports: 0, silent: false, reverse_delivery: false },

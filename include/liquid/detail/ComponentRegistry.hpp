@@ -245,6 +245,8 @@ public:
     template <typename Component>
     void add_component(ComponentType<Component> type, std::string name, Component component);
 
+    bool slot_is_current(ComponentTypeId type, ComponentSlotId slot) const noexcept;
+
     template <typename Component>
     bool has_component_named(ComponentType<Component> type, const std::string& name) const;
 

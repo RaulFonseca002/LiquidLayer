@@ -4,7 +4,11 @@
 
 **Audit status:** Complete — 22 August 2026. The final regression-first audit
 and three independent re-reviews found no unresolved critical, high, or medium
-issue.
+issue *at that revision*. This is dated evidence about the v0.1.0 release, not
+a permanent assertion; later reviews can and do find defects. The pre-Liquid
+review of 5 September 2026 (`docs/PRE_LIQUID_REVIEW.md`) recorded new
+high/medium Solid findings and their closure is tracked in
+`DEVELOPMENT_TRACKING.md`.
 
 **Implementation status:** Solid v0.1.0 is complete through M1-M6 and
 finalization S0-S7. The release includes ordered Input/Behavior/Decision
@@ -14,8 +18,9 @@ packaging, and the optional Solid Scope instrument.
 
 This document is the accepted and completed Solid v0.1.0 audit. On 12 August
 2026 the owner approved the framework completion contract and S0-S7 order; on
-22 August 2026 the final local Linux release matrix closed those gates. Stage
-2 Liquid is now limited to research and approval of its first milestone.
+22 August 2026 the final local Linux release matrix closed those gates. For
+current Stage 2 scope and milestone status, see `DEVELOPMENT_TRACKING.md` and
+`AGENTS.md`; this document does not track them.
 
 All implementation follows the single-branch `main` workflow in `AGENTS.md`. Since 17 August 2026 the engine and Solid Scope share `main`; the former `experiment/stage2` track was fast-forwarded into `main` and retired. Engine/tool separation is enforced by the CMake packaging boundary, and the remote CI matrix on `main` is a standing gate.
 
@@ -173,7 +178,7 @@ These findings do not invalidate M1-M6. They define the hardening needed before 
 
 Solid Scope correctly demonstrates the present boundary: selected values are `[70, 30]` while authoritative actual values remain `[10, 10]`. That is evidence of the missing application loop, not a visualizer defect. The experiment also preserves Solid core semantics and uses a loopback bind allowlist, fixed static-file allowlist, Host/Origin/token checks, request and trace bounds, timeout enforcement, terminal/exit correlation, and direct-child cleanup.
 
-The following experiment issues remain before calling Solid Scope polished completion evidence:
+The following experiment issues were open when this audit was written (dated findings). They were closed before the v0.1.0 tag by the S6 (Solid Scope completion) and S7 (final audit and release candidate) milestones recorded in `DEVELOPMENT_TRACKING.md`: bounded bridge errors, process-group cleanup, bounded envelope validation, Unix gating, and the Scope supervision/assertion/package-export release gates (`320629b fix: close Scope and package release gates`):
 
 | Priority | Finding | Required treatment |
 |---|---|---|
@@ -185,7 +190,7 @@ The following experiment issues remain before calling Solid Scope polished compl
 | Low | A 150 ms timeout regression is startup-scheduling-sensitive and has failed once under the sanitizer build | Synchronize on the first child event or use a non-racy deadline |
 | Low | The bridge validates the trace envelope and terminal correlation but not required fields for every named v1 event | Define and validate per-event schemas and safe integer ranges at one boundary |
 
-The first two experiment findings are resource/safety defects and should precede visual polish. Browser automation is explicitly outside the support boundary; performance, platform, and schema evidence still must not remain implicit.
+At the time, the first two experiment findings were resource/safety defects that had to precede visual polish. Browser automation remains explicitly outside the support boundary; performance, platform, and schema evidence must not remain implicit. Later Scope defects found after this audit (for example the blank-brightness parser defect from the September 2026 review) are recorded in `DEVELOPMENT_TRACKING.md`, not here.
 
 ## Documentation and Operational Polish
 
@@ -193,7 +198,7 @@ The initial audit found useful historical snapshots that read as current. Those 
 
 - `CURRENT_STATE_EVALUATION.md` and `M6_TEST_BASE.md` retain their dated evidence behind prominent historical banners.
 - `Liquid_Concepts_and_Architecture.md` reflects M1-M6 and the S6 lifecycle/effect loop, and labels its broad folder tree as conceptual rather than current inventory.
-- `DEVELOPMENT_TRACKING.md` and `AGENTS.md` agree that S0-S7 is complete and Stage 2 is in research/milestone definition only.
+- `DEVELOPMENT_TRACKING.md` and `AGENTS.md` agreed, at the time of this audit, that S0-S7 was complete and Stage 2 was in research/milestone definition; they remain the authority for current status.
 - operational repository maps include the current scenario, trace, visualizer, and focused regression surfaces at the appropriate directory level.
 - `ARTICLE_NOTES.md` is explicitly labeled as historical research notes rather than implementation guidance.
 
@@ -295,6 +300,8 @@ Linux GCC/Clang, ASan/UBSan, TSan, coverage, fuzz, package-consumer, Scope,
 bridge, and browser-self-test matrix is green; the last full remote
 Linux/macOS/Windows matrix remains the green 17 August 2026 run. By owner
 decision, no additional remote run or cross-browser claim is required for the
-v0.1.0 tag. Solid is complete. The local-filesystem, private/no-license,
-optional-component, and internal Scope browser boundaries remain intentional
-v0.1 limits; Stage 2 begins with research and milestone approval, not code.
+v0.1.0 tag. Solid v0.1.0 is complete as released. The local-filesystem,
+private/no-license, optional-component, and internal Scope browser boundaries
+remain intentional v0.1 limits. This verdict is evidence about the 22 August
+2026 revision; subsequent hardening findings and their closure are recorded in
+`DEVELOPMENT_TRACKING.md` and `docs/PRE_LIQUID_REVIEW.md`.

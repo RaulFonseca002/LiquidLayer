@@ -604,3 +604,42 @@ TEST_CASE("file event store refuses symbolic-link paths") {
              std::vector<std::uint8_t>{1, 2, 3, 4}));
 }
 #endif
+
+TEST_CASE("single-record appends keep order and count across thousands of records") {
+    using namespace liquid;
+
+    MemoryEventStore memory(metadata(), 8192);
+    constexpr std::uint64_t count = 5000;
+    for (std::uint64_t index = 0; index < count; ++index) {
+        const RecordId sequence = memory.append(
+            EventData{EventType::FrameStarted, 1, Value(index)});
+        REQUIRE(sequence == RecordId{index + 1});
+    }
+    const auto records = memory.read_all();
+    REQUIRE(records.size() == count);
+    for (std::uint64_t index = 0; index < count; ++index) {
+        REQUIRE(records[index].sequence == RecordId{index + 1});
+        REQUIRE(records[index].payload == Value(index));
+    }
+
+    // Capacity is still enforced exactly at the configured record cap.
+    MemoryEventStore bounded(metadata(), 3);
+    bounded.append(EventData{EventType::FrameStarted, 1, Value(std::uint64_t{1})});
+    bounded.append(EventData{EventType::FrameStarted, 1, Value(std::uint64_t{2})});
+    bounded.append(EventData{EventType::FrameStarted, 1, Value(std::uint64_t{3})});
+    expect_store_error([&] {
+        bounded.append(EventData{EventType::FrameStarted, 1, Value(std::uint64_t{4})});
+    });
+    REQUIRE(bounded.read_all().size() == 3);
+
+    TemporaryFile path("append-growth.bin");
+    {
+        FileEventStore file(path.path(), metadata());
+        for (std::uint64_t index = 0; index < 600; ++index)
+            file.append(EventData{EventType::FrameStarted, 1, Value(index)}, Durability::Buffered);
+        REQUIRE(file.read_all().size() == 600);
+        REQUIRE(file.read_all().back().sequence == RecordId{600});
+    }
+    FileEventStore reopened(path.path(), metadata());
+    REQUIRE(reopened.read_all().size() == 600);
+}

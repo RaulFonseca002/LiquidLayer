@@ -806,3 +806,92 @@ TEST_CASE("test_world")
     }
 
 }
+
+TEST_CASE("throwing behavior removal callbacks still record the completed tombstone") {
+    World world;
+    const auto temperatureType = world.register_component<Temperature>(
+        "tests.Temperature", 1, ComponentCodec<Temperature>{
+            [](const Temperature& temperature) {
+                return Value{static_cast<std::int64_t>(temperature.celsius)};
+            },
+            [](const Value& value) {
+                return Temperature{static_cast<int>(value.as_signed_integer())};
+            }});
+    world.add_component(temperatureType, "officeTemperature", Temperature{22});
+    Signature signature;
+    signature.set(temperatureType.id);
+    world.register_system<ThrowingRemovalSystem>(signature);
+
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        temperatureType, behavior, "officeTemperature", ComponentAccessMode::ReadWrite);
+    world.clear_topology_mutations();
+    world.clear_component_mutations();
+
+    expect_throw([&] { world.destroy_behavior(behavior); });
+
+    REQUIRE(!world.behavior_exists(behavior));
+    REQUIRE(world.topology_mutations().size() == 1);
+    const auto& tombstone = world.topology_mutations().front();
+    REQUIRE(tombstone.removed);
+    REQUIRE(tombstone.key ==
+        "behavior:" + std::to_string(behavior.world) + ":" +
+        std::to_string(behavior.slot) + ":" + std::to_string(behavior.generation));
+    REQUIRE(world.component_mutations().empty());
+
+    // A removal that never happened records nothing.
+    world.clear_topology_mutations();
+    expect_throw([&] { world.destroy_behavior(behavior); });
+    REQUIRE(world.topology_mutations().empty());
+}
+
+TEST_CASE("throwing component removal callbacks still record the removed component") {
+    World world;
+    bool failEncode = false;
+    const auto lightType = world.register_component<Light>(
+        "tests.Light", 1, ComponentCodec<Light>{
+            [&failEncode](const Light& light) {
+                if (failEncode)
+                    throw std::invalid_argument("encoder unavailable");
+                return Value{static_cast<std::int64_t>(light.brightness)};
+            },
+            [](const Value& value) {
+                return Light{static_cast<int>(value.as_signed_integer())};
+            }});
+    world.add_component(lightType, "officeLight", Light{40});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        lightType, behavior, "officeLight", ComponentAccessMode::Read);
+    Signature lightSignature;
+    lightSignature.set(lightType.id);
+    world.register_system<ThrowingRemovalSystem>(lightSignature);
+    world.clear_topology_mutations();
+    world.clear_component_mutations();
+
+    expect_throw([&] { world.remove_component(lightType, "officeLight"); });
+
+    REQUIRE(!world.has_component_named(lightType, "officeLight"));
+    REQUIRE(world.component_mutations().size() == 1);
+    const auto& removed = world.component_mutations().front();
+    REQUIRE(removed.removed);
+    REQUIRE(removed.name == "officeLight");
+    REQUIRE(removed.before == Value{std::int64_t{40}});
+    REQUIRE(removed.after.kind() == Value::Kind::Null);
+    REQUIRE(world.topology_mutations().size() == 1);
+    REQUIRE(world.topology_mutations().front().removed);
+    REQUIRE(world.topology_mutations().front().key ==
+        "component:" + std::to_string(lightType.id) + ":officeLight");
+
+    // Failures before removal (encoding the pre-removal value) record nothing
+    // and leave the component in place.
+    world.clear_topology_mutations();
+    world.clear_component_mutations();
+    world.add_component(lightType, "hallLight", Light{10});
+    world.clear_component_mutations();
+    world.clear_topology_mutations();
+    failEncode = true;
+    expect_throw([&] { world.remove_component(lightType, "hallLight"); });
+    REQUIRE(world.has_component_named(lightType, "hallLight"));
+    REQUIRE(world.component_mutations().empty());
+    REQUIRE(world.topology_mutations().empty());
+}

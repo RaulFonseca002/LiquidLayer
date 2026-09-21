@@ -1,8 +1,13 @@
-# Product
+# Product — Solid Scope
+
+This document describes **Solid Scope**, the owner-operated local simulation
+instrument that ships beside the engine. It is not the product definition of
+the Liquid engine or of the future Liquid Layer application; those live in
+`Liquid_Concepts_and_Architecture.md` and the Stage 2 documents.
 
 ## Register
 
-product
+product (Solid Scope development instrument)
 
 ## Users
 

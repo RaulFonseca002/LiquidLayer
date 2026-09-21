@@ -7,7 +7,9 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -1630,4 +1632,403 @@ TEST_CASE("effect records compare by value") {
     differentPayload.payload = liquid::Value{std::uint64_t{105}};
     REQUIRE(record == record);
     REQUIRE_FALSE(record == differentPayload);
+}
+
+namespace {
+
+FeedbackSendResult send_observation(
+    Runtime& runtime,
+    const std::string& target,
+    std::uint64_t value,
+    std::uint64_t revision,
+    std::uint64_t observedAt
+) {
+    FeedbackSender feedback = runtime.feedback_sender();
+    return feedback.try_send(ExternalObservation{
+        SessionId{42}, AdapterRoute{"test.light"}, EffectTarget{target},
+        Value{value}, StateRevision{revision}, observedAt});
+}
+
+}
+
+TEST_CASE("rebinding an effect component retires the former target's authority") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    world.add_component(levelType, "other", std::uint64_t{20});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    world.grant_component_access(
+        levelType, behavior, "other", ComponentAccessMode::Read);
+
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"old"});
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"new"});
+
+    REQUIRE(send_observation(runtime, "old", 90, 1, 100) == FeedbackSendResult::Sent);
+    REQUIRE(runtime.run_frame(FrameInput{100, {}, {}}).observations.size() == 1);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 10);
+
+    REQUIRE(send_observation(runtime, "new", 25, 2, 105) == FeedbackSendResult::Sent);
+    REQUIRE(runtime.run_frame(FrameInput{105, {}, {}}).observations.size() == 1);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 25);
+
+    // The formerly bound target is free for another component.
+    runtime.bind_effect_component(levelType, "other", EffectTarget{"old"});
+    REQUIRE(send_observation(runtime, "old", 33, 3, 110) == FeedbackSendResult::Sent);
+    runtime.run_frame(FrameInput{110, {}, {}});
+    REQUIRE(*world.read_component(levelType, behavior, "other") == 33);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 25);
+    REQUIRE(!runtime.faulted());
+}
+
+TEST_CASE("converting an external component to internal control drops old-target authority") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"level"});
+    runtime.configure_component(levelType, "level", ComponentControl::InternalState);
+
+    REQUIRE(send_observation(runtime, "level", 90, 1, 100) == FeedbackSendResult::Sent);
+    const FrameResult frame = runtime.run_frame(FrameInput{100, {}, {}});
+    REQUIRE(frame.frame.completed);
+    REQUIRE(frame.observations.size() == 1);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 10);
+    REQUIRE(!runtime.faulted());
+}
+
+TEST_CASE("removed and recreated components do not inherit stale effect bindings") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"level"});
+
+    world.remove_component(levelType, "level");
+    REQUIRE(send_observation(runtime, "level", 90, 1, 100) == FeedbackSendResult::Sent);
+    REQUIRE(runtime.run_frame(FrameInput{100, {}, {}}).frame.completed);
+    REQUIRE(!runtime.faulted());
+
+    world.add_component(levelType, "level", std::uint64_t{5});
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    REQUIRE(send_observation(runtime, "level", 91, 2, 105) == FeedbackSendResult::Sent);
+    REQUIRE(runtime.run_frame(FrameInput{105, {}, {}}).frame.completed);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 5);
+
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"level"});
+    REQUIRE(send_observation(runtime, "level", 92, 3, 110) == FeedbackSendResult::Sent);
+    REQUIRE(runtime.run_frame(FrameInput{110, {}, {}}).frame.completed);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 92);
+}
+
+TEST_CASE("recreated components can immediately reclaim their effect target") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"level"});
+
+    world.remove_component(levelType, "level");
+    world.add_component(levelType, "level", std::uint64_t{5});
+    REQUIRE_NOTHROW(runtime.bind_effect_component(
+        levelType, "level", EffectTarget{"level"}));
+
+    world.add_component(levelType, "other", std::uint64_t{7});
+    REQUIRE_THROWS_AS(runtime.bind_effect_component(
+        levelType, "other", EffectTarget{"level"}), std::invalid_argument);
+
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    world.grant_component_access(
+        levelType, behavior, "other", ComponentAccessMode::Read);
+    REQUIRE(send_observation(runtime, "level", 90, 1, 100) == FeedbackSendResult::Sent);
+    REQUIRE(runtime.run_frame(FrameInput{100, {}, {}}).frame.completed);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 90);
+    REQUIRE(*world.read_component(levelType, behavior, "other") == 7);
+}
+
+TEST_CASE("stale queued reports for a superseded target do not project") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::ReadWrite);
+    const ComponentSlotId slot =
+        world.get_components(levelType, behavior).at("level");
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"level"});
+    world.create_intent(
+        behavior, levelType, slot, IntentLifetime::persistent(),
+        std::uint64_t{70}, IntentPriority::High);
+
+    const FrameResult issued = runtime.run_frame(FrameInput{100, {}, {}});
+    REQUIRE(issued.commands.size() == 1);
+    REQUIRE(adapter->dispatched.size() == 1);
+
+    // The adapter's report for target "level" is still queued when the host
+    // converts the component to internal control.
+    runtime.configure_component(levelType, "level", ComponentControl::InternalState);
+    const FrameResult later = runtime.run_frame(FrameInput{105, {}, {}});
+    REQUIRE(later.frame.completed);
+    REQUIRE(later.reports.size() == 1);
+    REQUIRE(!runtime.faulted());
+}
+
+namespace {
+
+struct ThrowingRemovalSystem : System {
+    static constexpr std::string_view stableName =
+        "tests.runtime.effects.ThrowingRemovalSystem";
+    static constexpr std::uint32_t version = 1;
+
+    void on_behavior_removed(BehaviorId) override {
+        throw std::runtime_error("removal callback failed");
+    }
+};
+
+// Throws on the Nth append of one event type while persisting everything
+// else, so a frame can be failed at a chosen point of its effects path.
+class FailOnEventTypeStore final : public EventStore {
+    MemoryEventStore backing;
+    EventType failType;
+    std::size_t failOnOccurrence;
+    std::size_t occurrences = 0;
+
+public:
+    std::string failureMessage = "injected append failure";
+    std::optional<EventType> alsoFailType;
+
+    FailOnEventTypeStore(
+        EventStoreMetadata metadata,
+        EventType type,
+        std::size_t occurrence)
+        : backing(std::move(metadata)), failType(type), failOnOccurrence(occurrence) {
+    }
+
+    const EventStoreMetadata& metadata() const override {
+        return backing.metadata();
+    }
+
+    RecordId append(EventData event, Durability durability = Durability::Durable) override {
+        if (event.type == failType && ++occurrences == failOnOccurrence)
+            throw EventStoreError(failureMessage);
+        if (alsoFailType && event.type == *alsoFailType)
+            throw EventStoreError("injected failure-evidence append failure");
+        return backing.append(std::move(event), durability);
+    }
+
+    std::vector<RecordId> append_batch(
+        std::span<const EventData> events,
+        Durability durability = Durability::Durable
+    ) override {
+        std::vector<RecordId> ids;
+        for (const EventData& event : events)
+            ids.push_back(append(event, durability));
+        return ids;
+    }
+
+    std::vector<EventRecord> read_all() const override {
+        return backing.read_all();
+    }
+
+    void flush() override {
+        backing.flush();
+    }
+
+    void retain_from_checkpoint(RecordId checkpoint) override {
+        backing.retain_from_checkpoint(checkpoint);
+    }
+};
+
+std::size_t count_records(
+    const std::vector<EventRecord>& records,
+    EventType type,
+    bool removed
+) {
+    std::size_t count = 0;
+    for (const auto& record : records) {
+        if (record.type != type)
+            continue;
+        const auto& payload = record.payload.as_object();
+        const auto flag = payload.find("removed");
+        if (type != EventType::TopologyChanged ||
+            (flag != payload.end() && flag->second == Value{removed})) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+}
+
+TEST_CASE("removal tombstones survive throwing callbacks into replayed evidence") {
+    EventStoreMetadata metadata;
+    metadata.session = SessionId{42};
+    metadata.engineVersion = "0.1.0";
+    metadata.feedbackTiming = FeedbackTiming::Deferred;
+    FailOnEventTypeStore store{metadata, EventType::FrameStarted, 2};
+    auto runtimeOptions = options(FeedbackTiming::Deferred);
+    runtimeOptions.eventStore = &store;
+    Runtime runtime{runtimeOptions};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    Signature signature;
+    signature.set(levelType.id);
+    world.register_system<ThrowingRemovalSystem>(signature);
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    runtime.run_frame(FrameInput{50, {}, {}});
+    const std::size_t baseline = store.read_all().size();
+
+    REQUIRE_THROWS_AS(world.remove_component(levelType, "level"), std::runtime_error);
+    REQUIRE(!world.has_component_named(levelType, "level"));
+
+    // The tombstones are buffered evidence until a frame drains them, even
+    // if that frame itself fails at its first event append.
+    REQUIRE_THROWS_AS(runtime.run_frame(FrameInput{100, {}, {}}), EventStoreError);
+    REQUIRE(runtime.faulted());
+    const auto records = store.read_all();
+    const bool persisted =
+        count_records(records, EventType::ComponentRemoved, true) == 1 &&
+        count_records(records, EventType::TopologyChanged, true) == 1;
+    const bool stillBuffered =
+        world.component_mutations().size() == 1 &&
+        world.component_mutations().front().removed &&
+        world.topology_mutations().size() == 1 &&
+        world.topology_mutations().front().removed;
+    REQUIRE((persisted || stillBuffered));
+    REQUIRE(records.size() >= baseline);
+}
+
+TEST_CASE("removal tombstones from throwing callbacks drain on the next frame") {
+    EventStoreMetadata metadata;
+    metadata.session = SessionId{42};
+    metadata.engineVersion = "0.1.0";
+    metadata.feedbackTiming = FeedbackTiming::Deferred;
+    MemoryEventStore store{metadata};
+    auto runtimeOptions = options(FeedbackTiming::Deferred);
+    runtimeOptions.eventStore = &store;
+    Runtime runtime{runtimeOptions};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    Signature signature;
+    signature.set(levelType.id);
+    world.register_system<ThrowingRemovalSystem>(signature);
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    runtime.run_frame(FrameInput{50, {}, {}});
+
+    REQUIRE_THROWS_AS(world.destroy_behavior(behavior), std::runtime_error);
+    REQUIRE(!world.behavior_exists(behavior));
+    REQUIRE(runtime.run_frame(FrameInput{100, {}, {}}).frame.completed);
+
+    const auto records = store.read_all();
+    REQUIRE(count_records(records, EventType::TopologyChanged, true) == 1);
+    for (const auto& record : records) {
+        if (record.type != EventType::TopologyChanged)
+            continue;
+        const auto& payload = record.payload.as_object();
+        if (payload.at("removed") == Value{true})
+            REQUIRE(payload.at("key").as_string().find("behavior:") == 0);
+    }
+}
+
+TEST_CASE("effects-path frame failures publish the failed frame log") {
+    struct Injection {
+        EventType type;
+        std::size_t occurrence;
+        bool alsoFailFailureEvidence;
+    };
+    const Injection injections[] = {
+        {EventType::FrameStarted, 2, false},    // before system execution
+        {EventType::FrameCompleted, 2, false},  // after resolution and dispatch
+        {EventType::FrameStarted, 2, true}      // failure while recording failure
+    };
+    for (const Injection& injection : injections) {
+        INFO("injection type " << static_cast<int>(injection.type)
+            << " alsoFailFailureEvidence " << injection.alsoFailFailureEvidence);
+        EventStoreMetadata metadata;
+        metadata.session = SessionId{42};
+        metadata.engineVersion = "0.1.0";
+        metadata.feedbackTiming = FeedbackTiming::Deferred;
+        FailOnEventTypeStore store{metadata, injection.type, injection.occurrence};
+        store.failureMessage = "injected effects failure";
+        if (injection.alsoFailFailureEvidence)
+            store.alsoFailType = EventType::FrameFailed;
+        auto runtimeOptions = options(FeedbackTiming::Deferred);
+        runtimeOptions.eventStore = &store;
+        Runtime runtime{runtimeOptions};
+        auto adapter = std::make_shared<TestAdapter>();
+        runtime.register_adapter(adapter);
+
+        const FrameResult first = runtime.run_frame(FrameInput{50, {}, {}});
+        REQUIRE(first.frame.completed);
+        REQUIRE(runtime.last_frame_log().completed);
+        REQUIRE(runtime.last_frame_log().now == 50);
+
+        bool threw = false;
+        try {
+            runtime.run_frame(FrameInput{100, {}, {}});
+        } catch (const EventStoreError& error) {
+            threw = true;
+            REQUIRE(std::string{error.what()} == "injected effects failure");
+        }
+        REQUIRE(threw);
+        REQUIRE(runtime.faulted());
+        const FrameLog& failed = runtime.last_frame_log();
+        REQUIRE(!failed.completed);
+        REQUIRE(failed.frame == FrameNumber{1});
+        REQUIRE(failed.now == 100);
+        REQUIRE(failed.failure_phase == "effects_and_persistence");
+        REQUIRE(failed.failure_message == "injected effects failure");
+    }
 }

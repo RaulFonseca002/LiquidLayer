@@ -160,13 +160,22 @@ Slot ComponentRegistry::validate_slot(
     if (!slot || slot.world != worldId)
         throw std::runtime_error("component slot belongs to another world");
 
-    const auto generations = slotGenerations.find(type);
-    if (generations == slotGenerations.end() ||
-        slot.slot >= generations->second.size() ||
-        generations->second[slot.slot] != slot.generation) {
+    if (!slot_is_current(type, slot))
         throw std::runtime_error("stale component slot handle");
-    }
     return slot.slot;
+}
+
+bool ComponentRegistry::slot_is_current(
+    ComponentTypeId type,
+    ComponentSlotId slot
+) const noexcept {
+    if (!slot || slot.world != worldId)
+        return false;
+
+    const auto generations = slotGenerations.find(type);
+    return generations != slotGenerations.end() &&
+        slot.slot < generations->second.size() &&
+        generations->second[slot.slot] == slot.generation;
 }
 
 bool ComponentRegistry::advance_slot_generation(

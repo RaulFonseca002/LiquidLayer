@@ -346,6 +346,73 @@ Whenever possible, semantic reasoning should become deterministic approved Lua/i
 
 ---
 
+## Pre-Liquid Hardening — September 2026
+
+**Status:** Done (code and documentation corrections landed on
+`fix/pre-liquid-hardening`; not a milestone approval and does not advance L0).
+
+`docs/PRE_LIQUID_REVIEW.md` (5 September 2026, reviewed revision `76f00e4`)
+audited Solid before L0 implementation and reproduced defects that the existing
+strict suite did not cover. Each finding below has a regression that fails on
+the reviewed code and passes at the closing commit.
+
+| Finding | Severity | Closing commit | Regression |
+|---|---|---|---|
+| B1 Lua lifecycle argument allocation could abort the host | High | `7d3ca72` | `test_lua_lifecycle`: "lifecycle change arguments exhausting Lua memory yield a bounded result", "lifecycle argument exhaustion after on_start commits nothing", "frame argument construction never escapes the Lua memory bound" |
+| B2 effect bindings retained authority for obsolete targets | High | `d39580a` | `test_runtime_effects`: "rebinding an effect component retires the former target's authority", "converting an external component to internal control drops old-target authority", "removed and recreated components do not inherit stale effect bindings", "stale queued reports for a superseded target do not project" |
+| B3 concurrent duplicate dispatch could execute twice after cache eviction | High | `e186aa6` | `test_idempotent_dispatcher`: "overlapping duplicate waiters consume the leader outcome after cache eviction", "duplicate waiters validate the shared leader outcome against their own command" |
+| B4 completed removals vanished from evidence when callbacks threw | High | `db276ce` | `test_world`: "throwing behavior removal callbacks still record the completed tombstone", "throwing component removal callbacks still record the removed component"; `test_runtime_effects`: "removal tombstones survive throwing callbacks into replayed evidence", "removal tombstones from throwing callbacks drain on the next frame" |
+| B5 effects failures left `last_frame_log()` stale | Medium | `ee10106` | `test_runtime_effects`: "effects-path frame failures publish the failed frame log" |
+| B6 Solid Scope accepted blank brightness as zero | Medium | `d4f4a9c` | `visualizer_selftest` (parser table in `runParserSelfTest`) |
+| C1 event appends relocated history on every append | Perf | `759396a` | `test_event_store`: "single-record appends keep order and count across thousands of records"; local Debug probe 2k/4k/8k appends: 0.50/1.97/7.93 s before, 0.015/0.012/0.022 s after |
+| C3 duplicated Lua execution-evidence construction | Simplification | `35e5af4` | `test_lua_behavior`: "execute and execute_lifecycle emit byte-identical execution evidence" |
+| C4 capability cache outlived destroyed behaviors | Lifetime | `35e5af4` | `test_lua_behavior`: "capability cache stays bounded under behavior churn in one world" |
+| C2 checkpoint retention embeds historical growth | Documented limitation | `ba8269c` | `test_replay`: "checkpoint payloads embed retained history until the value node limit"; `docs/EVENT_FORMAT_V1.md` known-limitation note |
+| D1 retention failure promise overstated | Docs | `ba8269c` | `docs/EVENT_FORMAT_V1.md` commit-boundary wording matches `test_event_store` post-replacement case |
+| D2 / product scope | Docs | `ba8269c` | `COMPLETE_SOLID.md` dated status/verdict; `PRODUCT.md` heading scoped to Solid Scope |
+
+Public API additions: `World::component_exists(ComponentTarget)` (non-throwing
+liveness query), `LuaBehaviorRunner::cached_capability_entries()` (diagnostic),
+and `IdempotentDispatcher::waiting_duplicate_dispatches()` (diagnostic count
+of calls parked on an in-flight duplicate). No new targets, folders, dependencies, or Event Format v1 changes.
+
+Notes carried forward:
+
+- C2 is a finite-session limitation, not corrupted evidence. Resolve bounded
+  current state versus historical evidence as a separate checkpoint design
+  decision before long-running operation; keep it out of L0.
+- C5: new L0 fixtures should use public `register_component<T>(name, version,
+  ComponentCodec<T>)` with the Lua codec, not the legacy codec-less overload
+  that test targets enable privately; the pre-Liquid regressions already follow
+  this.
+- The B3 regression holds the leader and evictor in the adapter, waits until
+  every duplicate is parked (`waiting_duplicate_dispatches()`), then completes
+  leader and evictor back to back and repeats the scenario. Parking is forced
+  by synchronization, so a second adapter call can only be the eviction defect;
+  the wake-up versus eviction order is internal, so the fix is asserted
+  schedule-independent across repetitions (the reviewed code fails within two
+  iterations). ThreadSanitizer coverage relies on the CI `tsan`
+  job (Clang is not installed on the development machine).
+
+Verification at the closing revision: strict Debug GCC build with
+`LIQUID_ENABLE_STRICT_WARNINGS=ON` and `LIQUID_WARNINGS_AS_ERRORS=ON`, full
+`ctest`, and the ASan/UBSan subset for Lua behavior/lifecycle, Runtime/effects,
+World, event store, replay, and idempotent dispatcher (results recorded in the
+closure note of `docs/PRE_LIQUID_REVIEW.md`).
+
+Follow-up verification found that a removed component still reserved its effect
+target until another frame ran. The working-tree follow-up to `5979e14` reuses
+the current-binding lookup before checking target uniqueness, retiring the dead
+entry while preserving rejection of duplicate live bindings. The regression
+"recreated components can immediately reclaim their effect target" failed on
+the pre-fix code with `effect route and target are already bound`, then passed
+all six assertions after the fix, including observation projection and live
+target conflict rejection. The full strict Debug and ASan/UBSan suites each
+passed 30/30. See `docs/PRE_LIQUID_VERIFICATION.md` for the remaining planning
+document integration and CI gates before L0.
+
+---
+
 ## Stage 2 Advancement Rule
 
 For each milestone:

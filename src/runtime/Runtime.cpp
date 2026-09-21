@@ -167,6 +167,31 @@ FrameLog Runtime::execute_frame_phases(
     return log;
 }
 
+// Finalizes a failed frame's log and publishes it through last_frame_log()
+// before any best-effort failure evidence is appended, so inspection never
+// reports the previous successful frame after a fault.
+void Runtime::publish_frame_failure(
+    FrameLog& frame,
+    FrameNumber frameNumber,
+    IntentTime now,
+    const std::exception_ptr& failure
+) {
+    frame.completed = false;
+    if (frame.failure_phase.empty()) {
+        frame.frame = frameNumber;
+        frame.now = now;
+        frame.failure_phase = "effects_and_persistence";
+        try {
+            std::rethrow_exception(failure);
+        } catch (const std::exception& error) {
+            frame.failure_message = error.what();
+        } catch (...) {
+            frame.failure_message = "unknown failure";
+        }
+    }
+    latestFrameLog = frame;
+}
+
 liquid::FrameResult Runtime::run_frame(liquid::FrameInput input) {
     ensure_owner_thread();
     if (!effectsState)
@@ -186,6 +211,7 @@ liquid::FrameResult Runtime::run_frame(liquid::FrameInput input) {
             }));
         effectsState->process_feedback(
             result.reports, result.observations);
+        retire_dead_effect_bindings();
         project_authoritative_reports(result.reports);
         project_authoritative_observations(result.observations);
         result.frame = execute_frame_phases(input.now, input.resolutions);
@@ -235,19 +261,7 @@ liquid::FrameResult Runtime::run_frame(liquid::FrameInput input) {
             latestFrameLog.frame == frameBeingRun) {
             result.frame = latestFrameLog;
         }
-        result.frame.completed = false;
-        if (result.frame.failure_phase.empty()) {
-            result.frame.frame = frameBeingRun;
-            result.frame.now = input.now;
-            result.frame.failure_phase = "effects_and_persistence";
-            try {
-                std::rethrow_exception(failure);
-            } catch (const std::exception& error) {
-                result.frame.failure_message = error.what();
-            } catch (...) {
-                result.frame.failure_message = "unknown failure";
-            }
-        }
+        publish_frame_failure(result.frame, frameBeingRun, input.now, failure);
         try {
             if (!worldEvidenceAttempted)
                 record_world_evidence();
