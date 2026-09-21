@@ -4,7 +4,7 @@ All notable framework changes will be recorded here. Dates are release dates, no
 
 ## Unreleased
 
-No changes yet.
+- 🐛 Allow recreated components to immediately reuse their external effect target without advancing a frame.
 
 ## 0.1.0 — 2026-08-22
 

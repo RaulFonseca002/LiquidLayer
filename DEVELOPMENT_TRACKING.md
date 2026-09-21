@@ -623,6 +623,17 @@ Verification at the closing revision: strict Debug GCC build with
 World, event store, replay, and idempotent dispatcher (results recorded in the
 closure note of `docs/PRE_LIQUID_REVIEW.md`).
 
+Follow-up verification found that a removed component still reserved its effect
+target until another frame ran. The working-tree follow-up to `5979e14` reuses
+the current-binding lookup before checking target uniqueness, retiring the dead
+entry while preserving rejection of duplicate live bindings. The regression
+"recreated components can immediately reclaim their effect target" failed on
+the pre-fix code with `effect route and target are already bound`, then passed
+all six assertions after the fix, including observation projection and live
+target conflict rejection. The full strict Debug and ASan/UBSan suites each
+passed 30/30. See `docs/PRE_LIQUID_VERIFICATION.md` for the remaining planning
+document integration and CI gates before L0.
+
 ---
 
 ## Milestone Advancement Rule

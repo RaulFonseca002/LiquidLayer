@@ -1746,6 +1746,38 @@ TEST_CASE("removed and recreated components do not inherit stale effect bindings
     REQUIRE(*world.read_component(levelType, behavior, "level") == 92);
 }
 
+TEST_CASE("recreated components can immediately reclaim their effect target") {
+    Runtime runtime{options(FeedbackTiming::Deferred)};
+    auto adapter = std::make_shared<TestAdapter>();
+    runtime.register_adapter(adapter);
+
+    World& world = runtime.world();
+    const auto levelType = world.register_component<std::uint64_t>(
+        "tests.Level", 1, unsigned_codec());
+    world.register_effect_codec(levelType, light_effect_codec());
+    world.add_component(levelType, "level", std::uint64_t{10});
+    runtime.bind_effect_component(levelType, "level", EffectTarget{"level"});
+
+    world.remove_component(levelType, "level");
+    world.add_component(levelType, "level", std::uint64_t{5});
+    REQUIRE_NOTHROW(runtime.bind_effect_component(
+        levelType, "level", EffectTarget{"level"}));
+
+    world.add_component(levelType, "other", std::uint64_t{7});
+    REQUIRE_THROWS_AS(runtime.bind_effect_component(
+        levelType, "other", EffectTarget{"level"}), std::invalid_argument);
+
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(
+        levelType, behavior, "level", ComponentAccessMode::Read);
+    world.grant_component_access(
+        levelType, behavior, "other", ComponentAccessMode::Read);
+    REQUIRE(send_observation(runtime, "level", 90, 1, 100) == FeedbackSendResult::Sent);
+    REQUIRE(runtime.run_frame(FrameInput{100, {}, {}}).frame.completed);
+    REQUIRE(*world.read_component(levelType, behavior, "level") == 90);
+    REQUIRE(*world.read_component(levelType, behavior, "other") == 7);
+}
+
 TEST_CASE("stale queued reports for a superseded target do not project") {
     Runtime runtime{options(FeedbackTiming::Deferred)};
     auto adapter = std::make_shared<TestAdapter>();

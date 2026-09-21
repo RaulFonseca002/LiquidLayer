@@ -205,9 +205,8 @@ void Runtime::bind_effect_component(
     const AdapterRoute route = ownedWorld.effect_route(type.id);
     const std::pair<std::string, std::string> key{
         route.value(), target.value()};
-    const auto existing = componentsByEffectTarget.find(key);
-    if (existing != componentsByEffectTarget.end() &&
-        existing->second != component) {
+    const ExternalComponentBinding* existing = current_effect_binding(route, target);
+    if (existing && existing->component != component) {
         throw std::invalid_argument(
             "effect route and target are already bound");
     }
