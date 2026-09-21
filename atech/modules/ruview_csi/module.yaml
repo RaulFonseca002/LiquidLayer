@@ -1,0 +1,146 @@
+id: ruview_csi
+name: "RuView WiFi CSI sensing"
+category: connectivity
+interface: gpio
+size: 1
+description: |
+  Turns the board's own WiFi radio into a RuView-compatible Channel State
+  Information (CSI) sensing node. Joins a 2.4 GHz network, captures CSI on
+  received management frames, streams ADR-018 frames (magic 0xC5110001) to a
+  RuView sink over UDP, and exposes an on-device activity/presence estimate.
+  Uses no wires: it only occupies a port slot. Credentials live in NVS and are
+  written over USB with the set_wifi / set_sink actions, never in the firmware.
+  Ported from github.com/ruvnet/RuView firmware/esp32-csi-node (MIT).
+
+  Host I/O: JSON events over USB (paced, one line per 200 ms) starting ~2 s after
+  boot, plus UDP to the sink: RuView ADR-018 CSI frames, 32-byte vitals at 1 Hz,
+  and a 40-byte node-status beacon at 1 Hz sent from loop() (main-loop liveness).
+driver:
+  header: ruview_csi.h
+  source: ruview_csi.cpp
+  class_name: RuViewCsi
+
+templates:
+  globals: |
+    RuViewCsi {{ instance }}("{{ instance }}");
+  setup: |
+    {{ instance }}.begin();
+  loop: |
+    {{ instance }}.update();
+    // Only talk on USB when a host is actually reading (HWCDC operator bool).
+    // Writing into the CDC with no reader is suspected of killing the bit-banged
+    // display after a warm reset (rebuild stage S1b).
+    if (Serial) {
+      char ev[192];
+      if ({{ instance }}.nextEvent(ev, sizeof ev)) Serial.println(ev);
+    }
+
+events:
+  - {key: "{{ instance }}_health", type: state, value_type: string, description: "status beacon counters, USB state, heap, reset reason (diagnostic)"}
+  - key: frame_rate
+    type: sensor
+    value_type: float
+    unit: Hz
+    description: "CSI frames per second reaching the DSP (target >= 15)."
+  - key: rssi
+    type: sensor
+    value_type: int
+    unit: dBm
+    description: "RSSI of the last CSI frame."
+  - key: heart_rate
+    type: sensor
+    value_type: float
+    unit: bpm
+    description: "Best-effort heart rate (45-180 bpm) from the 0.8-2 Hz amplitude band, autocorrelation with breathing-harmonic rejection. Read with its confidence; single-antenna 2.4 GHz CSI rarely resolves it. Not medical."
+  - key: breathing_rate
+    type: sensor
+    value_type: float
+    unit: bpm
+    description: "Breathing rate (6-30 bpm) from band-passed subcarrier amplitude, autocorrelation over 30 s; 0 until confident. Heuristic, not medical."
+  - key: activity
+    type: sensor
+    value_type: float
+    description: "Motion (jitter): 1 - correlation of the normalised subcarrier-amplitude vector with the previous frame, EMA-smoothed (0 = still room)."
+  - key: presence
+    type: state
+    value_type: int
+    description: "1 when a motion event (jitter > 4x its tracked baseline, 3 of 5 frames) happened within 60 s, or wander (distance to the per-layout empty-room template) exceeds 6x its baseline within 120 s of an event. Baselines track fast while absent and quiet, slowly otherwise. 15 s warm-up after boot; no stored calibration."
+  - key: link
+    type: state
+    value_type: string
+    description: "unconfigured | idle | connecting | connected (WiFi only) | streaming (WiFi + CSI) | lost"
+
+actions:
+  - key: "{{ instance }}_set_wifi"
+    value_type: json
+    description: 'Object {"ssid": "...", "pass": "..."} stored in NVS; reconnects immediately.'
+  - key: "{{ instance }}_set_sink"
+    value_type: json
+    description: 'Object {"ip": "192.168.1.20", "port": 5005, "node_id": 1} RuView aggregator; stored in NVS.'
+  - key: "{{ instance }}_wifi_enable"
+    value_type: int
+    description: "1 = start the radio (default), 0 = never start WiFi (stage test; module still runs). Runtime only, not persisted (defaults on at every boot)."
+  - key: "{{ instance }}_csi_enable"
+    value_type: int
+    description: "1 = capture CSI + run the DSP task + stream to the sink (default), 0 = WiFi only. Runtime only, not persisted (defaults on at every boot)."
+  - key: "{{ instance }}_scan"
+    value_type: "null"
+    description: "Scan 2.4 GHz networks; each SSID is reported as a log event (RSSI, channel, security)."
+  - key: "{{ instance }}_diag"
+    value_type: "null"
+    description: "Report frame/drop/tx counters, rate, IP, gateway, sink, heap, and the edge state (jitter/wander vs thresholds, calibration phase, layout, segment, HR/BR with confidence) as log events."
+  - key: "{{ instance }}_promisc"
+    value_type: int
+    description: "0 = CSI from frames addressed to this station (default; the only mode that works on the Arduino core), 1 = MGMT promiscuous (experimental)."
+  - key: "{{ instance }}_probe"
+    value_type: int
+    description: "Probe-request injection: -1 auto (default), 0 off, 1 on."
+  - key: "{{ instance }}_calibrate"
+    value_type: "null"
+    description: "Forget templates and baselines and warm up again (15 s). Alias: {{ instance }}_forget."
+  - key: "{{ instance }}_reboot"
+    value_type: "null"
+    description: "Software reset (ESP.restart) — e.g. to verify that the stored calibration is restored at boot."
+  - key: "{{ instance }}_stream"
+    value_type: int
+    description: "1 = send ADR-018 CSI frames to the sink, 0 = stop (default 1)."
+  - key: "{{ instance }}_segment"
+    value_type: int
+    description: "Ground-truth label 0 live, 1 out of the room, 2 still, 3 walk; cycled by the button, label-only (no calibration side effects). Alias: {{ instance }}_label. Carried in NodeStatus so host/csi_sink.py --record tags frames."
+  - key: "{{ instance }}_cfg"
+    value_type: int
+    description: "CSI capture layout: 0 RuView all-LTF with ltf_merge (default, 256/384-byte frames that follow the router HT/STBC choice), 1 Espressif radar LLTF-only with manu_scale shift 4 (constant 128-byte frames). Re-arms CSI and restarts the engine. Experiment for the data collection."
+
+lib_deps: []
+
+usage: |
+  // Public API of RuViewCsi — the instance is `{{ instance }}`.
+  // begin() already ran in setup(); update() and the 1 Hz events run in the
+  // module template every loop. Credentials come from NVS, written over USB:
+  //   atech send {{ instance }}_set_wifi '{"ssid":"MyWiFi","pass":"secret"}'
+  //   atech send {{ instance }}_set_sink '{"ip":"192.168.1.20","port":5005}'
+  const char* s = {{ instance }}.stateName();      // unconfigured|idle|connecting|connected|streaming|lost
+  bool up      = {{ instance }}.isConnected();     // WiFi associated (connected or streaming)
+  bool sensing = {{ instance }}.isStreaming();     // CSI capture running (csi_enable 1)
+  // Sensing runs on its own task; every getter below reads a snapshot refreshed by update().
+  float hz     = {{ instance }}.frameRateHz();     // CSI frames/s (aim for >= 15)
+  int   rssi   = {{ instance }}.rssi();            // dBm of last frame
+  float act    = {{ instance }}.activity();        // jitter (motion), 0 = still
+  float w      = {{ instance }}.presenceScore();   // wander / threshold: >= 1 means "someone is here"
+  bool  here   = {{ instance }}.presence();        // jitter or wander above the learned thresholds
+  float hr     = {{ instance }}.heartRate();       // bpm, best-effort; always read heartConfidence() with it
+  float hrc    = {{ instance }}.heartConfidence(); // 0..1 autocorrelation confidence (single antenna: usually low)
+  float br     = {{ instance }}.breathingRate();   // bpm, 0 until confident (breathingConfidence() >= 0.3)
+  bool  fall   = {{ instance }}.fall();            // always false: fall detection is disabled (never validated)
+  bool  beat   = {{ instance }}.consumeBeat();     // true once per positive crossing of the heart-band signal (LED pulse)
+  bool  cal    = {{ instance }}.isCalibrating();   // warming up (15 s after the first CSI frame or csi_calibrate)
+  bool  mov    = {{ instance }}.moving();          // motion event within 5 s
+  const char* v = {{ instance }}.verdict();        // "warming up" | "OUT" | "IN still" | "IN moving"
+  const char* ph = {{ instance }}.calibPhaseName(); // leave|template|stats|ready, plus calibSecondsLeft()
+  uint8_t seg  = {{ instance }}.segment();         // ground-truth label 0 live, 1 out, 2 still, 3 walk; segmentName(), nextSegment() from a button
+  uint32_t n   = {{ instance }}.framesTotal();     // frames since boot
+  uint32_t tx  = {{ instance }}.packetsSent();     // UDP packets to the sink
+  const char* ip = {{ instance }}.sinkIp();        // configured sink
+  {{ instance }}.calibrate();                      // forget templates/baselines, warm up again
+  {{ instance }}.setStreaming(true);               // ADR-018 UDP on/off
+  // Never call display code from anything but loop(); update() is cheap.

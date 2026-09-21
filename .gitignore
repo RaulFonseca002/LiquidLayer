@@ -33,3 +33,8 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+
+# Atech node firmware: local secrets and generated build trees
+atech/**/*.local.h
+atech/projects/*/build/
+atech/projects/*/sim/

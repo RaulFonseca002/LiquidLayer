@@ -1,0 +1,83 @@
+# Liquid node — RuView WiFi CSI sensing on the Atech 14port (see ../../STAGES.md).
+#
+# Modules: display (ports 1-2), button (port 3), CSI sensing (port 11, virtual).
+# Built by the hardened pipeline (USB-CDC brought up 2 s after boot). No loop watchdog:
+# the footer's "wdt" count must stay 0 and "r" must read 1 (power-on).
+#
+# Button = session segments, cycling on each press:
+#   live -> empty (leave the room; the ambient baseline is relearned for as long as
+#   this segment lasts) -> still (sit 1-2 m away, breathe normally) -> walk -> live.
+# The segment is shown on screen, logged as a serial event and carried in the
+# NodeStatus beacon so host/csi_sink.py --record can label the CSI frames.
+name: liquid-node
+board: 14port
+modules_path: ../../modules
+modules:
+  - {id: st7735_tft, instance: tftA, ports: [1, 2]}
+  - {id: button,     instance: btn,  port: 3}
+  - {id: ruview_csi, instance: csi,  port: 11}
+code:
+  setup: |
+    // Reboot audit, persistent in flash: count task-watchdog reboots (reason 6).
+    // The watchdog is OFF, so the count must never move.
+    {
+      Preferences p; p.begin("node", false);
+      if (esp_reset_reason() == ESP_RST_TASK_WDT) p.putUShort("wdt", (uint16_t)(p.getUShort("wdt", 0) + 1));
+      p.end();
+    }
+    // Do NOT call tftA.setRotation(): the SDK driver initialises this 160x80
+    // panel for rotation 3 with a BGR MADCTL override.
+  loop: |
+    static uint16_t wdtCount = 0xFFFF;              // read once, after setup() updated it
+    if (wdtCount == 0xFFFF) { Preferences p; p.begin("node", true); wdtCount = p.getUShort("wdt", 0); p.end(); }
+
+    // ---- button: poll isPressed() and detect the edge ourselves (the button
+    // template already consumes wasPressed()), 30 ms debounce. Each press = next segment.
+    {
+      static bool lastDown = false;
+      static uint32_t lastEdgeMs = 0;
+      bool down = btn.isPressed();
+      if (down != lastDown && millis() - lastEdgeMs > 30) {
+        lastEdgeMs = millis();
+        lastDown = down;
+        if (down) csi.nextSegment();
+      }
+    }
+
+    // ---- screen A, redrawn at 2 Hz. loop() only renders; the module does the work in tasks.
+    static uint32_t lastDraw = 0;
+    if (millis() - lastDraw < 500) return;
+    lastDraw = millis();
+    static uint32_t frames = 0; frames++;
+    static bool hb = false; hb = !hb;
+
+    tftA.clear();
+    char line[40];
+    snprintf(line, sizeof line, "%s %4.1fHz %ddBm", csi.stateName(), csi.frameRateHz(), csi.rssi());
+    tftA.displayText(line, 2, 2, 1, csi.isStreaming() ? ST7735_TFT::COLOR_CYAN : ST7735_TFT::COLOR_ORANGE);
+
+    if (!csi.isStreaming()) {
+      tftA.displayText(csi.stateName(), 2, 22, 2, ST7735_TFT::COLOR_ORANGE);
+      snprintf(line, sizeof line, "-> %s", csi.sinkIp());
+      tftA.displayText(line, 2, 46, 1, ST7735_TFT::COLOR_YELLOW);
+    } else {
+      // Verdict from the on-device adaptive-ratio detector (docs/CSI_PRESENCE_RESEARCH.md), the button
+      // label for the recordings, and the raw numbers. HR/BR stay off the screen (not recoverable here).
+      const char* v = csi.verdict();
+      uint16_t vc = csi.noSignal() ? ST7735_TFT::COLOR_RED : csi.vitalsCalibrating() ? ST7735_TFT::COLOR_ORANGE : (csi.presence() ? (csi.moving() ? ST7735_TFT::COLOR_YELLOW : ST7735_TFT::COLOR_GREEN) : 0x8410);
+      tftA.displayText(v, 2, 16, 2, vc);
+      tftA.fillCircle(148, 8, 6, csi.presence() ? ST7735_TFT::COLOR_GREEN : 0x2104);   // presence lamp
+      snprintf(line, sizeof line, "label %s %lus", csi.segmentName(), (unsigned long)csi.segmentElapsedS());
+      tftA.displayText(line, 2, 36, 1, csi.segment() ? ST7735_TFT::COLOR_YELLOW : 0x8410);
+      snprintf(line, sizeof line, "j %.3f x%.1f  w %.3f x%.1f", csi.jitter(), csi.ratioJitter(), csi.wander(), csi.presenceScore());
+      tftA.displayText(line, 2, 46, 1, ST7735_TFT::COLOR_CYAN);
+      if (csi.vitalsCalibrating()) snprintf(line, sizeof line, "warm-up %lus  lay %u", (unsigned long)csi.calibSecondsLeft(), (unsigned)csi.snap().layout);
+      else snprintf(line, sizeof line, "base %.4f/%.4f  lay %u", csi.snap().thrJ / 4.0f, csi.snap().thrW / 6.0f, (unsigned)csi.snap().layout);
+      tftA.displayText(line, 2, 56, 1, 0x8410);
+    }
+
+    // ---- footer: reset reason, watchdog-reboot count (must stay 0), frame counter, heartbeat square
+    snprintf(line, sizeof line, "r%d wdt%u f%lu", (int)esp_reset_reason(), (unsigned)wdtCount, (unsigned long)frames);
+    tftA.displayText(line, 2, 70, 1, wdtCount ? ST7735_TFT::COLOR_RED : ST7735_TFT::COLOR_YELLOW);
+    tftA.fillRect(154, 74, 6, 6, hb ? ST7735_TFT::COLOR_YELLOW : 0x2104);
+    tftA.display();
