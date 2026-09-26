@@ -1,6 +1,10 @@
 # Package wiring contract
 
-The root build will configure `LiquidConfig.cmake.in` with `configure_package_config_file` and generate `LiquidConfigVersion.cmake` with `write_basic_package_version_file(... COMPATIBILITY SameMinorVersion)`.
+The root build configures `LiquidConfig.cmake.in` with `configure_package_config_file` and generates `LiquidConfigVersion.cmake` with `write_basic_package_version_file(... COMPATIBILITY SameMinorVersion)`.
+
+This describes the existing package. A future opt-in Authoring component is
+specified in [L1](../docs/LIQUID_L1_IMPLEMENTATION_SPEC.md); it is not implemented
+or part of current exports. Preserve these existing consumers when adding it.
 
 Each optional component has its own export file so a Core-only consumer does not load Lua or Simulation:
 

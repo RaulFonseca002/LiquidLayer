@@ -25,12 +25,14 @@ Record full Lua source by default. Hash-only recording reduces stored script con
 
 If event-store append or flush fails, Runtime must fault before dispatching an external effect without durable evidence. Buffered durability is limited to disposable simulations and must not be presented as a durable replay source.
 
-Retention is transactional: both memory and file stores project and validate
-the candidate retained stream before replacing their current records. A
-failure leaves the prior records and file generation unchanged. Runtime
+Both stores project and validate the candidate retained stream before replacing
+current records. Failure before replacement preserves the prior generation.
+For files, directory-flush failure after installation leaves the replacement
+installed and faults the store; do not claim rollback past that boundary. Runtime
 restore validates the whole stream before rebuilding live effect state, so a
 retained retry resumes at the recorded next attempt rather than restarting its
-schedule.
+schedule. V1 checkpoints embed historical arrays, so their Value limits still
+bound session history; physical retention does not provide indefinite compaction.
 
 ## Diagnose divergence
 

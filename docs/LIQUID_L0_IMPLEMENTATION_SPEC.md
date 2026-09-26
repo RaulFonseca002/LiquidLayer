@@ -1,564 +1,179 @@
-# Liquid L0 Implementation Specification
+# L0 — Exact Lua schemas and capability manifests
 
-**Status:** Implementation companion to `docs/LIQUID_STAGE2_PLAN.md`  
-**Milestone:** L0 — Model-Facing Lua Capability Contract  
-**Date:** 28 August 2026
+**Status:** specified; inactive. **Dependency:** reconciled Solid baseline.
+Apply [the common contract](LIQUID_IMPLEMENTATION_CONTRACT.md).
 
-This document narrows L0 into implementation-level semantics. It does not add scope beyond the Stage 2 plan. If implementation evidence makes a C++ shape below awkward, preserve the semantics and choose the smallest cleaner API.
+## Outcome and existing evidence
 
----
+Trusted host code registers model metadata beside an executable Lua binding
+and obtains a copied manifest for one existing behavior. No generated source
+is executed by discovery. Existing schema-less callers keep their behavior.
 
-## 1. Describe the Lua boundary that already exists
+Read `include/liquid/scripting/LuaBehaviorRunner.hpp` (`LuaValue`, codec,
+limits, `Binding`, `expose_component`) and `src/scripting/LuaBehaviorRunner.cpp`
+(`register_binding`, value transport, capability preparation). Binding names
+already reject NUL and duplicates; first execution freezes registration.
+`World::behavior_access_revision` is authority metadata, not a value revision.
 
-Do not create a parallel capability system.
+## Public API and ownership
 
-`LuaBehaviorRunner` already owns the facts that matter for model-facing Lua authoring:
-
-- which component types are exposed to Lua;
-- each script-visible type name;
-- the `LuaComponentCodec<T>` used to encode readable snapshots and decode proposals;
-- current component names and behavior permissions;
-- the host-bound target behind each `propose` closure;
-- the host-fixed behavior owner and monotonic time during execution.
-
-The capability manifest should therefore be built **through the runner/binding boundary**, not by teaching `World` about models/prompts and not through a second independently maintained registry.
-
-A likely additive direction is conceptually:
+Keep additions in `liquid::scripting` / `Liquid::Lua`:
 
 ```cpp
-LuaCapabilityManifest capability_manifest(
-    World& world,
-    BehaviorId behavior,
-    IntentTime now
-);
+// Additional overload; the existing three-argument overload is unchanged.
+template <typename T>
+void LuaBehaviorRunner::expose_component(
+    ComponentType<T> type, TypeName scriptName,
+    LuaComponentCodec<T> codec, LuaModelBindingMetadata metadata);
+
+LuaManifestResult LuaBehaviorRunner::capability_manifest(
+    World& world, BehaviorId behavior, IntentTime now);
+
+LuaSchemaValidation validate_lua_value(
+    const LuaValueSchema& schema, const LuaValue& value);
 ```
 
-Exact naming/constness is an implementation decision. The invariant is that discovery reuses the same Lua bindings and current `World` permission source used by actual script execution.
+`LuaValueSchema` is a value-like immutable tree, privately held through const
+nodes. Public static factories are `boolean`, `integer`, `number`, `string`,
+`array`, `object`; construction validates the complete tree. The public factory
+inputs below are the API contract; no mutable node access or reference cycles.
+Copies may share immutable nodes; validate aggregate limits per expanded tree.
 
-Binding/model metadata must follow the existing runner freeze rule: it is configured before the runner begins execution and is not mutated underneath active scripts.
-
----
-
-## 2. Read shape and write shape are separate
-
-`LuaComponentCodec<T>` deliberately has two independent executable functions:
-
-```text
-encode(Component) -> LuaValue
-decode(LuaValue) -> Component
-```
-
-Solid does not prove these functions are symmetric. A codec could legitimately expose a rich readable snapshot but accept a narrower write/proposal shape.
-
-Therefore L0 must **not** assume one schema automatically describes both directions.
-
-For every model-discoverable Lua binding, trusted metadata conceptually contains:
-
-```text
-readSchema
-writeSchema
-trusted bounded description
-```
-
-where:
-
-- `readSchema` describes values produced by the Lua codec's `encode` side;
-- `writeSchema` describes values accepted by the Lua codec's `decode` side.
-
-Most simple components will use the same shape in both directions. Provide a convenient symmetric-registration/helper path if it keeps call sites readable, but represent the two semantics distinctly in the contract.
-
-This is important for read-only capabilities too: a model needs a schema/description to interpret a sensor snapshot, not merely the raw current value.
-
----
-
-## 3. `LuaValueSchema` describes exact `LuaValue` kinds
-
-The schema vocabulary is **not JSON semantics**. It mirrors the representation transported by `LuaBehaviorRunner`.
-
-| Schema kind | Exact accepted `LuaValue` storage |
+| Factory | Inputs besides optional description |
 | --- | --- |
-| Boolean | `bool` |
-| Integer | `std::int64_t` |
-| Number | `double`, finite |
-| String | `std::string` |
-| Array | `LuaValue::Array` |
-| Object | `LuaValue::Table` |
+| boolean | none |
+| integer | optional int64 minimum and maximum |
+| number | optional finite double minimum and maximum |
+| string | minimumBytes, maximumBytes, optional vector of enum byte strings |
+| array | item schema, minimumItems, maximumItems |
+| object | vector of `LuaSchemaField{name, schema, required}` |
 
-### No implicit numeric coercion in L0
+All factory arguments except description and explicitly optional bounds are
+required. `LuaModelBindingMetadata` contains required `readSchema`, required
+`writeSchema`, and optional description. `symmetric_metadata(schema, description)`
+returns metadata with both directions. No adjacent metadata-only registration:
+the four-argument overload validates everything before registering one binding.
+Store metadata on that binding; never build a second binding registry.
 
-`Integer` and `Number` remain distinct because the current `LuaValue` API/decoder distinguish them.
+`LuaSchemaValidation` has `valid`, code (`Kind`, `Range`, `MissingField`,
+`UnknownField`, `Limit`), and bounded field path/diagnostic. On success no error
+is present. Visit fields in unsigned-byte lexical order and arrays by index;
+return the first failure deterministically. Invalid schema configuration throws
+`invalid_argument`; mutation after freeze throws `logic_error`.
 
-A `Number` schema does not silently accept an integer `LuaValue`. An `Integer` schema does not accept a floating `LuaValue` merely because the mathematical value is integral.
+`LuaManifestResult` contains either one complete `LuaCapabilityManifest` or
+`LuaManifestError{InvalidBehavior, SnapshotUnavailable, SchemaMismatch,
+LimitExceeded, HostError}` plus bounded diagnostic. The runner catches codec
+exceptions and does not return partial authority. `now` is host-supplied, must
+fit the current Lua integer time range, and does not advance Runtime time.
 
-Authoring consequence: a future renderer must make clear that a writable `Number` expects a Lua floating literal such as `1.0`, while `1` is an Integer under the current Lua 5.4 boundary.
+The first successful manifest capture also freezes binding registration. This
+is an explicit rule of the new discovery API; old callers still freeze on
+first execution. Failed capture does not freeze a previously unfrozen runner.
+Expose a read-only runner binding identity and effective execution limits in
+the manifest's private capture data for later staleness checks.
 
-If a real codec later needs numeric coercion, specify it explicitly rather than quietly changing the L0 contract.
+## Exact schemas and limits
 
----
+Kinds match `LuaValue::Storage`: Boolean=bool, Integer=int64, Number=finite
+double, String=byte string, Array=vector, Object=string-keyed table. No null,
+union, implicit numeric coercion, regex, references or arbitrary JSON Schema.
+`1` and `1.0` remain distinct at the Lua boundary.
 
-## 4. Schema constraints
+Bounds are inclusive; reject inverted ranges, nonfinite Number bounds,
+duplicate object names and enum entries. An explicitly present empty enum
+is invalid; absent enum means any string within bounds. Unknown object fields
+are always rejected. Optional means absent, not null. Descriptions must be
+valid UTF-8 without NUL and cannot alter validation. Object field keys are
+arbitrary bytes, not Lua identifiers.
 
-### Boolean
+| L0 limit | Default / ceiling |
+| --- | --- |
+| Schema container nesting | 16; root container counts as 1 |
+| Expanded nodes per schema | 4,096 |
+| Fields per object / maximum array length | 256 / 4,096 |
+| Declared maximum string bytes | 65,536 |
+| Enum entries / aggregate enum bytes | 256 / 65,536 per schema |
+| Description bytes per node/binding | 1,024 |
+| All description bytes per manifest | 65,536 |
+| Field/name bytes / generated access expression | 256 / 4,096 |
+| Manifest capabilities / copied value nodes | 128 / 16,384 |
+| Whole manifest logical bytes / diagnostic | 1 MiB / 4,096 |
 
-Exact kind only. May carry a bounded trusted description.
+The four-argument overload additionally checks schemas against the runner's
+effective `maxTableDepth`, `maxTableEntries`, `maxStringBytes` and buffered-value
+budget. Compute worst-case nested collection entries, keys and strings with
+checked arithmetic; reject metadata whose declared maximum cannot fit one
+transported value. Description/schema budgets are separate from Lua VM memory.
+For conservative depth alignment require schema container count no greater
+than `maxTableDepth`; do not rely on an off-by-one allowance in Lua recursion.
 
-### Integer
+For opt-in described bindings, actual proposals validate `writeSchema` before
+the executable decoder, and readable snapshots validate `readSchema` before
+entering Lua or a manifest. Metadata/codec disagreement fails the bundle or
+manifest. The old schema-less path does neither new schema check. The codec,
+World permissions and transaction still decide executable authority. Tests
+provide consistency evidence, not a proof of arbitrary C++ codec equivalence.
 
-Optional inclusive `std::int64_t` minimum/maximum.
+## Manifest and source construction
 
-Reject schema configuration where minimum exceeds maximum.
+Public manifest fields: `authoringContract="liquid.lua.authoring/1"`, `nowMs`,
+effective execution limits, construction notes, and ordered capabilities.
+Each capability has script type name, component name, exact Lua access expression,
+access mode, description, optional read schema/value and optional write schema.
 
-### Number
-
-Optional inclusive finite `double` minimum/maximum.
-
-Reject NaN/infinite schema bounds and minimum greater than maximum.
-
-### String
-
-Finite maximum byte length, optional minimum byte length, optional finite enum.
-
-Rules:
-
-- minimum <= maximum;
-- every enum entry obeys string limits;
-- enum count and aggregate enum bytes are bounded;
-- duplicate enum entries are rejected as invalid host metadata.
-
-Use byte length consistently with the current Lua/string transport contract. Do not silently switch to Unicode code-point counts.
-
-### Array
-
-One child item schema and finite minimum/maximum item counts.
-
-Rules:
-
-- minimum <= maximum;
-- maximum cannot exceed the configured L0/transport allowance;
-- validation recurses through every item and counts aggregate structural nodes.
-
-### Object
-
-Finite named fields. Each field has:
-
-- exact string key;
-- child schema;
-- required/optional flag;
-- optional bounded trusted description if description is not already represented on the child node.
-
-Unknown fields are rejected by default. Do not add an `additionalProperties=true` escape hatch without a real codec requirement.
-
-Object keys are data keys, not assumed Lua identifiers. A model may need bracket syntax for unusual keys in generated Lua values.
-
----
-
-## 5. Lua empty-array limitation must remain explicit
-
-Current Lua transport distinguishes host-encoded arrays using a private marker. This preserves an empty `LuaValue::Array` when a copied host snapshot enters Lua.
-
-A literal Lua table `{}` has no array/object marker and is interpreted by the host as an **empty object**.
-
-Consequences:
-
-- non-empty arrays can be constructed with normal Lua array literals;
-- a readable host array snapshot can be reused/cleared while preserving the private array marker;
-- a write-only capability cannot currently construct a brand-new empty array using `{}`.
-
-L0 must not advertise a fiction that every schema-valid value is necessarily constructible from arbitrary Lua source under the current language boundary.
-
-The stable authoring contract exposed beside a manifest must state the empty-array rule. If a write-only Array capability requires an empty value, a future model should be able to report the current authoring limitation instead of inventing syntax.
-
-Do **not** add an array-construction helper in L0 unless a real current model-visible codec makes it necessary. If it becomes necessary, treat it as an explicit additive Lua API decision with focused sandbox/tests.
-
----
-
-## 6. Trusted descriptions are useful but deliberately small
-
-Shape alone is not sufficient for authoring. For example:
-
-```text
-brightness: Integer 0..100
-```
-
-is more useful when trusted metadata can also state that it represents brightness percentage/intensity.
-
-L0 may support bounded descriptions on the binding and schema fields/nodes.
-
-Rules:
-
-- descriptions come from trusted host registration code;
-- description bytes per node/binding and aggregate manifest bytes are bounded;
-- descriptions never affect validation or permission;
-- no ontology, planner, localization system, user-profile language, or free-form runtime description registry is introduced.
-
-Dynamic user/sensor/device/integration strings are not trusted instructions. Future renderers carry those as structured/delimited data.
-
-Per-instance application semantics are not required in L0. A component instance name remains the instance identity exposed by Solid; richer room/device/user meaning belongs to future application context unless a reusable Liquid requirement is demonstrated.
-
----
-
-## 7. Manifest contract
-
-A `LuaCapabilityManifest` is an immutable copied authoring view for one prepared behavior at one host capture time.
-
-At minimum the semantic manifest contains:
-
-```text
-authoring contract/version
-current monotonic now_ms
-capabilities[]
-```
-
-Each capability contains conceptually:
-
-```text
-exact access expression
-script-visible type name
-component instance name
-current model-visible access
-trusted bounded binding description (if registered)
-read schema + copied readable value, when readable
-write schema, when writable
-```
-
-### Permission projection
-
-For a fully model-described binding:
-
-| Current `World` permission | Manifest read side | Manifest write side |
+| Current permission | Read side | Write side |
 | --- | --- | --- |
-| Read | `readSchema` + copied value | absent |
-| Write | absent | `writeSchema` |
-| ReadWrite | `readSchema` + copied value | `writeSchema` |
-
-The manifest never infers permission from snapshot/schema presence.
-
-The real Lua entry may expose only the sides currently granted by `World`, exactly as it does today.
-
-### Missing model metadata
-
-The simplest L0 rule is: a binding is model-discoverable only when the trusted registration supplies the model metadata required for both codec directions. Human/trusted schema-less execution remains supported.
-
-A convenience helper may register the same schema for read/write when the codec is symmetric.
-
-Do not try to infer a missing read or write schema from snapshots or from the other direction.
-
-### Capture identity
-
-The host needs enough private/internal capture identity to enable stale-authority checks later, e.g. world identity + behavior identity + behavior access revision or an equivalent opaque capture token.
-
-Do not make raw world-local handles part of a future model-facing serialized contract merely because the C++ implementation uses them internally.
-
-L0 does not implement proposal stale checking; it must avoid making it impossible later.
-
----
-
-## 8. Authoring-contract version is independent
-
-Do not conflate:
-
-```text
-LuaBehaviorScript.revision
-ComponentSchema.version
-Lua model-authoring contract version
-```
-
-- behavior revision identifies one script source revision;
-- component schema version identifies the Solid codec/compatibility contract;
-- authoring-contract version identifies the model-visible Lua language/capability rules (`access`, `propose`, lifetime fields, named intents, watches, array limitations, etc.).
-
-Use a small stable marker owned by the Lua boundary, independent of model/provider version.
-
----
-
-## 9. Exact access paths are generated by the host
-
-The model must never guess whether a type or component name is safe dot syntax.
-
-Examples:
-
-```text
-access.Light.officeLight
-access["Lighting Device"]["office-light"]
-access.Light["end"]
-```
-
-Recommended deterministic source-generation rule:
-
-1. Use dot notation only for an ASCII Lua identifier matching `[A-Za-z_][A-Za-z0-9_]*` that is not a Lua keyword.
-2. Otherwise use bracket indexing with a double-quoted Lua string literal.
-3. Encode that string literal byte-for-byte:
-   - printable ASCII other than `"` and `\` may be emitted directly;
-   - `"` -> `\"`;
-   - `\` -> `\\`;
-   - all remaining bytes, including control/NUL/non-ASCII bytes, may be emitted as fixed-width three-digit decimal Lua escapes `\ddd`.
-4. Never normalize or alter the underlying type/component identity string.
-
-An ASCII-only escaped expression avoids depending on source-file Unicode normalization and handles arbitrary `std::string` keys deterministically.
-
-Tests must prove generated expressions actually resolve the intended capability in the real Lua sandbox, not only compare expected text.
-
-At minimum test:
-
-- normal identifiers;
-- Lua keywords;
-- spaces/punctuation;
-- quote/backslash;
-- newline/control bytes;
-- embedded NUL if current component naming permits it;
-- UTF-8/non-ASCII byte sequences;
-- mixed type/component cases where only one segment requires brackets.
-
----
-
-## 10. Validation layering
-
-L0 intentionally has multiple validators because they answer different questions.
-
-```text
-read LuaValueSchema
-    "Does the encoded snapshot match what we told a model it may read?"
-
-write LuaValueSchema
-    "Does a candidate LuaValue match the documented proposal shape?"
-
-LuaComponentCodec<T>::decode
-    "Does trusted executable host code accept this exact proposed value?"
-
-World permission
-    "May this behavior currently read/write this component?"
-
-Lua host closure + intent transaction
-    "Is this operation still valid at actual execution/commit time?"
-```
-
-The schemas improve discoverability/early diagnostics. Executable codec/permission/transaction remain authority.
-
-Do not claim arbitrary C++ `encode`/`decode` functions are formally equivalent to declarative schemas.
-
-Pragmatic consistency evidence:
-
-- known valid/invalid read/write fixtures;
-- every readable snapshot emitted into a manifest validates against `readSchema`;
-- write-schema fixtures are also passed through the real Lua codec decoder in tests;
-- intentional schema/codec disagreement fails closed;
-- schema metadata never creates permission that `World` denies.
-
----
-
-## 11. Failure semantics
-
-Exact C++ result/exception types may follow project style, but tests should distinguish these categories.
-
-### Host configuration error
-
-Examples:
-
-- invalid range/count bounds;
-- NaN/infinite Number bounds;
-- duplicate object fields;
-- duplicate enum values;
-- schema/description exceeds construction limits;
-- model-visible binding omits required read/write metadata.
-
-Reject before the binding becomes model-discoverable.
-
-### Manifest build error
-
-Examples:
-
-- behavior does not exist;
-- readable snapshot unavailable;
-- encoded readable value violates declared `readSchema`;
-- aggregate manifest limits exceeded.
-
-Fail closed. Never return a partial manifest that changes apparent authority.
-
-### Normal absence
-
-A binding registered only through the existing schema-less `expose_component(...)` API remains valid for human/trusted Lua execution and simply does not participate in model discovery.
-
----
-
-## 12. Bounds
-
-L0 must bound all recursive and text growth.
-
-Prefer limits aligned with `LuaExecutionLimits` and `ValueLimits` where appropriate.
-
-Required categories:
-
-- schema depth;
-- schema total nodes;
-- object fields;
-- enum count and aggregate bytes;
-- description bytes per node/binding and aggregate;
-- declared string maximum;
-- declared array maximum;
-- capabilities per manifest;
-- copied `LuaValue` aggregate nodes/bytes;
-- access-expression bytes;
-- diagnostic bytes.
-
-A schema should not describe values larger/deeper than the Lua transport can actually carry without an explicit reason.
-
----
-
-## 13. Source compatibility and registration shape
-
-Current v0.1 remains valid:
-
-```cpp
-runner.expose_component(type, scriptName, codec);
-```
-
-Model-facing metadata is additive.
-
-A likely clean conceptual type is:
-
-```text
-LuaModelBindingMetadata
-    readSchema
-    writeSchema
-    description
-```
-
-with a helper/factory for symmetric codecs.
-
-Possible API forms include a schema-bearing overload or an adjacent explicit metadata registration call. Choose the form that keeps one executable binding as the source of truth and makes drift/invalid registration difficult.
-
-Do **not** create an independent model capability registry containing a second copy of type/component bindings.
-
-Metadata registration follows the same pre-execution freeze as Lua bindings.
-
----
-
-## 14. Tests before substantive implementation
-
-Codex should start L0 by drafting tests and minimal headers, not core `.cpp` behavior.
-
-### Schema tests
-
-Cover:
-
-- every exact value kind;
-- Integer versus Number non-coercion;
-- finite Number bounds / NaN / infinity rejection;
-- invalid min/max definitions;
-- String byte length and enum rules;
-- Array count/recursive validation;
-- Object required/optional fields;
-- unknown-field rejection;
-- duplicate fields/enums;
-- depth/node/description/enum-byte limits;
-- deterministic bounded diagnostics.
-
-### Codec-direction tests
-
-Use at least:
-
-1. a symmetric fixture such as `Light { brightness: Integer 0..100 }`;
-2. an intentionally asymmetric test codec whose `encode` and `decode` shapes differ.
-
-Prove that L0 does not accidentally substitute one schema for both directions.
-
-For write fixtures, schema-valid candidate values should also be exercised against the actual Lua codec decoder. For read fixtures, actual encoded snapshots must validate against `readSchema`.
-
-### Manifest tests
-
-Cover:
-
-- Read => `readSchema` + value only;
-- Write => `writeSchema` only;
-- ReadWrite => both sides;
-- permission comes from current `World`, not metadata presence;
-- access revocation/removal reflected after rebuild;
-- schema-less binding absent from model discovery but still executable;
-- copied values do not alias component memory;
-- stable deterministic ordering;
-- exact `now_ms` capture;
-- exact authoring-contract version;
-- trusted description bounds;
-- access-path generator edge cases and real sandbox lookup;
-- aggregate manifest limits;
-- read-schema mismatch fails the complete manifest rather than emitting partial state.
-
-### Empty-array authoring test/documentation
-
-Prove the existing behavior:
-
-- host-provided empty array snapshot retains Array identity;
-- literal `{}` is read as Object;
-- L0 metadata does not falsely claim a write-only empty array has a magic construction syntax.
-
-No new helper is required unless implementation encounters a real model-visible codec that needs it.
-
-### Compatibility tests
-
-Cover:
-
-- old schema-less `expose_component` source compiles unchanged;
-- existing Lua behavior/lifecycle tests remain unchanged where possible;
-- no new Core dependency on Lua/model metadata;
-- Core-only build stays valid.
-
----
-
-## 15. CMake/package expectations
-
-L0 remains in `Liquid::Lua`.
-
-Expected new files:
-
-```text
-include/liquid/scripting/LuaValueSchema.hpp
-include/liquid/scripting/LuaCapabilityManifest.hpp
-src/scripting/LuaValueSchema.cpp
-src/scripting/LuaCapabilityManifest.cpp
-tests/test_lua_schema.cpp
-tests/test_lua_manifest.cpp
-```
-
-Add them to the existing `liquid_lua_component` and test configuration. Do not add a new exported target or dependency.
-
-Installed `Liquid::Lua` consumers receive the new public scripting headers once L0 completes.
-
----
-
-## 16. Explicit non-goals
-
-L0 does not:
-
-- invoke a model;
-- render an OpenAI/Anthropic request;
-- implement prompt repair;
-- add Hermes;
-- add MCP;
-- create/approve/activate generated behavior;
-- inspect arbitrary runtime intent resolution;
-- add remote mutation;
-- change intent lifetime semantics;
-- change `Runtime::run_frame()`;
-- add a behavior DSL/IR;
-- solve application trigger/revalidation policy;
-- solve the write-only empty-array limitation unless a current real codec makes it necessary.
-
----
-
-## 17. L0 exit test
-
-L0 is complete when trusted host code can prepare a normal Solid behavior, register the existing Lua bindings plus model-facing read/write metadata, and obtain a bounded immutable manifest that tells an external author exactly:
-
-```text
-what Lua paths exist
-what each binding/field means
-what may be read
-what exact shape readable values have
-what readable values exist now
-what may be proposed
-what exact shape proposals must have
-what monotonic time and authoring contract apply
-what Lua construction limitations apply
-```
-
-while the actual Lua codec, `World` permission, host closures, and transactional intent path retain all authority and every existing v0.1 schema-less Lua binding continues to work unchanged.
+| Read | copied encoded value + read schema | absent |
+| Write | absent | write schema |
+| ReadWrite | both read fields | write schema |
+
+Schema-less bindings are omitted. A described binding missing either schema is
+invalid configuration even for a currently read-only behavior. Sort entries by
+script type and component name using unsigned-byte lexical order. Snapshot
+values and metadata contain no component borrows, registries or raw handles.
+Private capture data retains world/behavior identity, access revision and
+binding identity; it is never serialized to an author.
+
+Generate dot syntax only for ASCII non-keyword Lua identifiers. Otherwise use
+bracketed double-quoted strings: escape quote/backslash, emit other printable
+ASCII directly, and encode every remaining byte with a three-digit decimal Lua
+escape. Do not normalize names. Script-visible binding names reject NUL under
+the existing contract. World rejects empty component names but permits embedded
+NUL in nonempty names; test a NUL-containing component name with a normal binding
+name and prove that the generated expression addresses its full byte identity.
+
+Always include these authoring notes: fresh VM; host-fixed owner/time; named
+lifecycle proposals; persistent/until-time lifetime; no physical-success claim;
+integer/float distinction; literal `{}` is Object. Host-encoded arrays retain a
+private array marker, but Lua has no new write-only empty-array constructor.
+Do not reject all Array schemas or invent a helper: document this limitation
+and test actual source construction through the sandbox.
+
+## Implementation steps and tests
+
+| Step | Implement after its failing test | Required oracle |
+| --- | --- | --- |
+| L0.1 | Immutable schema factories and validator | All six kinds; exact numbers; invalid bounds/enums/fields; optional/unknown fields; depth/size at limit and limit+1; deterministic error path |
+| L0.2 | Four-argument binding overload and opt-in enforcement | Symmetric brightness and asymmetric read/write fixtures; wrong schema/codec direction rejected; old overload still executes; failed registration leaves no binding |
+| L0.3 | Behavior manifest and freeze-on-success | Read/Write/ReadWrite projections; absent metadata; failed snapshot/allocation; no partial manifest; copied values; deterministic time/order; successful freeze and failed-capture retry |
+| L0.4 | Expressions, limits and installed surface | Real Lua lookup of keyword/punctuation/escape/non-ASCII names; binding NUL rejection; `{}` versus host empty Array; revoke/remove rebuild; aggregate limits; Core-only and installed Lua consumers |
+
+Register CTest names `lua_schema` and `lua_manifest`. Focused command after
+build: `ctest --test-dir build/strict -R '^lua_(schema|manifest)$' --output-on-failure`.
+Also run existing scripting/lifecycle tests and all common gates. Do not claim
+execution permission from merely matching an expression or validating source text.
+
+## Allowed files and exit
+
+New: `include/liquid/scripting/LuaValueSchema.hpp`,
+`include/liquid/scripting/LuaCapabilityManifest.hpp`, corresponding
+`src/scripting/LuaValueSchema.cpp` and `LuaCapabilityManifest.cpp`,
+`tests/test_lua_schema.cpp`, `tests/test_lua_manifest.cpp`.
+Existing: runner header/implementation, focused scripting/lifecycle tests,
+CMake, Lua consumer example, and affected documentation.
+
+No World/Runtime behavior change, new target, provider, authoring session,
+proposal activation, or transport in L0. Exit requires the whole immutable
+manifest contract and legacy compatibility, then independent review and owner
+activation of L1.

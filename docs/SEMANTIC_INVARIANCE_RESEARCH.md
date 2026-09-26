@@ -53,11 +53,11 @@ Reviewed committed documentation at `76f00e4`, shared by the local
 research time, plus the pending documentation-hardening worktree drafts.
 The `fix/pre-liquid-hardening` documentation was not the design source.
 
-The committed [Stage 2 plan](LIQUID_STAGE2_PLAN.md) uses the older provisional
-ladder with MCP at L4. The pending hardening draft moves the journal to L4 and
-MCP to L6. Those pending specifications are not published or approved by adding
-this research note. References below describe both baselines explicitly;
-milestone numbers must follow the accepted roadmap when tests are implemented.
+The [Stage 2 plan](LIQUID_STAGE2_PLAN.md) in this finalized documentation handoff
+uses L4 for the journal, L5 for approved operations, and L6 for MCP. The older
+provisional MCP-at-L4 numbering is superseded. References below use the current
+specifications; finalizing this research and documentation does not activate
+their implementation or approve a model integration.
 
 ## Fit with Liquid
 
@@ -65,18 +65,18 @@ milestone numbers must follow the accepted roadmap when tests are implemented.
 | --- | --- | --- |
 | L0 schemas, trusted descriptions, exact Lua paths | Explicit shapes, meanings, and accessible capabilities | That a schema-valid proposal expresses the user's request |
 | Proposed L2 host-owned fixtures and assertions | Independent expected outcomes through the real runtime path | Robust interpretation of natural-language variants |
-| Pending L2 normalized semantic traces | Repeated execution comparison despite fresh handles | General equivalence of different generated programs |
+| Specified L2 normalized semantic traces | Repeated execution comparison despite fresh handles | General equivalence of different generated programs |
 | Proposed L3 scoped current view | Separation of live desires, selections, commands, and observed truth | Correct model interpretation of those distinctions |
-| Pending L4 bounded journal | Artifact and evaluation provenance | Reproduction of model reasoning |
-| Pending L6 five fixed MCP tools | Focused discovery, proposal, evaluation, inspection, and history | Correct tool selection from any wording |
+| Specified L4 bounded journal | Artifact and evaluation provenance | Reproduction of model reasoning |
+| Specified L6 five fixed MCP tools | Focused discovery, proposal, evaluation, inspection, and history | Correct tool selection from any wording |
 
 The [L0 specification](LIQUID_L0_IMPLEMENTATION_SPEC.md) already separates
 schema metadata from executable codec and permission authority. Preserve this:
 a valid brightness value can still be the wrong brightness for the request.
 
-The pending L6 draft excludes approval, activation, replacement, stop, grants,
+The L6 specification excludes approval, activation, replacement, stop, grants,
 and frame control from MCP. Paraphrasing must never expand authority. The
-pending journal excludes raw prompts by default; a future evaluation dataset
+specified journal excludes raw prompts by default; a future evaluation dataset
 does not silently authorize storing conversations in that journal.
 
 ## Three separate properties
