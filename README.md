@@ -12,7 +12,7 @@
 ![Liquid runtime flow: intent proposals are resolved, dispatched through bounded adapters, and committed only after validated feedback.](docs/liquid-runtime-flow.svg)
 
 > [!IMPORTANT]
-> **Current status:** Solid v0.1.0 is complete. All S0-S7 finalization gates closed on 22 August 2026. Stage 2 **Liquid** is now active with **L0 — Model-Facing Lua Capability Contract** as the first implementation milestone. L0 will add machine-readable schema/capability discovery to the existing Lua boundary; it does not add a model provider, MCP server, or application-specific adaptive policy.
+> **Current status:** Solid v0.1.0 is released, and the pre-Liquid Solid hardening has landed on `main` (see [tracking](DEVELOPMENT_TRACKING.md)). Liquid L0–L6 are specified but not implemented, and no Stage 2 implementation step is active. See the [roadmap](docs/LIQUID_STAGE2_PLAN.md) for the sequence and the [validation report](docs/LIQUID_DOCUMENTATION_VALIDATION.md) for the dated design-review evidence.
 
 | Deterministic core | Model-facing boundary | Evidence-first effects |
 | --- | --- | --- |
@@ -84,9 +84,9 @@ The target relationship is:
                     deterministic authority
 ```
 
-Current L0 remains inside the existing `Liquid::Lua` boundary. The approved milestone will add a bounded model-visible `LuaValueSchema` and immutable capability manifest built from trusted Lua bindings, current behavior permissions, exact host-generated access paths, copied readable snapshots, current monotonic time, and a stable authoring-contract marker.
+L0 is specified to stay inside the existing `Liquid::Lua` boundary. Once the owner activates it, the milestone will add a bounded model-visible `LuaValueSchema` and immutable capability manifest built from trusted Lua bindings, current behavior permissions, exact host-generated access paths, copied readable snapshots, current monotonic time, and a stable authoring-contract marker.
 
-No L0 code calls an LLM. No new provider/agent/MCP dependency is introduced. See [the Stage 2 implementation plan](docs/LIQUID_STAGE2_PLAN.md) for milestones, acceptance scenarios, rejected alternatives, and current external research.
+No L0 code calls an LLM. No new provider/agent/MCP dependency is introduced. See [the Stage 2 implementation plan](docs/LIQUID_STAGE2_PLAN.md) for milestones, acceptance scenarios, rejected alternatives, and dated external research.
 
 ## Build and test
 
@@ -193,8 +193,11 @@ Runtime state is confined to its owner thread. Only the bounded feedback sender 
 
 ### Stage 2 / current work
 
-- [Liquid Stage 2 plan](docs/LIQUID_STAGE2_PLAN.md) — accepted architecture, L0 scope, provisional roadmap, research, and rejected alternatives
-- [Development tracking](DEVELOPMENT_TRACKING.md) — current milestone, allowed implementation area, evidence, and advancement rules
+- [Liquid Stage 2 plan](docs/LIQUID_STAGE2_PLAN.md) — revised design, ordered L0–L6 specifications, decisions and non-goals
+- [Common implementation contract](docs/LIQUID_IMPLEMENTATION_CONTRACT.md) — shared authority, identities, limits, packaging and verification commands
+- [Documentation validation](docs/LIQUID_DOCUMENTATION_VALIDATION.md) — findings, corrections, code baseline and readiness evidence
+- [Claude/Codex handoff](docs/HERMES_MULTI_MODEL_DEVELOPMENT_GUIDE.md) — implementation, independent review and owner-approved advancement; Hermes optional
+- [Development tracking](DEVELOPMENT_TRACKING.md) — actual status, activation prerequisites and completion evidence
 - [Concepts and architecture](Liquid_Concepts_and_Architecture.md) — Solid/Liquid/Liquid Layer responsibilities and vocabulary
 - [AGENTS.md](AGENTS.md) — operational coding-agent scope
 

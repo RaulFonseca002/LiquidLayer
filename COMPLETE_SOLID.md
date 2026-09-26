@@ -8,7 +8,8 @@ issue *at that revision*. This is dated evidence about the v0.1.0 release, not
 a permanent assertion; later reviews can and do find defects. The pre-Liquid
 review of 5 September 2026 (`docs/PRE_LIQUID_REVIEW.md`) recorded new
 high/medium Solid findings and their closure is tracked in
-`DEVELOPMENT_TRACKING.md`.
+`DEVELOPMENT_TRACKING.md`. The later Liquid documentation review is recorded in
+[the validation report](docs/LIQUID_DOCUMENTATION_VALIDATION.md).
 
 **Implementation status:** Solid v0.1.0 is complete through M1-M6 and
 finalization S0-S7. The release includes ordered Input/Behavior/Decision

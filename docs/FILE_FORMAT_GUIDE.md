@@ -22,6 +22,15 @@ Do not copy a live file as a checkpoint and do not repair bytes manually. A chec
 
 ## Retention
 
-Retention starts only at a verified checkpoint. Write the checkpoint and later batches to a replacement generation, validate the whole replacement, flush file and required directory metadata, then atomically replace the prior generation and record the pruned sequence range. Keep the original bytes and generation when any stage fails. The memory store follows the same project-before-replace rule.
+Retention starts only at a verified checkpoint. Write and validate the replacement
+generation, flush it, atomically replace the prior file, then flush required
+parent-directory metadata. Failures before installation preserve the original;
+a directory-flush failure after installation leaves the replacement installed
+and faults the store with uncertain durability. The memory store follows its
+project-before-replace rule without filesystem durability operations.
+
+V1 checkpoint payloads retain historical arrays and eventually reach Value
+limits. Repeated retention is not an indefinite history bound; see
+[EVENT_FORMAT_V1.md](EVENT_FORMAT_V1.md) before designing a long-running session.
 
 Unknown file, batch, record, or canonical-value versions are rejected unless the format contract explicitly defines a skippable envelope. Use the golden binary fixtures and byte-level truncation/corruption tests before changing any encoder or decoder.
