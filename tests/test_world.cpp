@@ -1,8 +1,10 @@
 #include "liquid/world/World.hpp"
 #include "liquid/IntentExpiration.hpp"
+#include "liquid/Runtime.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -160,6 +162,52 @@ struct WorldMutatingCallbackSystem : System {
             world->destroy_behavior(victim);
         } catch (const std::logic_error&) {
             mutationRejected = true;
+        }
+    }
+};
+
+struct TopologyProbeSystem : System {
+    static constexpr std::string_view stableName = "tests.test.world.cpp.TopologyProbeSystem";
+    static constexpr std::uint32_t version = 1;
+    Runtime* runtime = nullptr;
+    BehaviorId victim = 0;
+    int runs = 0;
+    bool registerRejected = false;
+    bool destroyRejected = false;
+    bool nestedFrameRejected = false;
+    bool unexpectedFailure = false;
+
+    explicit TopologyProbeSystem(Runtime& owningRuntime)
+        : runtime(&owningRuntime)
+    {
+    }
+
+    void run(World& world, FrameNumber frame, IntentTime now) override {
+        (void)frame;
+        ++runs;
+
+        try {
+            (void)world.register_component<Temperature>("T");
+        } catch (const std::logic_error&) {
+            registerRejected = true;
+        } catch (...) {
+            unexpectedFailure = true;
+        }
+
+        try {
+            world.destroy_behavior(victim);
+        } catch (const std::logic_error&) {
+            destroyRejected = true;
+        } catch (...) {
+            unexpectedFailure = true;
+        }
+
+        try {
+            (void)runtime->run_frame(now + 1);
+        } catch (const std::logic_error&) {
+            nestedFrameRejected = true;
+        } catch (...) {
+            unexpectedFailure = true;
         }
     }
 };
@@ -894,4 +942,182 @@ TEST_CASE("throwing component removal callbacks still record the removed compone
     REQUIRE(world.has_component_named(lightType, "hallLight"));
     REQUIRE(world.component_mutations().empty());
     REQUIRE(world.topology_mutations().empty());
+}
+
+TEST_CASE("world exposes intent metadata through public accessors") {
+    World world;
+    const auto lightType = world.register_component<Light>("Light");
+    world.add_component(lightType, "lamp", Light{10});
+    const BehaviorId behavior = world.create_behavior();
+    world.grant_component_access(lightType, behavior, "lamp", ComponentAccessMode::Write);
+    const ComponentSlotId slot = world.get_components(lightType, behavior).at("lamp");
+
+    const IntentName name = "evening";
+    const IntentId id = world.create_intent(
+        behavior, lightType, slot, IntentLifetime::until_time(50), Light{70},
+        IntentPriority::High, name);
+
+    REQUIRE(world.intent_exists(id));
+    REQUIRE(world.intent_owner(id) == behavior);
+    REQUIRE(world.intent_lifetime(id).kind == IntentLifetimeKind::UntilTime);
+    REQUIRE(world.intent_lifetime(id).expiresAt == 50);
+    REQUIRE(world.intent(id).id == id);
+    REQUIRE(world.intent(id).name == name);
+    REQUIRE(world.intent(id).target == world.intent_target(id));
+    REQUIRE(world.intent_target(id) == (ComponentTarget{lightType.id, slot}));
+    REQUIRE(world.intents_owned_by(behavior) == std::vector<IntentId>{id});
+    REQUIRE(world.intent_named(behavior, name) == id);
+    REQUIRE(world.intents_for(lightType.id, slot) == std::vector<IntentId>{id});
+    REQUIRE(world.live_intent_ids() == std::vector<IntentId>{id});
+    REQUIRE(world.intent_target_index().at(lightType.id).at(slot) == std::set<IntentId>{id});
+
+    world.destroy_intent(id);
+
+    REQUIRE(!world.intent_exists(id));
+    REQUIRE(world.intents_owned_by(behavior).empty());
+    REQUIRE(!world.intent_named(behavior, name).has_value());
+    REQUIRE(world.intents_for(lightType.id, slot).empty());
+    const auto& index = world.intent_target_index();
+    const auto typeEntry = index.find(lightType.id);
+    REQUIRE((typeEntry == index.end() || !typeEntry->second.contains(slot)));
+}
+
+TEST_CASE("world resolves component types and values by name") {
+    World world;
+    const auto lightType = world.register_component<Light>("Light");
+
+    REQUIRE(world.component_type("Light") == lightType.id);
+    REQUIRE(world.component_type(lightType) == lightType.id);
+    REQUIRE_THROWS(world.component_type("Missing"));
+    REQUIRE_THROWS(world.component_type(ComponentType<Light>{
+        static_cast<ComponentTypeId>(lightType.id + 10), lightType.world, lightType.generation}));
+
+    // component_target, component_value, component_exists and effect_route
+    // are private World members (Runtime/LuaBehaviorRunner friends only), so
+    // the same contract is observed through the public codec-backed paths:
+    // encoded mutation evidence, resolve_effect route/value, and removal.
+    World coded;
+    const auto codedType = coded.register_component<Light>(
+        "tests.Light", 1, ComponentCodec<Light>{
+            [](const Light& light) {
+                return Value{static_cast<std::int64_t>(light.brightness)};
+            },
+            [](const Value& value) {
+                return Light{static_cast<int>(value.as_signed_integer())};
+            }});
+    REQUIRE(coded.component_type("tests.Light") == codedType.id);
+    coded.add_component(codedType, "lamp", Light{40});
+    const BehaviorId behavior = coded.create_behavior();
+    coded.grant_component_access(
+        codedType, behavior, "lamp", ComponentAccessMode::ReadWrite);
+
+    coded.clear_component_mutations();
+    coded.update_component(codedType, behavior, "lamp", [](Light& light) {
+        light.brightness = 55;
+    });
+    REQUIRE(coded.component_mutations().size() == 1);
+    REQUIRE(coded.component_mutations().back().before ==
+        Value{static_cast<std::int64_t>(40)});
+    REQUIRE(coded.component_mutations().back().after ==
+        Value{static_cast<std::int64_t>(55)});
+
+    coded.register_effect_codec(codedType, EffectCodec<Light>{
+        AdapterRoute{"tests.light"},
+        [](const ComponentName& name, const Light& light)
+            -> std::optional<ResolvedEffect> {
+            return ResolvedEffect{
+                AdapterRoute{"tests.light"},
+                EffectTarget{name},
+                Value{static_cast<std::int64_t>(light.brightness)}
+            };
+        },
+        [](const Value& observed) {
+            return Light{static_cast<int>(observed.as_signed_integer())};
+        }
+    });
+    const auto effect = coded.resolve_effect(codedType, behavior, "lamp");
+    REQUIRE(effect.has_value());
+    REQUIRE(effect->adapterRoute == AdapterRoute{"tests.light"});
+    REQUIRE(effect->target == EffectTarget{"lamp"});
+    REQUIRE(effect->desiredValue == Value{static_cast<std::int64_t>(55)});
+
+    REQUIRE_THROWS(coded.resolve_effect(ComponentType<Light>{
+        static_cast<ComponentTypeId>(codedType.id + 10),
+        codedType.world, codedType.generation}, behavior, "lamp"));
+
+    coded.remove_component(codedType, "lamp");
+    REQUIRE(!coded.has_component_named(codedType, "lamp"));
+    REQUIRE_THROWS(coded.resolve_effect(codedType, behavior, "lamp"));
+}
+
+TEST_CASE("world topology cannot change while systems are dispatching") {
+    Runtime runtime;
+    World& world = runtime.world();
+    const BehaviorId victim = world.create_behavior();
+    world.register_system<TopologyProbeSystem>(Signature{}, runtime);
+    TopologyProbeSystem& system = world.get_system<TopologyProbeSystem>();
+    system.victim = victim;
+
+    const FrameLog log = runtime.run_frame(10);
+
+    REQUIRE(log.completed);
+    REQUIRE(system.runs == 1);
+    REQUIRE(system.registerRejected);
+    REQUIRE(system.destroyRejected);
+    REQUIRE(system.nestedFrameRejected);
+    REQUIRE(!system.unexpectedFailure);
+    REQUIRE(world.behavior_exists(victim));
+    REQUIRE(world.behavior_count() == 1);
+    REQUIRE_THROWS(world.component_type("T"));
+
+    // Outside dispatch the same topology changes are allowed again.
+    (void)world.register_component<Temperature>("T");
+    world.destroy_behavior(victim);
+    REQUIRE(world.behavior_count() == 0);
+}
+
+TEST_CASE("behavior creation failure in a system callback leaves no partial state") {
+    World world;
+    world.register_system<ThrowingAdditionSystem>(Signature{});
+    world.clear_topology_mutations();
+
+    REQUIRE_THROWS_AS(world.create_behavior(), std::runtime_error);
+
+    REQUIRE(world.behavior_count() == 0);
+    REQUIRE(world.system_behavior_count<ThrowingAdditionSystem>() == 0);
+    REQUIRE(world.live_intent_ids().empty());
+    REQUIRE(!world.behavior_exists(BehaviorId{world.instance_id(), 0, 1}));
+    std::size_t created = 0;
+    std::size_t removed = 0;
+    for (const auto& mutation : world.topology_mutations()) {
+        if (mutation.key.rfind("behavior:", 0) != 0)
+            continue;
+        if (mutation.removed)
+            ++removed;
+        else
+            ++created;
+    }
+    REQUIRE(created == removed);
+
+    world.destroy_system<ThrowingAdditionSystem>();
+    const BehaviorId behavior = world.create_behavior();
+    REQUIRE(world.behavior_exists(behavior));
+    REQUIRE(behavior.slot == 0);
+    REQUIRE(world.behavior_count() == 1);
+}
+
+TEST_CASE("behavior access revision and signature for unknown behaviors") {
+    World world;
+    const BehaviorId live = world.create_behavior();
+    const BehaviorId destroyed = world.create_behavior();
+    world.destroy_behavior(destroyed);
+
+    REQUIRE_THROWS(world.behavior_access_revision(destroyed));
+    Signature signature;
+    REQUIRE_NOTHROW(signature = world.behavior_signature(destroyed));
+    REQUIRE(signature.none());
+
+    const BehaviorAccessRevision revision = world.behavior_access_revision(live);
+    REQUIRE(revision != 0);
+    REQUIRE(world.behavior_access_revision(live) == revision);
 }

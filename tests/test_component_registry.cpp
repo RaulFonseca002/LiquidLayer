@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -280,4 +282,172 @@ TEST_CASE("exhausted component slot generations retire the physical slot") {
     expect_throw([&] {
         registry.resolve_component(type, exhausted);
     });
+}
+
+namespace {
+
+liquid::ComponentCodec<Light> light_codec() {
+    return {
+        [](const Light& light) {
+            return liquid::Value{static_cast<std::int64_t>(light.brightness)};
+        },
+        [](const liquid::Value& encoded) {
+            return Light{static_cast<int>(encoded.as_signed_integer())};
+        }
+    };
+}
+
+}
+
+TEST_CASE("component registry rejects lookups on unregistered types") {
+    ComponentRegistry registry{1};
+    const auto lightType = registry.register_component<Light>("Light");
+    registry.add_component(lightType, "lamp", Light{10});
+    const ComponentSlotId slot = registry.component_slot(lightType, "lamp");
+    const ComponentTypeId unknownType =
+        static_cast<ComponentTypeId>(lightType.id + 10);
+
+    REQUIRE_THROWS_AS(registry.effect_route(unknownType), std::runtime_error);
+    REQUIRE_THROWS_AS(registry.effect_route(lightType.id), std::runtime_error);
+
+    REQUIRE_THROWS_AS(
+        registry.encode_effect(unknownType, "lamp", liquid::Value{}),
+        std::runtime_error);
+    std::optional<liquid::ResolvedEffect> noEffect;
+    REQUIRE_NOTHROW(noEffect =
+        registry.encode_effect(lightType.id, "lamp", liquid::Value{}));
+    REQUIRE(!noEffect.has_value());
+
+    REQUIRE_THROWS_AS(
+        registry.decode_observed(unknownType, liquid::Value{}),
+        std::runtime_error);
+    REQUIRE_THROWS_AS(
+        registry.decode_observed(lightType.id, liquid::Value{}),
+        std::runtime_error);
+
+    // type_name and named_slot are private ComponentRegistry members; the
+    // public name <-> type and name -> slot lookups carry the same contract.
+    REQUIRE(registry.component_type("Light") == lightType.id);
+    REQUIRE_THROWS_AS(registry.component_type("Missing"), std::runtime_error);
+    REQUIRE_THROWS_AS(
+        registry.component_slot(ComponentType<Light>{unknownType}, "lamp"),
+        std::runtime_error);
+    REQUIRE_THROWS_AS(
+        registry.component_name(unknownType, slot), std::runtime_error);
+    REQUIRE(registry.component_slot(lightType, "lamp") == slot);
+
+    REQUIRE(registry.component_name(lightType.id, slot) == "lamp");
+    REQUIRE(registry.component_type_exists(lightType.id));
+    REQUIRE(!registry.component_type_exists(unknownType));
+    REQUIRE(!registry.has_component_named(
+        ComponentType<Light>{unknownType}, "lamp"));
+
+    ComponentRegistry other{2};
+    const auto otherType = other.register_component<Light>("Light");
+    other.add_component(otherType, "lamp", Light{20});
+    const ComponentSlotId foreignSlot = other.component_slot(otherType, "lamp");
+    REQUIRE(registry.slot_is_current(lightType.id, slot));
+    REQUIRE(!registry.slot_is_current(lightType.id, ComponentSlotId{}));
+    REQUIRE(!registry.slot_is_current(lightType.id, foreignSlot));
+    REQUIRE(!registry.slot_is_current(unknownType, slot));
+}
+
+TEST_CASE("component registry encode and replace require a component codec") {
+    ComponentRegistry plain{1};
+    const auto plainType = plain.register_component<Light>("Light");
+    plain.add_component(plainType, "lamp", Light{10});
+    const ComponentSlotId plainSlot = plain.component_slot(plainType, "lamp");
+
+    REQUIRE(!plain.has_component_codec(plainType));
+    REQUIRE_THROWS_AS(
+        plain.encode_component(plainType.id, plainSlot), std::runtime_error);
+    REQUIRE_THROWS_AS(
+        plain.replace_component(plainType.id, plainSlot, liquid::Value{
+            static_cast<std::int64_t>(20)}),
+        std::runtime_error);
+    REQUIRE(plain.get_component_named(plainType, "lamp")->brightness == 10);
+
+    ComponentRegistry coded{2};
+    const auto codedType =
+        coded.register_component<Light>("example.Light", 1, light_codec());
+    coded.add_component(codedType, "lamp", Light{10});
+    const ComponentSlotId codedSlot = coded.component_slot(codedType, "lamp");
+
+    REQUIRE(coded.has_component_codec(codedType));
+    REQUIRE(coded.encode_component(codedType.id, codedSlot) ==
+        liquid::Value{static_cast<std::int64_t>(10)});
+    const liquid::Value replaced = coded.replace_component(
+        codedType.id, codedSlot, liquid::Value{static_cast<std::int64_t>(20)});
+    REQUIRE(replaced == liquid::Value{static_cast<std::int64_t>(20)});
+    REQUIRE(coded.get_component_named(codedType, "lamp")->brightness == 20);
+    REQUIRE(coded.encode_component(codedType.id, codedSlot) ==
+        liquid::Value{static_cast<std::int64_t>(20)});
+}
+
+TEST_CASE("component registry routes effects and observations through an effect codec") {
+    ComponentRegistry registry{1};
+    const auto type =
+        registry.register_component<Light>("example.Light", 1, light_codec());
+    registry.add_component(type, "lamp", Light{10});
+    REQUIRE(!registry.has_effect_codec(type));
+
+    registry.register_effect_codec(type, liquid::EffectCodec<Light>{
+        liquid::AdapterRoute{"example.light"},
+        [](const ComponentName& name, const Light& light)
+            -> std::optional<liquid::ResolvedEffect> {
+            if (light.brightness < 0)
+                return std::nullopt;
+            return liquid::ResolvedEffect{
+                liquid::AdapterRoute{"example.light"},
+                liquid::EffectTarget{name},
+                liquid::Value{static_cast<std::int64_t>(light.brightness)}
+            };
+        },
+        [](const liquid::Value& observed) {
+            return Light{static_cast<int>(observed.as_signed_integer() * 2)};
+        }
+    });
+    REQUIRE(registry.has_effect_codec(type));
+    REQUIRE(registry.effect_route(type.id) == liquid::AdapterRoute{"example.light"});
+
+    const auto byId = registry.encode_effect(
+        type.id, "lamp", liquid::Value{static_cast<std::int64_t>(30)});
+    REQUIRE(byId.has_value());
+    REQUIRE(byId->adapterRoute == liquid::AdapterRoute{"example.light"});
+    REQUIRE(byId->target == liquid::EffectTarget{"lamp"});
+    REQUIRE(byId->desiredValue == liquid::Value{static_cast<std::int64_t>(30)});
+
+    const auto typed = registry.encode_effect(type, "lamp", Light{40});
+    REQUIRE(typed.has_value());
+    REQUIRE(typed->desiredValue == liquid::Value{static_cast<std::int64_t>(40)});
+
+    REQUIRE(!registry.encode_effect(
+        type.id, "lamp", liquid::Value{static_cast<std::int64_t>(-1)}));
+
+    REQUIRE(registry.decode_observed(
+        type.id, liquid::Value{static_cast<std::int64_t>(7)}) ==
+        liquid::Value{static_cast<std::int64_t>(14)});
+
+    // Light's component codec encodes signed integers, so an unsigned value
+    // decodes but does not re-encode to the same canonical value.
+    REQUIRE_THROWS(registry.encode_effect(
+        type.id, "lamp", liquid::Value{std::uint64_t{5}}));
+}
+
+TEST_CASE("component registry retires a slot whose generation is exhausted") {
+    ComponentRegistry registry{1};
+    const auto type = registry.register_component<Light>("Light");
+    registry.add_component(type, "lamp", Light{10});
+    const ComponentSlotId exhausted = registry.set_slot_generation_for_test(
+        type, "lamp", std::numeric_limits<std::uint32_t>::max());
+    REQUIRE(registry.slot_is_current(type.id, exhausted));
+
+    registry.remove_component(type, "lamp");
+    REQUIRE(!registry.slot_is_current(type.id, exhausted));
+
+    registry.add_component(type, "lamp", Light{20});
+    const ComponentSlotId fresh = registry.component_slot(type, "lamp");
+    REQUIRE(fresh.slot != exhausted.slot);
+    REQUIRE(registry.slot_is_current(type.id, fresh));
+    REQUIRE(!registry.slot_is_current(type.id, exhausted));
 }

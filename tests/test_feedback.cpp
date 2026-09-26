@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <atomic>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -21,6 +22,17 @@ liquid::EffectReport report(std::uint64_t command) {
         liquid::Value(std::uint64_t{command}),
         {},
         command
+    };
+}
+
+liquid::ExternalObservation observation(std::uint64_t value) {
+    return liquid::ExternalObservation{
+        liquid::SessionId{1},
+        liquid::AdapterRoute{"test.adapter"},
+        liquid::EffectTarget{"light.office"},
+        liquid::Value(std::uint64_t{value}),
+        liquid::StateRevision{value},
+        value
     };
 }
 
@@ -145,4 +157,63 @@ TEST_CASE("test_feedback") {
     }
     REQUIRE(invalidCapacity);
 
+}
+
+TEST_CASE("feedback channel carries external observations with the same bounds as reports") {
+    using liquid::FeedbackSendResult;
+
+    auto channel = liquid::make_feedback_channel(2);
+    REQUIRE(channel.sender.try_send(observation(1)) == FeedbackSendResult::Sent);
+    REQUIRE(channel.sender.try_send(observation(2)) == FeedbackSendResult::Sent);
+    REQUIRE(channel.sender.try_send(observation(3)) == FeedbackSendResult::Full);
+    REQUIRE(channel.sender.try_send(report(3)) == FeedbackSendResult::Full);
+    REQUIRE(channel.receiver.pending() == 2);
+
+    REQUIRE(!channel.receiver.try_receive());
+    const auto first = channel.receiver.try_receive_observation();
+    const auto second = channel.receiver.try_receive_observation();
+    REQUIRE((first && *first == observation(1)));
+    REQUIRE((second && *second == observation(2)));
+    REQUIRE(!channel.receiver.try_receive_observation());
+    REQUIRE(channel.receiver.pending() == 0);
+
+    REQUIRE(channel.sender.try_send(observation(4)) == FeedbackSendResult::Sent);
+    REQUIRE(channel.sender.try_send(observation(5)) == FeedbackSendResult::Sent);
+    REQUIRE(channel.receiver.drain().empty());
+    const auto drained = channel.receiver.drain_observations();
+    REQUIRE((drained == std::vector<liquid::ExternalObservation>{
+        observation(4), observation(5)}));
+    REQUIRE(channel.receiver.drain_observations().empty());
+    REQUIRE(channel.receiver.pending() == 0);
+
+    auto mixed = liquid::make_feedback_channel(2);
+    REQUIRE(mixed.sender.try_send(report(1)) == FeedbackSendResult::Sent);
+    REQUIRE(mixed.sender.try_send(observation(1)) == FeedbackSendResult::Sent);
+    REQUIRE(mixed.sender.try_send(observation(2)) == FeedbackSendResult::Full);
+    REQUIRE(mixed.sender.try_send(report(2)) == FeedbackSendResult::Full);
+    REQUIRE(mixed.receiver.pending() == 2);
+    const auto mixedObservations = mixed.receiver.drain_observations();
+    REQUIRE((mixedObservations == std::vector<liquid::ExternalObservation>{
+        observation(1)}));
+    const auto mixedReports = mixed.receiver.drain();
+    REQUIRE(mixedReports.size() == 1);
+    REQUIRE(mixedReports.front().commandId == liquid::CommandId{1});
+
+    auto closing = liquid::make_feedback_channel(2);
+    const auto closingSender = closing.sender;
+    {
+        std::optional<liquid::FeedbackReceiver> receiver{
+            std::move(closing.receiver)};
+        REQUIRE(closingSender.try_send(observation(6)) == FeedbackSendResult::Sent);
+        REQUIRE(receiver->try_receive_observation() == observation(6));
+        receiver.reset();
+    }
+    REQUIRE(closingSender.is_closed());
+    REQUIRE(closingSender.try_send(observation(7)) == FeedbackSendResult::Closed);
+
+    auto shut = liquid::make_feedback_channel(2);
+    shut.receiver.shutdown();
+    REQUIRE(shut.sender.try_send(observation(8)) == FeedbackSendResult::Closed);
+    REQUIRE(!shut.receiver.try_receive_observation());
+    REQUIRE(shut.receiver.drain_observations().empty());
 }

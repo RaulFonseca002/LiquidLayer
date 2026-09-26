@@ -162,6 +162,86 @@ std::vector<std::size_t> batch_offsets(const std::vector<std::uint8_t>& bytes) {
     return offsets;
 }
 
+// CRC32C (Castagnoli, reflected 0x82F63B78) as named by docs/EVENT_FORMAT_V1.md.
+std::uint32_t crc32c(const std::vector<std::uint8_t>& bytes,
+                     std::size_t begin, std::size_t end) {
+    std::uint32_t crc = 0xFFFFFFFFU;
+    for (std::size_t index = begin; index < end; ++index) {
+        crc ^= bytes[index];
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1U) ^ (0x82F63B78U & (0U - (crc & 1U)));
+    }
+    return crc ^ 0xFFFFFFFFU;
+}
+
+std::uint64_t read_le(const std::vector<std::uint8_t>& bytes,
+                      std::size_t offset, std::size_t width) {
+    std::uint64_t value = 0;
+    for (std::size_t index = 0; index < width; ++index)
+        value |= static_cast<std::uint64_t>(bytes[offset + index]) << (8U * index);
+    return value;
+}
+
+void write_le(std::vector<std::uint8_t>& bytes, std::size_t offset,
+              std::size_t width, std::uint64_t value) {
+    for (std::size_t index = 0; index < width; ++index)
+        bytes[offset + index] = static_cast<std::uint8_t>(value >> (8U * index));
+}
+
+constexpr std::size_t batchHeaderBytes = 32;
+
+std::size_t header_size(const std::vector<std::uint8_t>& bytes) {
+    return static_cast<std::size_t>(read_le(bytes, 10, 2));
+}
+
+bool header_crc_matches(const std::vector<std::uint8_t>& bytes) {
+    const std::size_t size = header_size(bytes);
+    return crc32c(bytes, 0, size - 4) == read_le(bytes, size - 4, 4);
+}
+
+void reseal_header(std::vector<std::uint8_t>& bytes, std::size_t size) {
+    write_le(bytes, size - 4, 4, crc32c(bytes, 0, size - 4));
+}
+
+std::size_t batch_payload_bytes(const std::vector<std::uint8_t>& bytes,
+                                std::size_t batch) {
+    return static_cast<std::size_t>(read_le(bytes, batch + 8, 4));
+}
+
+bool batch_crc_matches(const std::vector<std::uint8_t>& bytes,
+                       std::size_t batch) {
+    const std::size_t end = batch + batchHeaderBytes + batch_payload_bytes(bytes, batch);
+    return crc32c(bytes, batch, end) == read_le(bytes, end, 4);
+}
+
+// Recomputes a batch checksum over an unchanged payload length so a patched
+// field reaches its own validation instead of the checksum check.
+void reseal_batch(std::vector<std::uint8_t>& bytes, std::size_t batch,
+                  std::size_t payloadBytes) {
+    const std::size_t end = batch + batchHeaderBytes + payloadBytes;
+    write_le(bytes, end, 4, crc32c(bytes, batch, end));
+}
+
+void expect_hard_open_error(const std::filesystem::path& path,
+                            const std::vector<std::uint8_t>& bytes) {
+    write_bytes(path, bytes);
+    expect_store_error([&] { liquid::FileEventStore store(path, metadata()); });
+    expect_store_error([&] {
+        liquid::FileEventStore store(path, metadata(), recovery_options());
+    });
+    REQUIRE(read_bytes(path) == bytes);
+}
+
+std::vector<std::uint8_t> frame_store_bytes(const std::filesystem::path& path,
+                                            std::uint64_t batches) {
+    {
+        liquid::FileEventStore store(path, metadata());
+        for (std::uint64_t frame = 1; frame <= batches; ++frame)
+            store.append(frame_event(frame));
+    }
+    return read_bytes(path);
+}
+
 }
 
 TEST_CASE("test_event_store") {
@@ -642,4 +722,263 @@ TEST_CASE("single-record appends keep order and count across thousands of record
     }
     FileEventStore reopened(path.path(), metadata());
     REQUIRE(reopened.read_all().size() == 600);
+}
+
+TEST_CASE("file event store rejects header field corruption as hard errors") {
+    using namespace liquid;
+
+    TemporaryFile source("header-source.bin");
+    const auto original = frame_store_bytes(source.path(), 1);
+    const std::size_t size = header_size(original);
+    REQUIRE(size == 34 + metadata().engineVersion.size() + 4);
+    REQUIRE(header_crc_matches(original));
+
+    TemporaryFile target("header-target.bin");
+    int step = 0;
+    auto patched = [&](auto patch, bool reseal) {
+        INFO("header patch " << ++step);
+        auto bytes = original;
+        patch(bytes);
+        if (reseal)
+            reseal_header(bytes, size);
+        expect_hard_open_error(target.path(), bytes);
+    };
+
+    patched([](auto& bytes) { bytes[0] ^= 0x01U; }, true);
+    patched([](auto& bytes) { write_le(bytes, 10, 2, 0); }, false);
+    patched([](auto& bytes) { write_le(bytes, 10, 2, 0xFFFF); }, false);
+    patched([](auto& bytes) { write_le(bytes, 12, 8, 0); }, true);
+    patched([](auto& bytes) { bytes[20] = 0xFF; }, true);
+    patched([](auto& bytes) { write_le(bytes, 24, 8, 0); }, true);
+    patched([](auto& bytes) { write_le(bytes, 32, 2, 0); }, true);
+    patched([](auto& bytes) {
+        write_le(bytes, 32, 2, EventLimits::maxEngineVersionBytes + 1);
+    }, true);
+    patched([&](auto& bytes) { bytes[size - 1] ^= 0x01U; }, false);
+    patched([](auto& bytes) { bytes.resize(20); }, false);
+
+    auto headerOnly = original;
+    headerOnly.resize(size);
+    write_bytes(target.path(), headerOnly);
+    {
+        FileEventStore store(target.path(), metadata());
+        REQUIRE(store.read_all().empty());
+        REQUIRE(store.metadata() == metadata());
+    }
+}
+
+TEST_CASE("file event store rejects malformed non-final batches as hard errors") {
+    using namespace liquid;
+
+    TemporaryFile source("batch-source.bin");
+    const auto original = frame_store_bytes(source.path(), 3);
+    const auto offsets = batch_offsets(original);
+    REQUIRE(offsets.size() == 3);
+    const std::size_t b = offsets[0];
+    const std::size_t payload = batch_payload_bytes(original, b);
+    REQUIRE(batch_crc_matches(original, b));
+    REQUIRE(batch_crc_matches(original, offsets[1]));
+    REQUIRE(read_le(original, b + 16, 8) == 1);
+    REQUIRE(read_le(original, b + 24, 8) == 1);
+    REQUIRE(read_le(original, b + 32, 2) ==
+            static_cast<std::uint16_t>(EventType::FrameCompleted));
+
+    TemporaryFile target("batch-target.bin");
+    int step = 0;
+    auto patched = [&](std::size_t batch, auto patch, bool reseal) {
+        INFO("batch patch " << ++step);
+        auto bytes = original;
+        const std::size_t batchPayload = batch_payload_bytes(bytes, batch);
+        patch(bytes);
+        if (reseal)
+            reseal_batch(bytes, batch, batchPayload);
+        expect_hard_open_error(target.path(), bytes);
+    };
+
+    // Unresealed field corruption surfaces as a checksum failure.
+    patched(b, [&](auto& bytes) { bytes[b + 32 + 8] ^= 0x01U; }, false);
+    patched(b, [&](auto& bytes) { write_le(bytes, b + 6, 2, 1); }, true);
+    patched(b, [&](auto& bytes) { write_le(bytes, b + 12, 4, 0); }, true);
+    patched(b, [&](auto& bytes) {
+        write_le(bytes, b + 12, 4, EventLimits::maxRecordsPerBatch + 1);
+    }, true);
+    patched(b, [&](auto& bytes) { write_le(bytes, b + 12, 4, 2); }, true);
+    patched(b, [&](auto& bytes) { write_le(bytes, b + 8, 4, 0xFFFFFFFFU); }, false);
+    patched(b, [&](auto& bytes) { write_le(bytes, b + 8, 4, payload - 1); }, false);
+    patched(b, [&](auto& bytes) { write_le(bytes, b + 24, 8, 6); }, true);
+    patched(b, [&](auto& bytes) {
+        write_le(bytes, b + 16, 8, 0);
+        write_le(bytes, b + 24, 8, 0);
+    }, true);
+    const std::size_t second = offsets[1];
+    patched(second, [&](auto& bytes) {
+        write_le(bytes, second + 16, 8, read_le(bytes, second + 16, 8) + 1);
+        write_le(bytes, second + 24, 8, read_le(bytes, second + 24, 8) + 1);
+    }, true);
+    patched(b, [&](auto& bytes) { write_le(bytes, b + 32, 2, 0); }, true);
+    patched(b, [&](auto& bytes) { write_le(bytes, b + 32, 2, 200); }, true);
+    patched(b, [&](auto& bytes) { write_le(bytes, b + 34, 2, 2); }, true);
+    patched(b, [&](auto& bytes) {
+        write_le(bytes, b + 36, 4, EventLimits::maxRecordPayloadBytes + 1);
+    }, true);
+    patched(b, [&](auto& bytes) {
+        write_le(bytes, b + 36, 4, read_le(bytes, b + 36, 4) + 1);
+    }, true);
+    patched(b, [&](auto& bytes) { bytes[b + 40] = 0xFF; }, true);
+    patched(b, [&](auto& bytes) {
+        bytes[b] = 'X';
+        bytes[b + 1] = 'X';
+        bytes[b + 2] = 'X';
+        bytes[b + 3] = 'X';
+    }, true);
+    patched(b, [&](auto& bytes) { write_le(bytes, b + 4, 2, 2); }, true);
+}
+
+TEST_CASE("writable recovery salvages a final batch whose magic is corrupt but leaves earlier batches") {
+    using namespace liquid;
+
+    TemporaryFile file("final-magic.bin");
+    auto bytes = frame_store_bytes(file.path(), 2);
+    const auto offsets = batch_offsets(bytes);
+    REQUIRE(offsets.size() == 2);
+    for (std::size_t index = 0; index < 4; ++index)
+        bytes[offsets[1] + index] = 'X';
+    write_bytes(file.path(), bytes);
+
+    expect_store_error([&] { FileEventStore store(file.path(), metadata()); });
+    std::vector<EventRecord> recovered;
+    {
+        FileEventStore store(file.path(), metadata(), recovery_options());
+        recovered = store.read_all();
+    }
+    REQUIRE(recovered.size() == 2);
+    REQUIRE(recovered.front().payload == Value(std::uint64_t{1}));
+    REQUIRE(recovered.back().type == EventType::Recovery);
+    REQUIRE(recovered.back().sequence == RecordId{2});
+    REQUIRE(read_bytes(file.path()) != bytes);
+
+    FileEventStore reopened(file.path(), metadata());
+    REQUIRE(reopened.read_all() == recovered);
+}
+
+TEST_CASE("file event store enforces append limits and empty batches") {
+    using namespace liquid;
+
+    TemporaryFile file("append-limits.bin");
+    FileEventStore store(file.path(), metadata());
+    const auto emptyBytes = read_bytes(file.path());
+
+    REQUIRE(store.append_batch(std::span<const EventData>{}).empty());
+    REQUIRE(store.read_all().empty());
+    REQUIRE(read_bytes(file.path()) == emptyBytes);
+
+    const std::vector<EventData> tooMany(
+        EventLimits::maxRecordsPerBatch + 1, frame_event(1));
+    expect_store_error([&] { store.append_batch(tooMany); });
+    REQUIRE(store.read_all().empty());
+
+    Value::Array chunks;
+    for (int index = 0; index < 9; ++index)
+        chunks.emplace_back(std::string(ValueLimits::maxStringBytes, 'a'));
+    expect_store_error([&] {
+        store.append(EventData{EventType::FrameCompleted, 1, Value(std::move(chunks))});
+    });
+    REQUIRE(store.read_all().empty());
+    REQUIRE(read_bytes(file.path()) == emptyBytes);
+
+    store.append(frame_event(1));
+    REQUIRE(store.read_all().size() == 1);
+}
+
+TEST_CASE("file event store rejects every operation after a post-replace fault") {
+    using namespace liquid;
+
+    TemporaryFile file("faulted-store.bin");
+    FileEventStoreOptions options;
+    options.faultInjector = [](FileEventStoreFaultPoint point) {
+        if (point == FileEventStoreFaultPoint::CompactionReplaced)
+            throw EventStoreError("injected compaction failure after replacement");
+    };
+    FileEventStore store(file.path(), metadata(), options);
+    store.append(frame_event(1));
+    const RecordId checkpoint = store.checkpoint(checkpoint_value(store));
+    store.append(frame_event(2));
+    expect_store_error([&] { store.retain_from_checkpoint(checkpoint); });
+    const auto records = store.read_all();
+
+    expect_store_error([&] { store.flush(); });
+    REQUIRE(store.read_all() == records);
+    const std::vector<EventData> batch{frame_event(3)};
+    expect_store_error([&] { store.append_batch(batch); });
+    REQUIRE(store.read_all() == records);
+    expect_store_error([&] { store.retain_from_checkpoint(checkpoint); });
+    REQUIRE(store.read_all() == records);
+}
+
+TEST_CASE("file event store reopens with mismatched metadata rejected and matching metadata accepted") {
+    using namespace liquid;
+
+    TemporaryFile file("metadata-reopen.bin");
+    frame_store_bytes(file.path(), 1);
+    const auto bytes = read_bytes(file.path());
+
+    EventStoreMetadata otherSession = metadata();
+    otherSession.session = SessionId{0x99};
+    expect_store_error([&] { FileEventStore store(file.path(), otherSession); });
+
+    EventStoreMetadata otherEngine = metadata();
+    otherEngine.engineVersion = "9.9.9-other";
+    expect_store_error([&] { FileEventStore store(file.path(), otherEngine); });
+
+    EventStoreMetadata otherTiming = metadata();
+    otherTiming.feedbackTiming = FeedbackTiming::Immediate;
+    expect_store_error([&] { FileEventStore store(file.path(), otherTiming); });
+    REQUIRE(read_bytes(file.path()) == bytes);
+
+    EventStoreMetadata otherGeneration = metadata();
+    otherGeneration.fileGeneration = 7;
+    FileEventStore reopened(file.path(), otherGeneration);
+    REQUIRE(reopened.metadata().fileGeneration == metadata().fileGeneration);
+    REQUIRE(reopened.read_all().size() == 1);
+}
+
+TEST_CASE("file event store rejects invalid metadata when creating a file") {
+    using namespace liquid;
+
+    TemporaryFile file("invalid-metadata.bin");
+    EventStoreMetadata noSession = metadata();
+    noSession.session = SessionId{};
+    expect_store_error([&] { FileEventStore store(file.path(), noSession); });
+
+    EventStoreMetadata longEngine = metadata();
+    longEngine.engineVersion = std::string(EventLimits::maxEngineVersionBytes + 1, 'v');
+    expect_store_error([&] { FileEventStore store(file.path(), longEngine); });
+
+    EventStoreMetadata futureFormat = metadata();
+    futureFormat.fileFormatVersion = 2;
+    expect_store_error([&] { FileEventStore store(file.path(), futureFormat); });
+}
+
+TEST_CASE("file event store move construction and assignment transfer the open file") {
+    using namespace liquid;
+
+    TemporaryFile first("move-first.bin");
+    TemporaryFile second("move-second.bin");
+    FileEventStore a(first.path(), metadata());
+    a.append(frame_event(1));
+
+    FileEventStore b(std::move(a));
+    b.append(frame_event(2));
+    REQUIRE(b.read_all().size() == 2);
+
+    FileEventStore c(second.path(), metadata());
+    c = std::move(b);
+    REQUIRE(c.read_all().size() == 2);
+    REQUIRE(c.metadata() == metadata());
+    c.append(frame_event(3));
+    REQUIRE(c.read_all().size() == 3);
+
+    // The replaced store released its file, so it can be opened again.
+    FileEventStore reopenedSecond(second.path(), metadata());
+    REQUIRE(reopenedSecond.read_all().empty());
 }
