@@ -66,6 +66,9 @@ Open: identify WHAT must be ready (a background task/timer/one-time init from th
 
 ### ROOT CAUSE CONFIRMED (2026-09-06 ~02:00): USB-CDC-on-boot deadlock, no host
 
+> Superseded by [TRUE ROOT CAUSE](#true-root-cause-2026-09-06-1020-settxtimeoutms0-not-cdc-on-boot)
+> below; kept as the dated log entry.
+
 Matched-control proof (only one variable changed):
 - s1b control, ARDUINO_USB_CDC_ON_BOOT=1, WDT off, no USB host: froze reliably (logo then black).
 - SAME firmware, ARDUINO_USB_CDC_ON_BOOT=0 (Serial.setTxTimeoutMs line disabled since it is HWCDC-only), WDT off, no host: 15 cold resets, ZERO freezes.

@@ -1,5 +1,24 @@
 # Complete Solid
 
+> **Historical, not current authority** (banner added 26 September 2026).
+> Formerly `COMPLETE_SOLID.md`. Line citations refer to `bf56159`. Only
+> relative link targets were updated. Current status:
+> [DEVELOPMENT_TRACKING.md](../DEVELOPMENT_TRACKING.md). Old paths used in the
+> text: `docs/PRE_LIQUID_REVIEW.md` → [docs/history/PRE_LIQUID_REVIEW.md](PRE_LIQUID_REVIEW.md),
+> `DEVELOPMENT_TRACKING.md` → `docs/DEVELOPMENT_TRACKING.md`,
+> `CURRENT_STATE_EVALUATION.md` → [docs/history/STATE_EVALUATION_PT.md](STATE_EVALUATION_PT.md),
+> `docs/IMPLEMENTATION_STATUS.md` → [docs/TRACEABILITY.md § Historical status snapshots](../TRACEABILITY.md#historical-status-snapshots),
+> `PRODUCT.md` → [apps/visualizer/README.md § Product brief](../../apps/visualizer/README.md#product-brief).
+>
+> Superseded passages:
+> - The "Frame" order block (`bf56159` :83-90): this six-step frame order is
+>   superseded by [PUBLIC_API.md](../PUBLIC_API.md) and
+>   [LIFECYCLE_SCRIPTING.md](../LIFECYCLE_SCRIPTING.md), which record the released
+>   order (feedback before Input, then Behavior, Decision, resolve, effects, dispatch).
+> - "Documentation authority after owner approval" (`bf56159` :206-212): this
+>   authority order is superseded by
+>   [AGENTS.md § Reading and authority](../../AGENTS.md#reading-and-authority).
+
 ## Status
 
 **Audit status:** Complete — 22 August 2026. The final regression-first audit
@@ -9,7 +28,7 @@ a permanent assertion; later reviews can and do find defects. The pre-Liquid
 review of 5 September 2026 (`docs/PRE_LIQUID_REVIEW.md`) recorded new
 high/medium Solid findings and their closure is tracked in
 `DEVELOPMENT_TRACKING.md`. The later Liquid documentation review is recorded in
-[the validation report](docs/LIQUID_DOCUMENTATION_VALIDATION.md).
+[the validation report](LIQUID_DOC_VALIDATION.md).
 
 **Implementation status:** Solid v0.1.0 is complete through M1-M6 and
 finalization S0-S7. The release includes ordered Input/Behavior/Decision

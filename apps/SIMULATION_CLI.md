@@ -1,12 +1,162 @@
-# M6 Simulation CLI Test Base
+# Simulation CLI
+
+*(formerly `M6_TEST_BASE.md`, "M6 Simulation CLI Test Base"; reorganized 26
+September 2026. Text verbatim, headings demoted one level, original section
+numbers kept. The CLI contract, golden scenarios and deterministic properties
+(§4, §5, §7) come first because `tests/test_simulation_cli.cpp` still freezes
+them; the rest is the dated M6 test base. Current Solid status is in
+[docs/DEVELOPMENT_TRACKING.md](../docs/DEVELOPMENT_TRACKING.md); the completion
+audit is [docs/history/SOLID_V01_COMPLETION.md](../docs/history/SOLID_V01_COMPLETION.md).)*
+
+## Current CLI contract
+
+### 4. Implemented CLI Contract
+
+The M6 CLI accepts only the inputs the milestone needs:
+
+```text
+liquid_sim_cli \
+    --initial-brightness <0..100> \
+    --script <lua-file> \
+    --frame-time <milliseconds> [--frame-time <milliseconds> ...]
+```
+
+Implemented rules:
+
+- Require one initial brightness, one script path, and at least one frame time.
+- Interpret every time as monotonic session-relative milliseconds, never wall-clock time.
+- Preserve repeated `--frame-time` values in command-line order.
+- Accept equal consecutive frame times because Runtime already permits them.
+- Reject decreasing times before or through the Runtime without faulting an already-valid run.
+- Read Lua source as bytes and let `LuaBehaviorRunner` enforce its source limit.
+- Do not add a general scenario language, JSON input parser, random seed, event system, or device adapter in M6.
+- Provide `--help`; invalid or incomplete invocations write a bounded diagnostic to standard error and return nonzero, consistent with conventional utility behavior ([POSIX utility conventions](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap01.html)).
+
+#### Exit status contract
+
+| Status | Meaning |
+|---:|---|
+| `0` | Every requested frame completed and the Lua execution succeeded. |
+| `2` | CLI usage or scenario input was invalid. |
+| `3` | Lua returned a bounded non-success status; Runtime remained healthy. |
+| `4` | Runtime or host integration failed. |
+
+The exact numeric values are an M6 CLI contract, not a mapping of the internal enum values.
+
+#### Output contract
+
+Use deterministic, line-oriented printable ASCII with fixed field order for M6. Bytes outside printable ASCII in diagnostics are escaped as `\\xNN`. Human diagnostics go to standard error and inspectable scenario records go to standard output.
+
+Each run reports:
+
+- normalized initial state;
+- Lua status, bounded diagnostic, and created intent IDs;
+- each frame number and explicit time;
+- completion state and phase counts;
+- expired intent count;
+- requested and selected intent counts;
+- every selected component type, component name, and intent ID;
+- selected typed value, priority, and lifetime when available;
+- final Runtime health.
+
+Do not include wall-clock timestamps, pointer values, absolute build paths, elapsed durations, locale-formatted numbers, unordered-container iteration, or nondeterministic seeds in golden output.
+
+If structured JSON output is added after M6, use unique property names and a deterministic serialization rule. JSON itself does not give semantic significance to object-member order ([RFC 8259](https://datatracker.ietf.org/doc/html/rfc8259)); canonical JSON requires additional constraints such as deterministic property sorting ([RFC 8785](https://datatracker.ietf.org/doc/html/rfc8785)).
+
+### 5. Required End-to-End Golden Scenarios
+
+#### G1 — Explicit preference succeeds
+
+**Actor:** scenario operator representing a user-selected lighting preference.  
+**Input:** valid initial brightness, valid Lua file, frames at `100` and `105`.  
+**Action:** run the CLI once.  
+**Expected:**
+
+- exit status is `0`;
+- both frames complete;
+- Runtime is not faulted;
+- the Lua status is `Success`;
+- two intents are created for the host-selected behavior and authorized light;
+- the high-priority temporary intent is selected at `100`;
+- it expires at `105`;
+- the persistent fallback is selected at `105`;
+- the original component value remains unchanged because M6 resolves but does not apply intents;
+- stdout matches the checked-in golden expectation byte for byte;
+- stderr is empty.
+
+#### G2 — Script failure is bounded
+
+**Actor:** scenario operator supplying a faulty user behavior script.  
+**Input:** valid initial state and times; Lua source `error("script failure")`.  
+**Action:** run the CLI once.  
+**Expected:**
+
+- exit status is `3`;
+- the Runtime frame still completes;
+- Runtime is not faulted;
+- the Lua status is `RuntimeError`;
+- the diagnostic is present and no longer than the configured bound;
+- no intent from this execution remains;
+- other registered systems still run;
+- stdout and stderr match their stable golden expectations.
+
+These are the mandatory M6 CLI regressions and are implemented both in-process and across fresh executable processes.
+
+### 7. Deterministic Properties
+
+Golden examples are necessary but insufficient. The M6 tests should assert these properties:
+
+#### P1 — Replay identity
+
+For the same executable, arguments, script bytes, and environment-independent inputs:
+
+```text
+exit_status(A) == exit_status(B)
+stdout(A) == stdout(B)
+stderr(A) == stderr(B)
+```
+
+Run the golden success and failure scenarios repeatedly in fresh processes and compare bytes or cryptographic hashes.
+
+#### P2 — Explicit-time causality
+
+Changing only a frame time may change expiration and selection, but must not change initial state, permissions, script source, or unrelated output.
+
+#### P3 — Authority confinement
+
+Every created intent belongs to the host-selected behavior and targets a component for which it currently has write access. Script text cannot choose raw owners, types, or slots.
+
+#### P4 — Transactional script failure
+
+Any non-success Lua execution leaves zero intents created by that execution, while older intents remain unchanged.
+
+#### P5 — Resolution-only behavior
+
+Selected intent values are observable, but component state is unchanged until a future milestone explicitly adds application/effects.
+
+#### P6 — Bounded failure
+
+Malformed, hostile, or excessive Lua source returns one documented status, a bounded diagnostic, and control to the CLI within the test timeout.
+
+#### P7 — Registration-order stability
+
+System execution order and frame phase order remain stable. A Lua error result does not stop later systems because it is not thrown through `System::run`.
+
+#### P8 — Fresh-process independence
+
+One CLI invocation cannot affect the next invocation through cached authority, global mutable scenario state, wall-clock time, or randomness.
+
+Property-based testing is valuable here even without adding a new framework: generate inputs from a fixed `std::mt19937` seed, assert properties, and print the seed plus minimized case data on failure. Any random test must remain exactly reproducible.
+
+## Historical: M6 test base (11 August 2026)
 
 > Historical milestone evidence: M6 is complete. See `COMPLETE_SOLID.md` and `DEVELOPMENT_TRACKING.md` for current Solid v0.1 finalization status.
 
 **Status:** Complete; retained as M6 evidence
-**Date:** August 11, 2026  
+**Date:** August 11, 2026\
 **Scope:** Stage 1, Solid — M6 only
 
-## 1. Testing Position
+### 1. Testing Position
 
 M6 is the first executable demonstration of a user-directed Solid scenario, but it is not yet a study of human outcomes.
 
@@ -27,7 +177,7 @@ Two actors must remain distinct in every test:
 
 This distinction prevents a deterministic engine test from being mistaken for usability or clinical validation.
 
-## 2. Evidence Applied to the Test Design
+### 2. Evidence Applied to the Test Design
 
 The test base uses the following research conclusions:
 
@@ -42,7 +192,7 @@ The test base uses the following research conclusions:
 
 These sources guide scenario construction only. Their samples and methods do not establish a universally preferred environmental response.
 
-## 3. Implemented Minimal User Scenario
+### 3. Implemented Minimal User Scenario
 
 Use one intentionally narrow lighting scenario for M6:
 
@@ -68,99 +218,7 @@ frame 1 at 105 ms: proposal B is expired and proposal A is selected
 
 This one scenario demonstrates explicit input, user control, multiple proposals, priority, lifetime, expiration, frame time, deterministic selection, and replay.
 
-## 4. Implemented CLI Contract
-
-The M6 CLI accepts only the inputs the milestone needs:
-
-```text
-liquid_sim_cli \
-    --initial-brightness <0..100> \
-    --script <lua-file> \
-    --frame-time <milliseconds> [--frame-time <milliseconds> ...]
-```
-
-Implemented rules:
-
-- Require one initial brightness, one script path, and at least one frame time.
-- Interpret every time as monotonic session-relative milliseconds, never wall-clock time.
-- Preserve repeated `--frame-time` values in command-line order.
-- Accept equal consecutive frame times because Runtime already permits them.
-- Reject decreasing times before or through the Runtime without faulting an already-valid run.
-- Read Lua source as bytes and let `LuaBehaviorRunner` enforce its source limit.
-- Do not add a general scenario language, JSON input parser, random seed, event system, or device adapter in M6.
-- Provide `--help`; invalid or incomplete invocations write a bounded diagnostic to standard error and return nonzero, consistent with conventional utility behavior ([POSIX utility conventions](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap01.html)).
-
-### Exit status contract
-
-| Status | Meaning |
-|---:|---|
-| `0` | Every requested frame completed and the Lua execution succeeded. |
-| `2` | CLI usage or scenario input was invalid. |
-| `3` | Lua returned a bounded non-success status; Runtime remained healthy. |
-| `4` | Runtime or host integration failed. |
-
-The exact numeric values are an M6 CLI contract, not a mapping of the internal enum values.
-
-### Output contract
-
-Use deterministic, line-oriented printable ASCII with fixed field order for M6. Bytes outside printable ASCII in diagnostics are escaped as `\\xNN`. Human diagnostics go to standard error and inspectable scenario records go to standard output.
-
-Each run reports:
-
-- normalized initial state;
-- Lua status, bounded diagnostic, and created intent IDs;
-- each frame number and explicit time;
-- completion state and phase counts;
-- expired intent count;
-- requested and selected intent counts;
-- every selected component type, component name, and intent ID;
-- selected typed value, priority, and lifetime when available;
-- final Runtime health.
-
-Do not include wall-clock timestamps, pointer values, absolute build paths, elapsed durations, locale-formatted numbers, unordered-container iteration, or nondeterministic seeds in golden output.
-
-If structured JSON output is added after M6, use unique property names and a deterministic serialization rule. JSON itself does not give semantic significance to object-member order ([RFC 8259](https://datatracker.ietf.org/doc/html/rfc8259)); canonical JSON requires additional constraints such as deterministic property sorting ([RFC 8785](https://datatracker.ietf.org/doc/html/rfc8785)).
-
-## 5. Required End-to-End Golden Scenarios
-
-### G1 — Explicit preference succeeds
-
-**Actor:** scenario operator representing a user-selected lighting preference.  
-**Input:** valid initial brightness, valid Lua file, frames at `100` and `105`.  
-**Action:** run the CLI once.  
-**Expected:**
-
-- exit status is `0`;
-- both frames complete;
-- Runtime is not faulted;
-- the Lua status is `Success`;
-- two intents are created for the host-selected behavior and authorized light;
-- the high-priority temporary intent is selected at `100`;
-- it expires at `105`;
-- the persistent fallback is selected at `105`;
-- the original component value remains unchanged because M6 resolves but does not apply intents;
-- stdout matches the checked-in golden expectation byte for byte;
-- stderr is empty.
-
-### G2 — Script failure is bounded
-
-**Actor:** scenario operator supplying a faulty user behavior script.  
-**Input:** valid initial state and times; Lua source `error("script failure")`.  
-**Action:** run the CLI once.  
-**Expected:**
-
-- exit status is `3`;
-- the Runtime frame still completes;
-- Runtime is not faulted;
-- the Lua status is `RuntimeError`;
-- the diagnostic is present and no longer than the configured bound;
-- no intent from this execution remains;
-- other registered systems still run;
-- stdout and stderr match their stable golden expectations.
-
-These are the mandatory M6 CLI regressions and are implemented both in-process and across fresh executable processes.
-
-## 6. Extended Scenario Corpus
+### 6. Extended Scenario Corpus
 
 | ID | Scenario | Expected invariant |
 |---|---|---|
@@ -190,57 +248,11 @@ These are the mandatory M6 CLI regressions and are implemented both in-process a
 
 Cases already proved directly by M1–M5 unit tests should remain there. M6 cases prove that the executable preserves those contracts at the composition boundary.
 
-## 7. Deterministic Properties
-
-Golden examples are necessary but insufficient. The M6 tests should assert these properties:
-
-### P1 — Replay identity
-
-For the same executable, arguments, script bytes, and environment-independent inputs:
-
-```text
-exit_status(A) == exit_status(B)
-stdout(A) == stdout(B)
-stderr(A) == stderr(B)
-```
-
-Run the golden success and failure scenarios repeatedly in fresh processes and compare bytes or cryptographic hashes.
-
-### P2 — Explicit-time causality
-
-Changing only a frame time may change expiration and selection, but must not change initial state, permissions, script source, or unrelated output.
-
-### P3 — Authority confinement
-
-Every created intent belongs to the host-selected behavior and targets a component for which it currently has write access. Script text cannot choose raw owners, types, or slots.
-
-### P4 — Transactional script failure
-
-Any non-success Lua execution leaves zero intents created by that execution, while older intents remain unchanged.
-
-### P5 — Resolution-only behavior
-
-Selected intent values are observable, but component state is unchanged until a future milestone explicitly adds application/effects.
-
-### P6 — Bounded failure
-
-Malformed, hostile, or excessive Lua source returns one documented status, a bounded diagnostic, and control to the CLI within the test timeout.
-
-### P7 — Registration-order stability
-
-System execution order and frame phase order remain stable. A Lua error result does not stop later systems because it is not thrown through `System::run`.
-
-### P8 — Fresh-process independence
-
-One CLI invocation cannot affect the next invocation through cached authority, global mutable scenario state, wall-clock time, or randomness.
-
-Property-based testing is valuable here even without adding a new framework: generate inputs from a fixed `std::mt19937` seed, assert properties, and print the seed plus minimized case data on failure. Any random test must remain exactly reproducible.
-
-## 8. Stress Strategy
+### 8. Stress Strategy
 
 M6 stress testing should complement, not duplicate, the existing manager stress tests and Lua limit unit tests.
 
-### Tier A — Per-commit deterministic stress
+#### Tier A — Per-commit deterministic stress
 
 Keep this fast enough for normal CTest runs:
 
@@ -252,7 +264,7 @@ Keep this fast enough for normal CTest runs:
 - assert that borrowed component pointers are never retained across structural mutations;
 - set a CTest timeout as a deadlock/infinite-loop ceiling, not as a performance benchmark.
 
-### Tier B — Sanitizer stress
+#### Tier B — Sanitizer stress
 
 Run the existing and M6 stress paths with AddressSanitizer and UndefinedBehaviorSanitizer. ASan detects memory safety errors, while UBSan detects classes such as invalid shifts, misaligned access, and signed overflow ([Clang AddressSanitizer](https://clang.llvm.org/docs/AddressSanitizer.html), [Clang UndefinedBehaviorSanitizer](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html)).
 
@@ -265,7 +277,7 @@ ctest --test-dir build --repeat until-fail:20 -R simulation_cli
 
 CTest provides repeat-until-fail and timeout controls specifically useful for exposing sporadic failures ([CTest documentation](https://cmake.org/cmake/help/latest/manual/ctest.1.html)).
 
-### Tier C — Longer soak
+#### Tier C — Longer soak
 
 Run manually or in scheduled CI:
 
@@ -277,13 +289,13 @@ Run manually or in scheduled CI:
 
 Do not place fragile wall-clock performance thresholds in the ordinary regression suite. Record throughput and peak memory for observation, but fail only on correctness, sanitizer findings, resource-limit violations, timeout, or a large explicitly approved regression.
 
-### Tier D — Fuzzing after the M6 contract is stable
+#### Tier D — Fuzzing after the M6 contract is stable
 
 A narrow fuzz target is appropriate later for the CLI parser or scenario-input decoder. LLVM recommends deterministic, fast, narrow targets that tolerate malformed input and use a small corpus of valid and invalid seeds; combining fuzzing with sanitizers improves defect detection ([LLVM libFuzzer](https://llvm.org/docs/LibFuzzer.html)).
 
 Do not add a fuzzer, corpus folder, or compiler-specific build target during the first M6 slice. The current milestone allows only the small CLI and focused tests, and the parser contract should stabilize first.
 
-## 9. Coverage Matrix
+### 9. Coverage Matrix
 
 | Contract | Unit/regression | CLI golden | Fixed-seed stress | Sanitizers |
 |---|:---:|:---:|:---:|:---:|
@@ -299,7 +311,7 @@ Do not add a fuzzer, corpus folder, or compiler-specific build target during the
 | ID/storage recycling | Existing stress |  | Yes | Yes |
 | Resource bounds | Existing M5 | Selected cases | Yes | Yes |
 
-## 10. Implementation Record
+### 10. Implementation Record
 
 1. The CLI invocation, exit statuses, and output fields are frozen by `tests/test_simulation_cli.cpp`.
 2. CMake builds `liquid_sim_cli` and runs a direct fresh-process regression with a hard timeout.
@@ -309,7 +321,7 @@ Do not add a fuzzer, corpus folder, or compiler-specific build target during the
 6. `tests/test_stress.cpp` runs 1,000 fixed-seed Runtime/Lua frames against a small reference model, including failures and persistent fallback.
 7. The complete M1–M6 suite is run in normal, strict-warning, and sanitizer builds before handoff.
 
-### Build and run
+#### Build and run
 
 ```bash
 cmake -S . -B build
@@ -321,7 +333,7 @@ ctest --test-dir build --output-on-failure
 
 The script file is local input. The CLI reads at most the configured Lua source limit plus one byte so the existing Lua boundary remains responsible for reporting `source_limit_exceeded`.
 
-## 11. M6 Acceptance Gate
+### 11. M6 Acceptance Gate
 
 M6 is ready to call complete only when all of the following hold:
 

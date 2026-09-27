@@ -2,8 +2,8 @@
 
 **Design revision:** 6–7 September 2026. This document explains the proposed
 Stage 2 architecture; it does not activate implementation. Operational scope
-lives in [AGENTS.md](AGENTS.md), status in [tracking](DEVELOPMENT_TRACKING.md),
-and executable requirements in [the roadmap and linked specs](docs/LIQUID_STAGE2_PLAN.md).
+lives in [AGENTS.md](../AGENTS.md), status in [tracking](DEVELOPMENT_TRACKING.md),
+and executable requirements in [the roadmap and linked specs](LIQUID_STAGE2_PLAN.md).
 
 ## Purpose and layers
 
@@ -48,7 +48,7 @@ Agent component; it can simply consume Liquid's authoring surface.
 
 Lua source is executable behavior data. Each lifecycle execution uses a fresh
 bounded VM; persistent state lives in ordinary serializable components.
-The [existing lifecycle contract](docs/LIFECYCLE_SCRIPTING.md) is authoritative
+The [existing lifecycle contract](LIFECYCLE_SCRIPTING.md) is authoritative
 for released execution. The L2 specification proposes an additive selection
 mode so multiple behaviors can use distinct script components.
 
@@ -120,7 +120,7 @@ Solid evidence answers what execution did and observed. The proposed Liquid
 journal correlates authoring, evaluation, approval and operation artifacts.
 Its first implementation is bounded and in-memory; it is not durable recovery,
 permanent audit or tamper evidence. Solid v1 retention also has finite-history
-limits documented in [the event contract](docs/EVENT_FORMAT_V1.md).
+limits documented in [the event contract](EVENT_FORMAT_V1.md).
 
 Trusted registration descriptions are bounded text. User/sensor/model strings
 remain structured data. No conversation/provider credentials are retained by

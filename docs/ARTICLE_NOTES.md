@@ -1,6 +1,6 @@
 # ARTICLE_NOTES.md — Liquid Article Source Notes
 
-> Historical research notes. These do not define current implementation scope; see `AGENTS.md`, `DEVELOPMENT_TRACKING.md`, and `COMPLETE_SOLID.md`.
+> Working notes for the Liquid article (final project). They do not define implementation scope; see `AGENTS.md` and `docs/DEVELOPMENT_TRACKING.md`.
 
 **Status:** Working notes  
 **Purpose:** Raw material for a future article about Liquid, Solid, and Liquid Layer  

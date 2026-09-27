@@ -10,18 +10,18 @@ foundation, released at v0.1.0.
 has landed on `main` (`5979e14`, follow-up `2aee8a4`), and the Liquid
 documentation handoff is integrated. L0–L6 are specified design, not
 implemented and not active; a step becomes active only when the owner records
-its activation in [tracking](DEVELOPMENT_TRACKING.md).
+its activation in [tracking](docs/DEVELOPMENT_TRACKING.md).
 
 Allowed without activation: project Markdown, specifications in existing
 `docs/`, read-only code review, and isolated validation builds. Do not create
 Stage 2 source directories, dependencies, adapters, prompts, or runtime
 behavior. Preserve other worktrees and their unfinished edits. The
-[validation report](docs/LIQUID_DOCUMENTATION_VALIDATION.md) records the dated
+[validation report](docs/history/LIQUID_DOC_VALIDATION.md) records the dated
 docs/code baselines of the design review.
 
 ## Reading and authority
 
-Read [tracking](DEVELOPMENT_TRACKING.md), [the roadmap](docs/LIQUID_STAGE2_PLAN.md),
+Read [tracking](docs/DEVELOPMENT_TRACKING.md), [the roadmap](docs/LIQUID_STAGE2_PLAN.md),
 the common implementation contract, active milestone spec, and cited Solid
 code/tests. All documents use this authority rule:
 
