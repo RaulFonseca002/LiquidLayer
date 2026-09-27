@@ -92,3 +92,14 @@ Future application work owns model routing, user/context meaning, privacy and
 consent, real hardware and human studies. Stage 2 proves deterministic
 mechanics and a local transport boundary, not clinical benefit, remote-service
 security, or indefinitely durable adaptive history.
+
+Current owner rule on human data collection (confirmed 26 September 2026;
+source: [history/STATE_EVALUATION_PT.md](history/STATE_EVALUATION_PT.md) § 14,
+decision 12, line 881 at `bf56159`):
+
+> 12. Nenhuma coleta humana começa antes de protocolo, CEP, plano de dados, avaliação LGPD documentada e RIPD quando o tratamento for de alto risco ou aplicável.
+
+English rendering: no human data collection begins before there is a protocol,
+research ethics committee (CEP) approval, a data plan, a documented LGPD
+(Brazilian General Data Protection Law) assessment, and a data protection
+impact report (RIPD) when the processing is high-risk or otherwise applicable.
