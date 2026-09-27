@@ -1,5 +1,25 @@
 # Liquid documentation validation
 
+> **Historical, not current authority** (banner added 26 September 2026).
+> Formerly `docs/LIQUID_DOCUMENTATION_VALIDATION.md`. Line citations refer to
+> `bf56159`. Counts, file inventories and worktree paths below are as of
+> 6–7 September 2026 (the worktree named below is not a live location). Only
+> relative link targets were updated. Old paths used in the text:
+> `DEVELOPMENT_TRACKING.md` → [docs/DEVELOPMENT_TRACKING.md](../DEVELOPMENT_TRACKING.md),
+> `COMPLETE_SOLID.md` → [docs/history/SOLID_V01_COMPLETION.md](SOLID_V01_COMPLETION.md),
+> `CURRENT_STATE_EVALUATION.md` → [docs/history/STATE_EVALUATION_PT.md](STATE_EVALUATION_PT.md),
+> `Liquid_Concepts_and_Architecture.md` → [docs/LIQUID_CONCEPTS.md](../LIQUID_CONCEPTS.md),
+> `PRODUCT.md` → [apps/visualizer/README.md § Product brief](../../apps/visualizer/README.md#product-brief),
+> `DESIGN.md` → [apps/visualizer/DESIGN.md](../../apps/visualizer/DESIGN.md),
+> `M6_TEST_BASE.md` → [apps/SIMULATION_CLI.md](../../apps/SIMULATION_CLI.md),
+> `ARTICLE_NOTES.md` → [docs/ARTICLE_NOTES.md](../ARTICLE_NOTES.md); the merged
+> guides and policies are listed in [README.md § Documentation map](../../README.md#documentation-map).
+>
+> Superseded passages:
+> - "Owner decisions recorded 26 September" (`bf56159` :209-213): superseded by
+>   [DEVELOPMENT_TRACKING.md § Current status](../DEVELOPMENT_TRACKING.md#current-status),
+>   "Owner decisions recorded 26 September 2026", which is the current record.
+
 **Review dates:** 6–10 September 2026.
 **Scope:** documentation/design hardening, not Stage 2 implementation.
 **Worktree:** `/home/raul/Desktop/tcc/.worktrees/liquid-doc-hardening` on
@@ -201,9 +221,9 @@ performed for it**. A fresh build on the landing revision is a separate step.
   `docs/EVENT_FORMAT_V1.md`. Status text was updated so that no document
   claims hardening is pending or that documentation integration is current.
 - **Preserved material.** The old Stage 2 plan's 28 August external-research
-  notes are a dated appendix in [the roadmap](LIQUID_STAGE2_PLAN.md); the old
+  notes are a dated appendix in [the roadmap](../LIQUID_STAGE2_PLAN.md); the old
   workflow's preflight, conflict report and evaluation metrics are compact
-  sections of [the workflow](HERMES_MULTI_MODEL_DEVELOPMENT_GUIDE.md).
+  sections of [the workflow](../HERMES_MULTI_MODEL_DEVELOPMENT_GUIDE.md).
 - **L3 baseline.** `2aee8a4` fixes stale effect-binding authority but not
   `FrameLog`'s name-keyed selections; L3 target provenance remains proposed.
 - **Owner decisions recorded 26 September.** L0 is not active and no Stage 2

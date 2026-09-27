@@ -12,7 +12,7 @@
 ![Liquid runtime flow: intent proposals are resolved, dispatched through bounded adapters, and committed only after validated feedback.](docs/liquid-runtime-flow.svg)
 
 > [!IMPORTANT]
-> **Current status:** Solid v0.1.0 is released, and the pre-Liquid Solid hardening has landed on `main` (see [tracking](DEVELOPMENT_TRACKING.md)). Liquid L0–L6 are specified but not implemented, and no Stage 2 implementation step is active. See the [roadmap](docs/LIQUID_STAGE2_PLAN.md) for the sequence and the [validation report](docs/LIQUID_DOCUMENTATION_VALIDATION.md) for the dated design-review evidence.
+> **Current status:** Solid v0.1.0 is released, and the pre-Liquid Solid hardening has landed on `main` (see [tracking](docs/DEVELOPMENT_TRACKING.md)). Liquid L0–L6 are specified but not implemented, and no Stage 2 implementation step is active. See the [roadmap](docs/LIQUID_STAGE2_PLAN.md) for the sequence and the [validation report](docs/history/LIQUID_DOC_VALIDATION.md) for the dated design-review evidence.
 
 | Deterministic core | Model-facing boundary | Evidence-first effects |
 | --- | --- | --- |
@@ -31,6 +31,8 @@ Liquid is split conceptually into three layers:
 A local model, hosted model call, Hermes Agent, or another future agent runtime can all be application choices over the same Liquid surface. Liquid itself does not choose the provider or decide when inference is appropriate.
 
 The design test is simple: if all models and agents are turned off, already approved behaviors continue to execute, lose and regain intent resolution, expire/cancel deterministically, dispatch effects, validate feedback, and preserve evidence under Solid alone.
+
+The full layer responsibilities and vocabulary are in [Liquid concepts and architecture](docs/LIQUID_CONCEPTS.md).
 
 ## How Solid works
 
@@ -97,6 +99,8 @@ No L0 code calls an LLM. No new provider/agent/MCP dependency is introduced. See
   - GCC or Clang on Linux
   - AppleClang on macOS
   - MSVC on Windows
+
+Verification status per platform is in [support boundaries](docs/SUPPORT.md#verification-matrix).
 
 ### Strict Release build
 
@@ -172,7 +176,7 @@ cmake -S . -B build/coverage \
 cmake --build build/coverage --target coverage
 ```
 
-The Core coverage target enforces at least **90% line** and **80% branch** coverage over `include/liquid` and `src`. CI also installs the package and compiles independent consumers to validate the exported CMake surface.
+The Core coverage target enforces at least **90% line** and **80% branch** coverage over `include/liquid` and `src` (thresholds set in `CMakeLists.txt:591-596`). CI also installs the package and compiles independent consumers to validate the exported CMake surface.
 
 ## Architecture at a glance
 
@@ -187,7 +191,7 @@ The Core coverage target enforces at least **90% line** and **80% branch** cover
 | Liquid model-facing API | Stage 2 bounded copied capability/runtime views and later proposal/evaluation operations |
 | MCP (future) | Transport adapter over the Liquid semantic API; not the domain model |
 
-Runtime state is confined to its owner thread. Only the bounded feedback sender is intended for concurrent producers. Future model/network surfaces must cross this boundary through immutable copies and owner-controlled mutation requests rather than calling `World`/`Runtime` from arbitrary threads.
+Runtime state is confined to its owner thread. Only the bounded feedback sender is intended for concurrent producers. Future model/network surfaces must cross this boundary through immutable copies and owner-controlled mutation requests rather than calling `World`/`Runtime` from arbitrary threads. The full contract is [PUBLIC_API.md § Threading](docs/PUBLIC_API.md#threading).
 
 ## Documentation map
 
@@ -195,39 +199,42 @@ Runtime state is confined to its owner thread. Only the bounded feedback sender 
 
 - [Liquid Stage 2 plan](docs/LIQUID_STAGE2_PLAN.md) — revised design, ordered L0–L6 specifications, decisions and non-goals
 - [Common implementation contract](docs/LIQUID_IMPLEMENTATION_CONTRACT.md) — shared authority, identities, limits, packaging and verification commands
-- [Documentation validation](docs/LIQUID_DOCUMENTATION_VALIDATION.md) — findings, corrections, code baseline and readiness evidence
 - [Claude/Codex handoff](docs/HERMES_MULTI_MODEL_DEVELOPMENT_GUIDE.md) — implementation, independent review and owner-approved advancement; Hermes optional
-- [Development tracking](DEVELOPMENT_TRACKING.md) — actual status, activation prerequisites and completion evidence
-- [Concepts and architecture](Liquid_Concepts_and_Architecture.md) — Solid/Liquid/Liquid Layer responsibilities and vocabulary
+- [Development tracking](docs/DEVELOPMENT_TRACKING.md) — actual status, activation prerequisites and completion evidence
+- [Concepts and architecture](docs/LIQUID_CONCEPTS.md) — Solid/Liquid/Liquid Layer responsibilities and vocabulary
+- [Article (final project) tracking](docs/ARTICLE_NOTES.md) — article source notes for the final project
 - [AGENTS.md](AGENTS.md) — operational coding-agent scope
 
 ### Solid runtime contracts
 
-- [Public API](docs/PUBLIC_API.md) — supported symbols and ownership rules
+- [Public API](docs/PUBLIC_API.md) — supported symbols and ownership rules, including [§ Threading](docs/PUBLIC_API.md#threading) (owner-thread and feedback boundary)
 - [Lifecycle scripting](docs/LIFECYCLE_SCRIPTING.md) — executable Lua lifecycle contract
-- [Threading model](docs/THREADING.md) — owner-thread and feedback boundary
-- [Adapter contract](docs/ADAPTER_CONTRACT.md) and [adapter guide](docs/ADAPTER_GUIDE.md)
-- [Event format v1](docs/EVENT_FORMAT_V1.md) and [file-store guide](docs/FILE_FORMAT_GUIDE.md)
-- [Replay contract](docs/REPLAY.md) and [replay operations](docs/REPLAY_GUIDE.md)
-- [Security boundary](docs/SECURITY_BOUNDARY.md)
-- [Support boundaries](docs/SUPPORT.md)
-- [Compatibility policy](docs/COMPATIBILITY.md)
+- [Adapter contract](docs/ADAPTER_CONTRACT.md), including [§ Implementing an adapter](docs/ADAPTER_CONTRACT.md#implementing-an-adapter)
+- [Event format v1](docs/EVENT_FORMAT_V1.md), including [§ Using FileEventStore](docs/EVENT_FORMAT_V1.md#using-fileeventstore)
+- [Replay contract](docs/REPLAY.md), including [§ Operations guide](docs/REPLAY.md#operations-guide)
+- [Support boundaries](docs/SUPPORT.md), including [§ Compatibility](docs/SUPPORT.md#compatibility) and [§ Security boundary](docs/SUPPORT.md#security-boundary)
+- [Integration guide](docs/INTEGRATION_GUIDE.md) — source-tree and installed-package consumers
+
+### Applications
+
+- [Solid Scope](apps/visualizer/README.md) — local simulation instrument, including [§ Product brief](apps/visualizer/README.md#product-brief); visual system in [DESIGN.md](apps/visualizer/DESIGN.md)
+- [Simulation CLI](apps/SIMULATION_CLI.md) — text CLI contract and M6 test-base history
 
 ### Project evidence
 
-- [Solid completion audit](COMPLETE_SOLID.md)
-- [Traceability matrix](docs/TRACEABILITY.md)
+- [Traceability matrix](docs/TRACEABILITY.md), including [§ Historical status snapshots](docs/TRACEABILITY.md#historical-status-snapshots)
 - [Changelog](CHANGELOG.md)
+
+### History (dated, not current authority)
+
+- [Solid v0.1 completion audit](docs/history/SOLID_V01_COMPLETION.md)
+- [Pre-Liquid review, verification and hardening closure](docs/history/PRE_LIQUID_REVIEW.md)
+- [Liquid documentation validation](docs/history/LIQUID_DOC_VALIDATION.md) — findings, corrections, code baseline and readiness evidence
+- [State evaluation (Portuguese)](docs/history/STATE_EVALUATION_PT.md)
 
 ## Security and support boundaries
 
-Solid is an in-process framework, not a sandbox for hostile native host code. Hosts, adapters, codecs, and systems are trusted integration code. The Lua boundary is capability-based and bounded, while event decoders validate size, depth, UTF-8, finite-number, version, and sequence limits before allocation or mutation.
-
-Stage 2 does not change that authority model. Model output is untrusted candidate data even when a provider offers structured/constrained generation. Liquid/Solid validation remains authoritative.
-
-The v0.1 file store detects accidental corruption with CRC32C; it does **not** provide encryption, authentication, or tamper evidence. Network filesystems, multiple writers, shared-library ABI stability, and hostile native plugins are unsupported.
-
-Read [SECURITY_BOUNDARY.md](docs/SECURITY_BOUNDARY.md) before integrating external adapters or persisted event files.
+Superseded by [docs/SUPPORT.md § Security boundary](docs/SUPPORT.md#security-boundary), which keeps this section's former text verbatim. Read it before integrating external adapters or persisted event files.
 
 ## License
 

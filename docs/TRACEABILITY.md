@@ -83,3 +83,95 @@ operations; S7 completed that work without changing the public API.
   17 August 2026 run. By owner decision, v0.1.0 acceptance uses the final local
   Linux matrix; no additional remote run or manual cross-browser claim is part
   of this release.
+
+## Historical status snapshots
+
+*(formerly `docs/IMPLEMENTATION_STATUS.md`, "Solid v0.1 Implementation Status"; text verbatim, headings demoted one level. Historical, not current authority. The worktree path below is a historical record, not a live location. Its references to `docs/TRACEABILITY.md` now point to this file; `DEVELOPMENT_TRACKING.md` now lives at [docs/DEVELOPMENT_TRACKING.md](DEVELOPMENT_TRACKING.md) and `COMPLETE_SOLID.md` at [docs/history/SOLID_V01_COMPLETION.md](history/SOLID_V01_COMPLETION.md).)*
+
+> Historical implementation snapshot. This file preserves the 13 August 2026
+> branch outcome and its later landing/finalization updates.
+> `docs/TRACEABILITY.md` and `DEVELOPMENT_TRACKING.md` are authoritative for
+> the completed S0-S7 status and current Stage 2 planning boundary.
+
+Date: 13 August 2026
+
+Branch: `feature/solid-v0.1-finalization`
+
+Worktree: `/home/raul/Desktop/tcc-solid-v01`
+
+### Outcome on 13 August 2026
+
+S0-S5 are complete locally, but the release is not complete and
+`COMPLETE_SOLID.md` remains intentionally open.
+S6 was not started because the headless work has not landed on `main`; the
+owner's dirty `experiment/stage2` checkout was not modified.
+
+Implemented work includes:
+
+- `liquid::Value`, component codecs, immutable encoded intent snapshots,
+  transactional component replacement, generational behavior/intent/type
+  handles, monotonic intent sequencing, owner-thread and overflow guards;
+- stable system name/version registration and failed-system evidence;
+- canonical event values, memory/file stores, CRC32C records, locking,
+  recovery, checkpoints, retention, projection, and record divergence;
+- effect commands/reports, bounded feedback, immediate/deferred feedback,
+  retries, timeout, supersession, late-report authority, indeterminate
+  reconciliation, and a bounded idempotent-dispatch helper;
+- an adapter-interface simulator with latency, normalization, negative
+  outcomes, duplicates, reversed delivery, silence, and crash injection;
+- CMake 0.1.0 static targets, optional Core-only builds, vendored Lua 5.4.8,
+  installed component discovery, consumer examples, CI and documentation.
+
+### Verified locally
+
+- GCC Release with strict warnings-as-errors: 23/23 tests passed.
+- GCC Debug ASan/UBSan with strict warnings-as-errors: 23/23 tests passed,
+  including the 5,000-target/1,000-frame simulator stress case.
+- Core-only with Lua and Simulation disabled: 18/18 tests passed.
+- Clean source-tree and installed-package consumers passed for
+  `Liquid::Core`, `Liquid::Lua`, and `Liquid::Simulation`.
+- Decoder fuzz smoke tests passed; Core coverage passed at 90.8% line and
+  80.1% branch.
+- `git diff --check` passes.
+
+### Release blockers recorded on 13 August 2026
+
+- land the reviewed headless branch on `main` and forward-merge it into the
+  visualization track;
+- complete the S6 Solid Scope schema, bridge hardening, process supervision,
+  incremental rendering, dependency-free self-test, and recorded owner manual
+  browser verification;
+- execute the configured GCC, Clang, AppleClang, and MSVC CI matrix remotely;
+- run the S7 whole-codebase audit and close any new findings.
+
+The authoritative per-stage status is in `docs/TRACEABILITY.md`.
+
+### Update — 17 August 2026
+
+- The headless framework landed on `main`, and the repository was unified on
+  a single `main` branch carrying the engine and Solid Scope; the former
+  `experiment/stage2` track was fast-forwarded into `main` and retired.
+- The remote 8-job CI matrix passed in full on `main`: strict Release on
+  Linux GCC, Linux Clang, macOS AppleClang, and Windows MSVC; ASan/UBSan;
+  TSan; the Core coverage gate; and the Core-only consumers. The Scope
+  Python bridge regressions are Linux-verified (see `docs/SUPPORT.md`).
+- Remaining blockers: the S6 owner manual browser verification record and the
+  S7 whole-codebase audit.
+
+### Finalization — 22 August 2026
+
+- S6 closed with one Runtime, trace schema v2, bounded bridge validation,
+  complete Unix process-group supervision, responsive 1,000-frame rendering,
+  and the dependency-free presentation self-test. The owner accepted Scope as
+  an internal Linux instrument with no browser compatibility promise and
+  waived a repeat manual browser matrix.
+- The S7 audit closed lifecycle intent transaction, checkpoint/retention and
+  restore validation, adapter-registration atomicity, Scope supervision, and
+  package-export findings with regression tests. Independent data-integrity,
+  safety, and delivery-scope reviews found no remaining blocker.
+- The local Linux release matrix passed under GCC 14 and Clang 19, including
+  30/30 full suites, ASan/UBSan, TSan, 18/18 Core-only tests, Core coverage at
+  91% line and 80% branch, three libFuzzer smoke tests, Scope bridge tests,
+  browser self-tests, install, and source/installed consumers.
+- Solid v0.1.0 is complete. Stage 2 is limited to research and approval of its
+  first milestone; no Liquid implementation work is current.

@@ -1,5 +1,20 @@
 # Avaliação do Estado Atual e Direção Futura do Projeto Liquid
 
+> **Historical, not current authority** (banner added 26 September 2026).
+> Formerly `CURRENT_STATE_EVALUATION.md`. Line citations refer to `bf56159`.
+> The body is unchanged (Portuguese original). Current status:
+> [DEVELOPMENT_TRACKING.md](../DEVELOPMENT_TRACKING.md); § 14 decision 12 is
+> carried there as a current owner rule. Old paths used in the text:
+> `COMPLETE_SOLID.md` → [docs/history/SOLID_V01_COMPLETION.md](SOLID_V01_COMPLETION.md),
+> `DEVELOPMENT_TRACKING.md` → `docs/DEVELOPMENT_TRACKING.md`,
+> `Liquid_Concepts_and_Architecture.md` → [docs/LIQUID_CONCEPTS.md](../LIQUID_CONCEPTS.md).
+>
+> Superseded passages:
+> - § 6.1 (`bf56159` :388-395): this authority order is superseded by
+>   [AGENTS.md § Reading and authority](../../AGENTS.md#reading-and-authority).
+>   The line citations in § 6.2 refer to the files as they were at the time of
+>   this evaluation.
+
 > Snapshot histórico: esta avaliação antecede a conclusão de M6 e o plano aprovado S0-S7 para Solid v0.1. Consulte `COMPLETE_SOLID.md` e `DEVELOPMENT_TRACKING.md` para o estado atual.
 
 **Data da avaliação:** 11 de julho de 2026; atualização de M5 em 10 de agosto de 2026

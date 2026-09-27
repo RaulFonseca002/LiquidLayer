@@ -163,7 +163,7 @@ The header is a status bar, not site navigation. It keeps the product name, conn
 
 ### Runtime Rail
 
-The five ordered phases form one connected horizontal instrument. Orange marks current execution, neutral marks recorded completion, and cobalt links the resolved selection to its evidence lane. On narrow screens the rail becomes a vertical ordered sequence rather than shrinking labels.
+The seven ordered phases (begin, expire, input, behavior, decision, resolve, end) form one connected horizontal instrument. Orange marks current execution, neutral marks recorded completion, and cobalt links the resolved selection to its evidence lane. On narrow screens the rail becomes a vertical ordered sequence rather than shrinking labels.
 
 ## 6. Do's and Don'ts
 

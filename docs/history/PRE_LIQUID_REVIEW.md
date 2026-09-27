@@ -1,5 +1,27 @@
 # Pre-Liquid code and product review
 
+> **Historical, not current authority** (banner added 26 September 2026).
+> Formerly `docs/PRE_LIQUID_REVIEW.md`; this file also holds the former
+> `docs/PRE_LIQUID_VERIFICATION.md` and the former
+> `DEVELOPMENT_TRACKING.md` § Pre-Liquid Hardening — September 2026, each
+> verbatim below the review. Line citations refer to `bf56159` unless the text
+> names another revision (the review's source locations refer to its reviewed
+> revision `76f00e4`). Only relative link targets were updated. Current status:
+> [DEVELOPMENT_TRACKING.md](../DEVELOPMENT_TRACKING.md). Old paths used in the
+> text: `COMPLETE_SOLID.md` → [SOLID_V01_COMPLETION.md](SOLID_V01_COMPLETION.md),
+> `PRODUCT.md` → [apps/visualizer/README.md § Product brief](../../apps/visualizer/README.md#product-brief),
+> `DEVELOPMENT_TRACKING.md` → `docs/DEVELOPMENT_TRACKING.md`.
+>
+> Superseded passages:
+> - "Owner decision confirmed during this review" (`bf56159` :16): this
+>   provisional roadmap (MCP at L4, before approval) is superseded by
+>   [LIQUID_STAGE2_PLAN.md § Implementation sequence](../LIQUID_STAGE2_PLAN.md#implementation-sequence)
+>   (L4 journal, L5 approval and operations, L6 local MCP).
+> - § Product boundaries and success criteria, "Retain the chosen L4
+>   external-agent proof" (`bf56159` :182): the L4 placement is superseded by
+>   [LIQUID_STAGE2_PLAN.md § Implementation sequence](../LIQUID_STAGE2_PLAN.md#implementation-sequence);
+>   MCP is now L6.
+
 **Date:** 5 September 2026  
 **Reviewed revision:** `76f00e414445e75dc698a166f1f01b72fadb88f2` (`docs/liquid-stage2-plan`)  
 **Purpose:** assess Solid and the documented Liquid direction before L0 implementation.  
@@ -39,7 +61,7 @@ No new full TSan, coverage, Release, cross-platform, fuzz, or consumer-package m
 
 ### B1 — High: Lua lifecycle argument allocation can abort the host
 
-**Evidence:** [`LuaBehaviorRunner.cpp:1166`](../src/scripting/LuaBehaviorRunner.cpp#L1166), with the lifecycle call entered at line 1323. `push_frame()` and `push_changes()` allocate Lua objects before the callback's `lua_pcall()`, after the protected top-level script call has already returned. An allocation failure there has no enclosing Lua protected call.
+**Evidence:** [`LuaBehaviorRunner.cpp:1166`](../../src/scripting/LuaBehaviorRunner.cpp#L1166), with the lifecycle call entered at line 1323. `push_frame()` and `push_changes()` allocate Lua objects before the callback's `lua_pcall()`, after the protected top-level script call has already returned. An allocation failure there has no enclosing Lua protected call.
 
 **Reproduction:** call `execute_lifecycle()` with an empty `on_components_changed` callback and 16 changes, each containing two 4 KiB strings. With `maxMemoryBytes` set to 16,384, 24,576, 32,768, 65,536, or 131,072, the process terminated with `SIGABRT`. At 8,192 bytes, the earlier protected initialization path instead returned `MemoryLimitExceeded`. The failure is in host argument preparation, not in a deliberately crashing native codec.
 
@@ -51,7 +73,7 @@ No new full TSan, coverage, Release, cross-platform, fuzz, or consumer-package m
 
 ### B2 — High: effect bindings retain authority for obsolete targets
 
-**Evidence:** [`Runtime.hpp:176`](../include/liquid/Runtime.hpp#L176) removes the forward binding when control changes but leaves `componentsByEffectTarget`. Rebinding at line 206 also leaves the former reverse key. [`RuntimeEvidence.cpp:244`](../src/runtime/RuntimeEvidence.cpp#L244) follows that reverse key without verifying that the current binding still names the incoming target. Component removal can leave both indexes holding a stale component handle.
+**Evidence:** [`Runtime.hpp:176`](../../include/liquid/Runtime.hpp#L176) removes the forward binding when control changes but leaves `componentsByEffectTarget`. Rebinding at line 206 also leaves the former reverse key. [`RuntimeEvidence.cpp:244`](../../src/runtime/RuntimeEvidence.cpp#L244) follows that reverse key without verifying that the current binding still names the incoming target. Component removal can leave both indexes holding a stale component handle.
 
 **Reproduced cases:**
 
@@ -65,7 +87,7 @@ No new full TSan, coverage, Release, cross-platform, fuzz, or consumer-package m
 
 ### B3 — High: concurrent duplicate dispatch can execute twice after cache eviction
 
-**Evidence:** [`IdempotentDispatcher.cpp:55`](../src/effects/IdempotentDispatcher.cpp#L55) stores only completion/failure in the shared in-flight entry. Waiting duplicates wake at line 188 and loop back to the bounded outcome cache. Another dispatch can evict the completed outcome before a waiter reacquires the lock.
+**Evidence:** [`IdempotentDispatcher.cpp:55`](../../src/effects/IdempotentDispatcher.cpp#L55) stores only completion/failure in the shared in-flight entry. Waiting duplicates wake at line 188 and loop back to the bounded outcome cache. Another dispatch can evict the completed outcome before a waiter reacquires the lock.
 
 **Reproduction:** with one memory-cache entry and two concurrent-dispatch slots, hold command A while duplicate A calls wait. Finish A and dispatch B so B evicts A. A concurrent probe with 16 duplicate waiters observed two adapter executions of A. This is an overlapping-waiter defect, not a claim that a bounded cache must remember every historical command forever.
 
@@ -75,7 +97,7 @@ No new full TSan, coverage, Release, cross-platform, fuzz, or consumer-package m
 
 ### B4 — High: completed removals can disappear from evidence when callbacks throw
 
-**Evidence:** [`Coordinator.cpp:57`](../src/world/Coordinator.cpp#L57) completes behavior destruction before rethrowing a removal callback's exception. [`World.cpp:59`](../src/world/World.cpp#L59) records the tombstone only after that call returns. Component removal has the same ordering at [`World.hpp:546`](../include/liquid/world/World.hpp#L546).
+**Evidence:** [`Coordinator.cpp:57`](../../src/world/Coordinator.cpp#L57) completes behavior destruction before rethrowing a removal callback's exception. [`World.cpp:59`](../../src/world/World.cpp#L59) records the tombstone only after that call returns. Component removal has the same ordering at [`World.hpp:546`](../../include/liquid/world/World.hpp#L546).
 
 **Reproduction:** register a system whose `on_behavior_removed` throws, clear the initial evidence buffers, and remove its behavior or its required component. A probe using the supported component-codec registration API produced:
 
@@ -92,7 +114,7 @@ remove: exists=0 topology_records=0 component_records=0
 
 ### B5 — Medium: effects failures leave `last_frame_log()` reporting the previous success
 
-**Evidence:** [`Runtime.cpp:231`](../src/runtime/Runtime.cpp#L231) builds a failed `result.frame` and rethrows, bypassing the assignment to `latestFrameLog` at line 274. Failures inside `execute_frame_phases()` have another update path; effects/feedback/persistence failures do not consistently use it.
+**Evidence:** [`Runtime.cpp:231`](../../src/runtime/Runtime.cpp#L231) builds a failed `result.frame` and rethrows, bypassing the assignment to `latestFrameLog` at line 274. Failures inside `execute_frame_phases()` have another update path; effects/feedback/persistence failures do not consistently use it.
 
 **Reproduction:** complete a frame at time 50, then cause an effects failure at time 100. Runtime reports `faulted() == true`, while `last_frame_log()` still has `completed == true` and `now == 50`.
 
@@ -102,7 +124,7 @@ remove: exists=0 topology_records=0 component_records=0
 
 ### B6 — Medium: Solid Scope silently interprets blank brightness as zero
 
-**Evidence:** [`index.html:41`](../apps/visualizer/index.html#L41) disables native form validation while brightness remains required. [`app.js:700`](../apps/visualizer/app.js#L700) converts the raw field with `Number()`, and the later range check accepts `Number("") === 0`.
+**Evidence:** [`index.html:41`](../../apps/visualizer/index.html#L41) disables native form validation while brightness remains required. [`app.js:700`](../../apps/visualizer/app.js#L700) converts the raw field with `Number()`, and the later range check accepts `Number("") === 0`.
 
 **Reproduction:** running the actual `parseScenario()` function with the brightness field cleared returned `initial_brightness: 0` without an error.
 
@@ -114,7 +136,7 @@ remove: exists=0 topology_records=0 component_records=0
 
 ### C1 — Demonstrated performance issue: event appends repeatedly relocate history
 
-[`MemoryEventStore.cpp:55`](../src/events/MemoryEventStore.cpp#L55) reserves `records.size() + events.size()` before each append. [`FileEventStore.cpp:278`](../src/events/FileEventStore.cpp#L278) has the same pattern. For single-event appends on the tested standard library, this defeats geometric vector growth and repeatedly relocates all earlier records.
+[`MemoryEventStore.cpp:55`](../../src/events/MemoryEventStore.cpp#L55) reserves `records.size() + events.size()` before each append. [`FileEventStore.cpp:278`](../../src/events/FileEventStore.cpp#L278) has the same pattern. For single-event appends on the tested standard library, this defeats geometric vector growth and repeatedly relocates all earlier records.
 
 A probe linked against the existing Debug Core library appended minimal `FrameStarted` events to `MemoryEventStore`:
 
@@ -132,7 +154,7 @@ Doubling input took roughly four times as long, consistent with the source-level
 
 ### C2 — Confirmed capacity limitation: checkpoint retention embeds historical growth
 
-[`Replay.cpp:393`](../src/events/Replay.cpp#L393) serializes historical frames, attempts, reports, observations, scripts, and other record arrays into every checkpoint. Retention removes physical records before the checkpoint while those records remain embedded in its payload. [`ValueLimits`](../include/liquid/Value.hpp#L13) permits 4,096 array items and 16,384 total nodes.
+[`Replay.cpp:393`](../../src/events/Replay.cpp#L393) serializes historical frames, attempts, reports, observations, scripts, and other record arrays into every checkpoint. Retention removes physical records before the checkpoint while those records remain embedded in its payload. [`ValueLimits`](../../include/liquid/Value.hpp#L13) permits 4,096 array items and 16,384 total nodes.
 
 A synthetic accepted stream with 3,000 minimal frame-start records could be checkpointed and retained to two physical records, but still had 3,000 embedded historical frame records. After another 1,000 records, constructing the next checkpoint failed with `value node limit exceeded`. The threshold depends on payload size and event mix; this is not a measured 4,000-frame runtime limit.
 
@@ -144,13 +166,13 @@ This is a demonstrated finite-session limitation, not proof of corrupted stored 
 
 ### C3 — Useful simplification: one Lua execution-evidence helper
 
-[`LuaBehaviorRunner.cpp:1433`](../src/scripting/LuaBehaviorRunner.cpp#L1433) and line 1478 duplicate the source hash, hexadecimal rendering, source-retention decision, and execution-evidence construction. Extract one source-private operation and preserve the exact existing evidence bytes. Test parity between `execute()` and `execute_lifecycle()` in full-source and hash-only modes.
+[`LuaBehaviorRunner.cpp:1433`](../../src/scripting/LuaBehaviorRunner.cpp#L1433) and line 1478 duplicate the source hash, hexadecimal rendering, source-retention decision, and execution-evidence construction. Extract one source-private operation and preserve the exact existing evidence bytes. Test parity between `execute()` and `execute_lifecycle()` in full-source and hash-only modes.
 
 The 1,526-line runner contains distinct concerns, but its length alone does not justify a rewrite. Extract the protected lifecycle entry and this evidence operation first. During L0, keep schema validation and manifest assembly in the already planned scripting files; avoid introducing a generic scripting framework to make this file smaller.
 
 ### C4 — Static lifetime concern: the capability cache outlives destroyed behaviors
 
-[`LuaBehaviorRunner.cpp:583`](../src/scripting/LuaBehaviorRunner.cpp#L583) caches descriptions by world and generational behavior ID. The cache is cleared on a world switch, but no same-world removal/eviction path is present. Repeated creation, execution, and destruction in one World can accumulate dead-generation entries even when few behaviors remain live.
+[`LuaBehaviorRunner.cpp:583`](../../src/scripting/LuaBehaviorRunner.cpp#L583) caches descriptions by world and generational behavior ID. The cache is cleared on a world switch, but no same-world removal/eviction path is present. Repeated creation, execution, and destruction in one World can accumulate dead-generation entries even when few behaviors remain live.
 
 Bound or prune this optional acceleration data while preserving current access-revision checks. Eviction must only cause recomputation, never change permissions. Add a behavior-churn check before using the runner for long-lived authoring services. This finding is based on source/lifetime analysis; no heap-growth benchmark was performed.
 
@@ -164,19 +186,19 @@ No packaging rewrite, extra target, speculative folder hierarchy, generalized re
 
 ### D1 — Correct the file-replacement failure promise
 
-[`docs/EVENT_FORMAT_V1.md:11`](EVENT_FORMAT_V1.md#L11) says any retention failure preserves the prior bytes and generation. [`FileEventStore.cpp:163`](../src/events/FileEventStore.cpp#L163) installs the replacement and updates its state before the post-replacement injection and parent-directory flush; failures there fault the store. [`test_event_store.cpp:487`](../tests/test_event_store.cpp#L487) deliberately tests that behavior.
+[`docs/EVENT_FORMAT_V1.md:11`](../EVENT_FORMAT_V1.md#L11) says any retention failure preserves the prior bytes and generation. [`FileEventStore.cpp:163`](../../src/events/FileEventStore.cpp#L163) installs the replacement and updates its state before the post-replacement injection and parent-directory flush; failures there fault the store. [`test_event_store.cpp:487`](../../tests/test_event_store.cpp#L487) deliberately tests that behavior.
 
 Describe the actual commit boundary: failures before replacement preserve the original; after replacement, an error can leave the replacement installed and durability uncertain, so the store faults. Preserve the established recovery behavior rather than changing code to fit the stronger prose. This is a confirmed documentation mismatch, not a newly discovered missing fault-injection test.
 
 ### D2 — Separate historical completion evidence from current status
 
-[`COMPLETE_SOLID.md:18`](../COMPLETE_SOLID.md#L18) and line 196 still describe Stage 2 as research/first-milestone definition. Other sections retain present-tense “issues remain” language even though the top declares the old findings closed and the active docs name L0.
+[`COMPLETE_SOLID.md:18`](SOLID_V01_COMPLETION.md#L18) and line 196 still describe Stage 2 as research/first-milestone definition. Other sections retain present-tense “issues remain” language even though the top declares the old findings closed and the active docs name L0.
 
 Preserve the historical audit, mark the old findings and conclusions as dated, and link their closure evidence. Point current scope to `DEVELOPMENT_TRACKING.md` and the L0 spec. A completion assessment is evidence about a revision, not a permanent assertion that later reviews cannot find defects. Avoid repeating full milestone status and acceptance lists in every overview document.
 
 ### Product boundaries and success criteria
 
-- Rename the heading of [`PRODUCT.md`](../PRODUCT.md) to make its Solid Scope scope explicit. It currently describes the owner-operated simulation instrument, not the whole Liquid Layer product.
+- Rename the heading of [`PRODUCT.md`](../../apps/visualizer/README.md#product-brief) to make its Solid Scope scope explicit. It currently describes the owner-operated simulation instrument, not the whole Liquid Layer product.
 - Keep the engine proof concrete: intent survival, distinction between desired and observed state, deterministic evaluation, bounded authority, and interchangeable external consumers. These are meaningful achievements already reflected in the architecture.
 - Keep reduced cognitive friction as an application hypothesis to evaluate. Before Stage 3 implementation, select one support scenario with intended users, manual override/stop behavior, and observable measures of usefulness, unwanted interventions, correction effort, and user burden. Runtime correctness alone does not demonstrate that benefit.
 - Retain the chosen L4 external-agent proof: an external client discovers scoped capabilities, submits a proposal for local validation/evaluation, and inspects bounded results without mutating live World. Hermes remains one consumer, with another client or conformance path guarding against accidental dependence on it.
@@ -234,3 +256,196 @@ Verification at the closing revision (local, Linux, GCC):
 - the simulation-adapter test, which took about 148 s at the reviewed revision, completes in about 1.3 s after C1 in the same Debug profile.
 
 Not run locally: ThreadSanitizer, coverage, Release, cross-platform, fuzz, and consumer-package matrices (Clang is not installed on this machine; the standing CI matrix covers TSan, coverage, Release, and Core-only consumers on push). This closure does not create a milestone approval and does not advance L0.
+
+## Hardening verification — 5 September 2026
+
+*(formerly `docs/PRE_LIQUID_VERIFICATION.md`, "Pre-Liquid hardening verification"; text verbatim, headings demoted one level. Only link targets were updated.)*
+
+> **Banner (added 26 September 2026):** the line citations in this section
+> (for example `AGENTS.md:21`, `DEVELOPMENT_TRACKING.md:643`, `AGENTS.md:69`)
+> refer to the files at the verified commit `5979e14`, not to the current files.
+>
+> Superseded passages:
+> - § Merge and advancement gates, "To proceed" list
+>   (`bf56159` `docs/PRE_LIQUID_VERIFICATION.md`:92-97): this list is superseded by
+>   [DEVELOPMENT_TRACKING.md](../DEVELOPMENT_TRACKING.md): steps 1–3 are done
+>   (the planning documents and hardening are on `main`), and L0 is specified but
+>   not active until the owner activates it.
+
+Date: 5 September 2026.
+
+Reviewed commit: `5979e149e042e9bc0c4089a3fbd24693e11b5399`, branch `fix/pre-liquid-hardening`.
+
+Updated after the authorized binding fix in the working tree based on that commit.
+
+### Verdict
+
+**The remaining binding-lifecycle defect is fixed, and both full local test suites pass.** No code finding from this verification remains open. L0 kickoff still awaits integration of the already-approved Stage 2 documentation and the normal CI/merge gates below.
+
+The follow-up preserves rejection of duplicate live bindings and verifies that authoritative observations reach the replacement component.
+
+### Binding-lifecycle finding and resolution
+
+Original severity: medium. Related finding: B2. Status: fixed in the working tree.
+
+Before the follow-up, [`Runtime::bind_effect_component`](../../include/liquid/Runtime.hpp#L208) checked `componentsByEffectTarget` before retiring entries for removed components. Dead-binding retirement occurred during [`run_frame()`](../../src/runtime/Runtime.cpp#L214).
+
+Reproduced against the reviewed strict Core library before the fix:
+
+1. Bind a component to an external target.
+2. Remove the component and create its replacement.
+3. Bind the replacement to the same target without running an intervening frame.
+
+```text
+immediate rebind failed: effect route and target are already bound
+rebind after frame succeeded
+```
+
+The old reverse entry refers to a dead component generation. It should not reserve that physical target against an explicitly bound replacement.
+
+**Applied correction:** use the existing `current_effect_binding()` lookup before the uniqueness check. It retires a dead entry for the requested target and returns a live binding for conflict validation. All validation and binding changes remain on the owner thread.
+
+**Added regression:** [`test_runtime_effects.cpp:1749`](../../tests/test_runtime_effects.cpp#L1749) removes, recreates, and explicitly rebinds to the same target without an intervening frame. It also verifies rejection of duplicate live bindings and correct observation projection. The test failed on the pre-fix code with the original exception (exit 42), then passed all six assertions with the fix (exit 0). The previous removal test ran frames before rebinding and therefore missed this sequence.
+
+### Documentation integration required before implementation
+
+The hardening branch starts from `origin/main` at `af5af08`. The original review used the documentation branch at `76f00e4`. Their engine baseline was the same, but the planning documents have not been integrated into the hardening branch.
+
+Consequently:
+
+- `docs/LIQUID_L0_IMPLEMENTATION_SPEC.md` and `docs/LIQUID_STAGE2_PLAN.md` are absent here.
+- [`AGENTS.md:21`](../../AGENTS.md#L21) still limits Stage 2 to research and milestone approval.
+- [`DEVELOPMENT_TRACKING.md:643`](../DEVELOPMENT_TRACKING.md#L643) still says no Liquid implementation scope is approved.
+
+Bring the already-approved L0 specification, Stage 2 plan, and operational context from `docs/liquid-stage2-plan` into the combined development state. Preserve the new hardening evidence when reconciling `DEVELOPMENT_TRACKING.md`; it is the only path changed by both branches relative to their common base. This is reconciliation of existing decisions, not a request to approve the architecture again.
+
+Keep the owner's selected external-agent integration priority. Keep the checkpoint-history limitation deferred to the separately specified work needed before long-running operation; it is not an additional L0 blocker.
+
+### Verification performed
+
+| Check | Fresh result |
+| --- | --- |
+| GCC Debug build with strict warnings and warnings as errors | Passed |
+| Full strict CTest suite after the fix | 30/30 passed, 9.33 seconds |
+| GCC ASan/UBSan Debug build | Passed |
+| Full ASan/UBSan CTest suite after the fix | 30/30 passed, 19.11 seconds |
+| Immediate replacement-binding regression | Failed before the fix; passed after it |
+| Independent reviews of the prior hardening plus follow-up diff review | No further blocking implementation findings |
+
+Commands:
+
+```sh
+cmake --build build -j 2
+ctest --test-dir build --output-on-failure -j 4
+cmake --build build_sanitized -j 2
+ctest --test-dir build_sanitized --output-on-failure -j 4
+```
+
+The existing build caches were checked: strict warnings and warnings-as-errors were enabled in both; ASan/UBSan was enabled in `build_sanitized`.
+
+### Findings verified as addressed
+
+- **B1:** lifecycle callback lookup, argument construction, and execution are inside a protected Lua call. VM ownership and buffered transaction failure paths are preserved. The new tests exercise the original memory budgets, queued proposals/watches, and recovery.
+- **B2:** superseded targets no longer project into rebound components; removed bindings are retired before feedback projection. The follow-up also permits immediate explicit rebinding to a replacement component.
+- **B3:** waiters consume the shared completed outcome independently of LRU eviction, with command-identity checks and synchronized publication. Its stress regression improves coverage, although the completion/eviction wake-up ordering remains scheduler-dependent; source review is part of the evidence.
+- **B4/B5:** completed removals retain evidence despite callback exceptions, and effects-path failures publish the failed frame log. New tests cover replay and failures while recording failure evidence.
+- **B6:** blank brightness is rejected and explicit zero remains valid; the parser cases run in the full suite.
+- **C1/C3/C4:** event records grow geometrically, Lua evidence emission is shared, and the capability cache is bounded with revision-aware recomputation.
+- **C2/D1/D2:** the finite-session checkpoint limitation is documented and tested; retention's replacement boundary and historical audit/product scope are clarified. The separate Stage 2 branch discrepancy still needs reconciliation as described above.
+
+Optional follow-up coverage, not additional blockers: cache overflow with 257 simultaneously live owners, and Lua lifecycle memory exhaustion after queuing cancellation of an existing intent.
+
+### Merge and advancement gates
+
+Remote CI status could not be verified: GitHub CLI returned `Could not resolve to a Repository with the name 'RaulFonseca002/tcc'`. This does not establish either a passing or a failing remote run. No fresh local Clang, TSan, coverage, Release, cross-platform, fuzz, or consumer-package matrix was run.
+
+[`AGENTS.md:69`](../../AGENTS.md#L69) requires the strict suite and green remote CI through the normal merge path. The checked workflow runs on `main` pushes, pull requests, or manual dispatch; merely pushing this short-lived branch does not trigger that matrix. Correct the closure note's broader “on push” wording when updating its evidence.
+
+To proceed:
+
+1. **Completed:** fix the immediate-rebind case and add its regression.
+2. Integrate the approved planning documents while preserving hardening closure evidence.
+3. Reverify the combined revision and confirm the standing CI/merge gates.
+4. Start the bounded L0 implementation from the integrated `main`, with headers and tests first.
+
+No other defect identified in this verification requires widening L0 or implementing the later roadmap now.
+
+## Hardening closure record
+
+*(formerly `DEVELOPMENT_TRACKING.md` § Pre-Liquid Hardening — September 2026, lines 52–122 at `bf56159`; text verbatim below its heading. Only the link target was updated. The C5 fixture rule is also recorded in [LIQUID_L0_IMPLEMENTATION_SPEC.md](../LIQUID_L0_IMPLEMENTATION_SPEC.md).)*
+
+> **Banner (added 26 September 2026):** clarification of a passage above.
+> - [§ Closure — 5 September 2026](#closure--5-september-2026), C1 row
+>   (`bf56159` `docs/PRE_LIQUID_REVIEW.md`:220): the closure Debug probe is a
+>   re-measurement at closure; the "before" figures
+>   differ from the review's table in § C1 because they come from a separate run.
+
+**Status:** Done (code and documentation corrections landed on
+`fix/pre-liquid-hardening`, merged to `main` in `3e202ef`; not a milestone
+approval and does not advance L0).
+
+`docs/PRE_LIQUID_REVIEW.md` (5 September 2026, reviewed revision `76f00e4`)
+audited Solid before L0 implementation and reproduced defects that the existing
+strict suite did not cover. Each finding below has a regression that fails on
+the reviewed code and passes at the closing commit.
+
+| Finding | Severity | Closing commit | Regression |
+|---|---|---|---|
+| B1 Lua lifecycle argument allocation could abort the host | High | `7d3ca72` | `test_lua_lifecycle`: "lifecycle change arguments exhausting Lua memory yield a bounded result", "lifecycle argument exhaustion after on_start commits nothing", "frame argument construction never escapes the Lua memory bound" |
+| B2 effect bindings retained authority for obsolete targets | High | `d39580a` | `test_runtime_effects`: "rebinding an effect component retires the former target's authority", "converting an external component to internal control drops old-target authority", "removed and recreated components do not inherit stale effect bindings", "stale queued reports for a superseded target do not project" |
+| B3 concurrent duplicate dispatch could execute twice after cache eviction | High | `e186aa6` | `test_idempotent_dispatcher`: "overlapping duplicate waiters consume the leader outcome after cache eviction", "duplicate waiters validate the shared leader outcome against their own command" |
+| B4 completed removals vanished from evidence when callbacks threw | High | `db276ce` | `test_world`: "throwing behavior removal callbacks still record the completed tombstone", "throwing component removal callbacks still record the removed component"; `test_runtime_effects`: "removal tombstones survive throwing callbacks into replayed evidence", "removal tombstones from throwing callbacks drain on the next frame" |
+| B5 effects failures left `last_frame_log()` stale | Medium | `ee10106` | `test_runtime_effects`: "effects-path frame failures publish the failed frame log" |
+| B6 Solid Scope accepted blank brightness as zero | Medium | `d4f4a9c` | `visualizer_selftest` (parser table in `runParserSelfTest`) |
+| C1 event appends relocated history on every append | Perf | `759396a` | `test_event_store`: "single-record appends keep order and count across thousands of records"; local Debug probe 2k/4k/8k appends: 0.50/1.97/7.93 s before, 0.015/0.012/0.022 s after |
+| C3 duplicated Lua execution-evidence construction | Simplification | `35e5af4` | `test_lua_behavior`: "execute and execute_lifecycle emit byte-identical execution evidence" |
+| C4 capability cache outlived destroyed behaviors | Lifetime | `35e5af4` | `test_lua_behavior`: "capability cache stays bounded under behavior churn in one world" |
+| C2 checkpoint retention embeds historical growth | Documented limitation | `ba8269c` | `test_replay`: "checkpoint payloads embed retained history until the value node limit"; `docs/EVENT_FORMAT_V1.md` known-limitation note |
+| D1 retention failure promise overstated | Docs | `ba8269c` | `docs/EVENT_FORMAT_V1.md` commit-boundary wording matches `test_event_store` post-replacement case |
+| D2 / product scope | Docs | `ba8269c` | `COMPLETE_SOLID.md` dated status/verdict; `PRODUCT.md` heading scoped to Solid Scope |
+
+Public API additions: `World::component_exists(ComponentTarget)` (non-throwing
+liveness query), `LuaBehaviorRunner::cached_capability_entries()` (diagnostic),
+and `IdempotentDispatcher::waiting_duplicate_dispatches()` (diagnostic count
+of calls parked on an in-flight duplicate). No new targets, folders, dependencies, or Event Format v1 changes.
+
+Notes carried forward:
+
+- C2 is a finite-session limitation, not corrupted evidence. Resolve bounded
+  current state versus historical evidence as a separate checkpoint design
+  decision before long-running operation; keep it out of L0.
+- C5: new L0 fixtures should use public `register_component<T>(name, version,
+  ComponentCodec<T>)` with the Lua codec, not the legacy codec-less overload
+  that test targets enable privately; the pre-Liquid regressions already follow
+  this.
+- The B3 regression holds the leader and evictor in the adapter, waits until
+  every duplicate is parked (`waiting_duplicate_dispatches()`), then completes
+  leader and evictor back to back and repeats the scenario. Parking is forced
+  by synchronization, so a second adapter call can only be the eviction defect;
+  the wake-up versus eviction order is internal, so the fix is asserted
+  schedule-independent across repetitions (the reviewed code fails within two
+  iterations). ThreadSanitizer coverage relies on the CI `tsan`
+  job (Clang is not installed on the development machine).
+
+Verification at the closing revision: strict Debug GCC build with
+`LIQUID_ENABLE_STRICT_WARNINGS=ON` and `LIQUID_WARNINGS_AS_ERRORS=ON`, full
+`ctest`, and the ASan/UBSan subset for Lua behavior/lifecycle, Runtime/effects,
+World, event store, replay, and idempotent dispatcher (results recorded in the
+closure note of `docs/PRE_LIQUID_REVIEW.md`).
+
+Follow-up verification found that a removed component still reserved its effect
+target until another frame ran. The follow-up to `5979e14` (committed as
+`2aee8a4`) reuses
+the current-binding lookup before checking target uniqueness, retiring the dead
+entry while preserving rejection of duplicate live bindings. The regression
+"recreated components can immediately reclaim their effect target" failed on
+the pre-fix code with `effect route and target are already bound`, then passed
+all six assertions after the fix, including observation projection and live
+target conflict rejection. The full strict Debug and ASan/UBSan suites each
+passed 30/30. See `docs/PRE_LIQUID_VERIFICATION.md` for the planning-document
+integration and CI gates it listed before L0; the planning-document
+integration is now done (see [Current status](../DEVELOPMENT_TRACKING.md#current-status)).
+
+Later on `main`: `f3ef421` added 25 blind contract-level Core coverage tests
+written from public headers/docs (Core line coverage 90.1% → 93.49% with gcovr
+8.3; strict suite 30/30; independently reviewed by Codex).

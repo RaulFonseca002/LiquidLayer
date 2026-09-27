@@ -59,4 +59,4 @@ Public code includes only installed `liquid/` headers and refers only to symbols
 
 Runtime/world state is confined to its owner thread. Only the bounded feedback sender is intended for concurrent producers. Treat returned const component references as short-lived borrows and use transactional update/replace APIs for mutation.
 
-See [PUBLIC_API.md](PUBLIC_API.md), [THREADING.md](THREADING.md), and [COMPATIBILITY.md](COMPATIBILITY.md) before upgrading a 0.x dependency.
+See [PUBLIC_API.md](PUBLIC_API.md) (including [§ Threading](PUBLIC_API.md#threading)) and [SUPPORT.md § Compatibility](SUPPORT.md#compatibility) before upgrading a 0.x dependency.

@@ -1,7 +1,7 @@
 # CLAUDE.md — Liquid implementation handoff
 
 Read [AGENTS.md](AGENTS.md) first; it owns operational scope and the shared
-authority rule. [Tracking](DEVELOPMENT_TRACKING.md) identifies activated steps.
+authority rule. [Tracking](docs/DEVELOPMENT_TRACKING.md) identifies activated steps.
 **No implementation step is active unless the owner activates one. Do not
 start L0 automatically.** Solid hardening and the L0–L6 design documents are
 on `main`; L0–L6 remain specified, not implemented.

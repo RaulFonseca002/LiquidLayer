@@ -7,7 +7,8 @@ Atech event/action envelope.
 
 Status: **Milestone B done** — CSI proof (A) plus on-device heart-rate/breathing
 vitals, screen A, and NeoPixel/speaker/button (B). Milestone C (screen B Liquid
-rail + host bridge) is next. See `~/.claude/plans/…nygaard.md` for the full plan.
+rail + host bridge) is deferred. Current status: the
+[data-first redesign in `STAGES.md`](STAGES.md#data-first-redesign-2026-09-06-1400-).
 
 This folder is deliberately outside Liquid core (`include/`, `src/`, `apps/`,
 `tests/`) and adds nothing to the CMake build. A later round turns it into an
@@ -115,8 +116,10 @@ calibration) and on the host (`host/presence_host.py`, which also records). Find
 
 ## Rebuild rules (after the frozen-display incident, 2026-09-05)
 
-The node is being rebuilt stage by stage; see `STAGES.md` for the gates. What
-the incident taught, now design rules:
+The node is being rebuilt stage by stage; see `STAGES.md` for the gates. The
+freeze itself was later root-caused to the SDK's `Serial.setTxTimeoutMs(0)`
+(see [STAGES.md § TRUE ROOT CAUSE](STAGES.md#true-root-cause-2026-09-06-1020-settxtimeoutms0-not-cdc-on-boot));
+the rules below were learned during the incident and remain design rules:
 
 - A warm chip reset does not reset the TFT panel (no reset line, keeps power);
   only a cold power cycle does. So every stage is gated on **warm resets**:
@@ -155,8 +158,11 @@ builds on Arduino core 2.0.17 (ESP-IDF 4.4) instead of ESP-IDF 5.4:
 
 - The open SDK declares actions but generates no serial reader; `atech_actions.h`
   provides one. Values arrive JSON-encoded twice (`"value":"{\"ip\":…}"`), the bus unescapes them.
-- `Serial.setTxTimeoutMs(0)` from codegen means a burst of lines overflows the
-  USB-CDC buffer and drops bytes; modules must pace output (one line per loop pass).
+- `Serial.setTxTimeoutMs(0)` from codegen: superseded by
+  [STAGES.md § TRUE ROOT CAUSE](STAGES.md#true-root-cause-2026-09-06-1020-settxtimeoutms0-not-cdc-on-boot)
+  and [the skill README § Findings](../.claude/skills/atech/README.md#findings-worth-knowing-atech-sdk-100a7-14-port-board-2026-09-05)
+  (it makes the USB write spin forever with no host reading; `deploy.sh` applies a
+  bounded timeout; still pace output to one line per loop pass).
 - `atech send` closes the port immediately, so acks are only visible in a
   persistent monitor (`monitor.py --send`). **Opening the serial port resets
   the board** (USB-JTAG-serial DTR/RTS), so every monitor session starts with a

@@ -8,9 +8,9 @@ meaning-changing controls. It does not activate or expand an implementation mile
 **Status:** L0–L6 specified, not implemented; no step is active until the owner
 separately activates one.
 **Code foundation:** Solid v0.1 plus the pre-Liquid hardening now on `main`
-(`5979e14`, follow-up `2aee8a4`; see [tracking](../DEVELOPMENT_TRACKING.md)).
+(`5979e14`, follow-up `2aee8a4`; see [tracking](DEVELOPMENT_TRACKING.md)).
 The dated design-review baselines are in
-[the validation report](LIQUID_DOCUMENTATION_VALIDATION.md).
+[the validation report](history/LIQUID_DOC_VALIDATION.md).
 
 ## Purpose and boundary
 
