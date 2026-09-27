@@ -164,6 +164,18 @@ build: `ctest --test-dir build/strict -R '^lua_(schema|manifest)$' --output-on-f
 Also run existing scripting/lifecycle tests and all common gates. Do not claim
 execution permission from merely matching an expression or validating source text.
 
+Fixture registration (documentation correction, 26 September 2026, from
+[pre-Liquid review finding C5](history/PRE_LIQUID_REVIEW.md#c5--keep-new-tests-on-the-supported-consumer-boundary)):
+new L0 fixtures (1) register each component with the public codec overload
+`World::register_component<T>(TypeName schemaName, SchemaVersion schemaVersion, ComponentCodec<T> codec)`,
+passing the World `ComponentCodec<T>`, and (2) expose it to Lua separately
+through `LuaBehaviorRunner::expose_component<T>(ComponentType<T> type, TypeName scriptName, LuaComponentCodec<T> codec)`,
+passing the returned `ComponentType<T>`, the Lua script name and a
+`LuaComponentCodec<T>` (as in `tests/test_lua_lifecycle.cpp`:52-55 and :97).
+They do not use the legacy codec-less `register_component<T>(TypeName)`
+overload that the test targets enable privately through
+`LIQUID_ENABLE_LEGACY_INTERNAL_COMPONENT_REGISTRATION`.
+
 ## Allowed files and exit
 
 New: `include/liquid/scripting/LuaValueSchema.hpp`,
