@@ -6,8 +6,11 @@
 (`5979e14`, merged in `3e202ef`; follow-up `2aee8a4`). See
 [Pre-Liquid Hardening — September 2026](#pre-liquid-hardening--september-2026).
 **Liquid documentation:** L0–L6 specified and integrated on `main`.
-**Implementation activation:** none. L0–L6 code remains unimplemented, and no
-Stage 2 step is active until the owner records its activation below.
+**Implementation activation:** L0 activated by the owner on 29 September 2026
+(see the [L0 activation record](#l0-activation-record)); implemented on
+`feat/liquid-l0`, Codex review passed, and approved by the owner on 29 September
+2026. No step is active now. L1–L6 remain unimplemented and inactive until the
+owner activates the next one.
 
 On 6 September 2026 the owner authorized a complete documentation review:
 specify every retained milestone; allow evidence-backed Solid change proposals;
@@ -63,7 +66,7 @@ limits and gates; each spec owns its milestone's additions and test steps.
 
 | Milestone | Deliverable | Dependencies | Status |
 | --- | --- | --- | --- |
-| [L0](LIQUID_L0_IMPLEMENTATION_SPEC.md) | Lua schemas and capability manifests | Reconciled Solid baseline | Specified; inactive |
+| [L0](LIQUID_L0_IMPLEMENTATION_SPEC.md) | Lua schemas and capability manifests | Reconciled Solid baseline | Done; owner-approved 29 September 2026 |
 | [L1](LIQUID_L1_IMPLEMENTATION_SPEC.md) | Host-selected scope and immutable proposals | L0 | Specified; inactive |
 | [L2](LIQUID_L2_IMPLEMENTATION_SPEC.md) | Isolated lifecycle evaluation | L1 | Specified; inactive |
 | [L3](LIQUID_L3_IMPLEMENTATION_SPEC.md) | Scoped current truth and frame evidence | L2 | Specified; inactive |
@@ -83,8 +86,70 @@ and tests, Codex reviews, then the owner approves progression.
 Completion records contain focused red/green evidence, strict-suite commands
 and results, review findings and closure, relevant sanitizer/package evidence,
 and the owner decision. Never pre-fill approvals, test totals or remote CI.
-No step has been activated, and no implementation steps have completion
-records yet.
+
+### L0 activation record
+
+| Field | Value |
+| --- | --- |
+| Step | L0 — Lua schemas and capability manifests (L0.1–L0.4) |
+| Owner activation | 29 September 2026, via Discord (Hermes run `tcc-l0-2026-09-29`) |
+| Branch | `feat/liquid-l0` (worktree `.worktrees/liquid-l0`) |
+| Base SHA | `b308b488657cb6f41bdbe34878dc8502b5576661` |
+| Specification revision | [LIQUID_L0_IMPLEMENTATION_SPEC.md](LIQUID_L0_IMPLEMENTATION_SPEC.md) at the base SHA |
+| Prerequisites | Reconciled Solid baseline on `main`; no earlier Stage 2 step |
+| Implementer / reviewer / approver | Claude / Codex / owner |
+
+Allowed-file subset. New: `include/liquid/scripting/LuaValueSchema.hpp`,
+`include/liquid/scripting/LuaCapabilityManifest.hpp`,
+`src/scripting/LuaValueSchema.cpp`, `src/scripting/LuaCapabilityManifest.cpp`,
+`tests/test_lua_schema.cpp`, `tests/test_lua_manifest.cpp`, `ARCHITECTURE.md`.
+Existing: `include/liquid/scripting/LuaBehaviorRunner.hpp`,
+`src/scripting/LuaBehaviorRunner.cpp`, `tests/test_lua_behavior.cpp`,
+`tests/test_lua_lifecycle.cpp`, `CMakeLists.txt`,
+`examples/lua_consumer/main.cpp`, this file, `AGENTS.md` (Current work only),
+`docs/PUBLIC_API.md`, `docs/TRACEABILITY.md`, `CHANGELOG.md` (Unreleased).
+Forbidden: World, Runtime, events/effects, `third_party/`, `.github/`, `cmake/`,
+the L0–L6 spec texts, new dependencies, new library targets, version bumps.
+
+### L0 decisions — Hermes adjudications, 29 September 2026
+
+Binding clarifications of the spec recorded for this step (not owner approval):
+
+1. "No new CMake target" means no new library or installed target; the
+   `lua_schema` and `lua_manifest` test executables are allowed.
+2. A write-schema failure in a proposal is `InvalidProposal`; a read-schema
+   failure on a readable snapshot during a run is `HostError`.
+3. `Range` is a value outside declared bounds or not in the enum; `Limit` is a
+   value over a fixed L0 ceiling.
+4. A manifest `now` outside the Lua integer range is `HostError`.
+5. Any `Binding::snapshot` failure, including a codec encode exception, is
+   `SnapshotUnavailable`; any other host exception is `HostError`.
+6. `LuaValueSchema.hpp` forward-declares `LuaValue`; callers of
+   `capability_manifest` include `LuaCapabilityManifest.hpp`, as the example does.
+7. New L0 diagnostics end in `...` when truncated; legacy diagnostics stay
+   byte-identical.
+8. `LuaModelBindingMetadata` is a validating class that cannot be constructed
+   without both schemas; `symmetric_metadata` exists.
+
+### L0 completion record
+
+| Evidence | Result |
+| --- | --- |
+| RED (stubs, strict GCC build 0 warnings) | `lua_schema` 1/19 cases passed, `lua_manifest` 4/30 passed; failures were behavioral assertions |
+| GREEN focused | `ctest --test-dir build/strict -R '^lua_(schema\|manifest)$' --output-on-failure`: `lua_schema` 19/19 (511 assertions), `lua_manifest` 30/30 (452 assertions) |
+| Correction cycle 1 (review B1) | Schema-owned bytes now count toward the 1 MiB logical limit. The new `L0.4` boundary case failed first (1 MiB + 1 accepted), then passed; `lua_schema` 19/19 (511), `lua_manifest` 31/31 (463) |
+| Correction cycle 2 (review B3, B4) | Read values follow the contract logical accounting, and the fixed manifest and per-capability fields are charged. The new numeric-value case and the rewritten exact 1 MiB case failed first, then passed; `lua_manifest` 32/32 (470) |
+| Strict GCC suite | `ctest --test-dir build/strict --output-on-failure`: 32/32, 0 warnings |
+| Consumers | Core-only 18/18; installed and source-tree consumers 3/3 each |
+| Gates | G8–G13: 0 violations, 0 include cycles; `git diff --check` clean |
+| GCC sanitizers | ASan/UBSan (`build/asan`, `-DLIQUID_ENABLE_SANITIZERS=ON`): 32/32, 0 sanitizer errors; TSan (`build/tsan`, `-DLIQUID_ENABLE_THREAD_SANITIZER=ON`): 32/32, 0 warnings |
+| Clang, coverage | Unverified locally (owner rule: GCC only, no tool installs; Clang/gcovr not installed) |
+| Remote CI | Pending |
+| Codex review | Round 1 NEEDS_CHANGES (B1 schema-owned bytes, B2 status wording); round 2 NEEDS_CHANGES (B3 value accounting, B4 whole-manifest fields); round 3 PASS, no blocking findings, all R1–R6 and AC-1–AC-11 pass |
+| Owner decision | Approved 29 September 2026 (Discord), with authorization to commit and merge |
+
+The GREEN and sanitizer evidence above was reproduced by Hermes; Codex reviewed
+the diff and evidence independently (read-only).
 
 ## Liquid Layer
 

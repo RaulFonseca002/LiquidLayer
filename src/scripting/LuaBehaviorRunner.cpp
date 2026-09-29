@@ -1,4 +1,5 @@
 #include "liquid/scripting/LuaBehaviorRunner.hpp"
+#include "liquid/scripting/LuaCapabilityManifest.hpp"
 
 extern "C" {
 #include <lauxlib.h>
@@ -7,6 +8,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -458,6 +460,84 @@ void measure_lua_value(
     }
 }
 
+// Process-wide so manifests captured by different runners never share an id.
+std::atomic<std::uint64_t> NextRunnerId{1};
+
+// New L0 diagnostics end in "..." when truncated; legacy ones keep
+// bounded_diagnostic.
+std::string bounded_l0_diagnostic(std::string_view diagnostic) {
+    if (diagnostic.size() <= LuaMaxManifestDiagnosticBytes)
+        return std::string(diagnostic);
+
+    return std::string(diagnostic.substr(0, LuaMaxManifestDiagnosticBytes - 3)) + "...";
+}
+
+std::size_t checked_metadata_add(std::size_t left, std::size_t right) {
+    if (right > std::numeric_limits<std::size_t>::max() - left)
+        throw std::invalid_argument("Lua binding metadata worst-case totals overflow");
+    return left + right;
+}
+
+std::size_t checked_metadata_multiply(std::size_t left, std::size_t right) {
+    if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left)
+        throw std::invalid_argument("Lua binding metadata worst-case totals overflow");
+    return left * right;
+}
+
+// Largest value a schema admits, measured the way measure_lua_value and
+// read_lua_value charge it.
+struct SchemaWorstCase {
+    std::size_t entries = 0;
+    std::size_t bufferedBytes = sizeof(LuaValue);
+    std::size_t stringBytes = 0;
+};
+
+SchemaWorstCase schema_worst_case(const LuaValueSchema& schema) {
+    SchemaWorstCase worst;
+
+    if (schema.kind() == LuaSchemaKind::String) {
+        worst.stringBytes = schema.maximum_bytes();
+        worst.bufferedBytes = checked_metadata_add(worst.bufferedBytes, schema.maximum_bytes());
+    } else if (schema.kind() == LuaSchemaKind::Array) {
+        const SchemaWorstCase item = schema_worst_case(schema.item());
+        worst.entries = checked_metadata_multiply(schema.maximum_items(), checked_metadata_add(1, item.entries));
+        worst.bufferedBytes = checked_metadata_add(
+            worst.bufferedBytes,
+            checked_metadata_multiply(schema.maximum_items(), item.bufferedBytes));
+        worst.stringBytes = item.stringBytes;
+    } else if (schema.kind() == LuaSchemaKind::Object) {
+        for (const LuaSchemaField& field : schema.fields()) {
+            const SchemaWorstCase child = schema_worst_case(field.schema);
+            worst.entries = checked_metadata_add(worst.entries, checked_metadata_add(1, child.entries));
+            worst.bufferedBytes = checked_metadata_add(
+                worst.bufferedBytes,
+                checked_metadata_add(field.name.size(), child.bufferedBytes));
+            worst.stringBytes = std::max({worst.stringBytes, field.name.size(), child.stringBytes});
+        }
+    }
+
+    return worst;
+}
+
+void validate_schema_against_limits(
+    const LuaValueSchema& schema,
+    const LuaExecutionLimits& limits,
+    const char* role
+) {
+    const std::string prefix = std::string("Lua binding ") + role + " schema ";
+
+    if (schema.container_depth() > limits.maxTableDepth)
+        throw std::invalid_argument(prefix + "exceeds the runner table depth limit");
+
+    const SchemaWorstCase worst = schema_worst_case(schema);
+    if (worst.entries > limits.maxTableEntries)
+        throw std::invalid_argument(prefix + "exceeds the runner table entry limit");
+    if (worst.stringBytes > limits.maxStringBytes)
+        throw std::invalid_argument(prefix + "exceeds the runner string size limit");
+    if (worst.bufferedBytes > limits.maxBufferedValueBytes)
+        throw std::invalid_argument(prefix + "exceeds the runner buffered data limit");
+}
+
 void push_lua_value(
     lua_State* state,
     const LuaValue& value,
@@ -580,6 +660,7 @@ struct LuaBehaviorRunner::Impl {
     std::map<std::pair<WorldInstanceId, BehaviorId>, CachedCapabilities> cache;
     std::optional<WorldInstanceId> cachedWorld;
     bool started = false;
+    std::uint64_t runnerId = NextRunnerId.fetch_add(1, std::memory_order_relaxed);
 
     explicit Impl(LuaExecutionLimits executionLimits)
         : limits(executionLimits)
@@ -838,6 +919,11 @@ struct LuaBehaviorRunner::Impl {
         lua_pop(state, 1);
 
         const Binding& binding = context.runner->bindings.at(capability.description.binding);
+        if (binding.metadata) {
+            const LuaSchemaValidation validation = validate_lua_value(binding.metadata->write_schema(), value);
+            if (!validation.valid())
+                throw ExecutionFailure(LuaExecutionStatus::InvalidProposal, "write schema: " + validation.error->diagnostic);
+        }
         context.pending.push_back(binding.makePending(
             capability.description.name,
             value,
@@ -1350,6 +1436,13 @@ struct LuaBehaviorRunner::Impl {
                         context.bufferedValueBytes,
                         limits
                     );
+
+                    if (binding.metadata) {
+                        const LuaSchemaValidation validation =
+                            validate_lua_value(binding.metadata->read_schema(), *capability.snapshot);
+                        if (!validation.valid())
+                            throw ExecutionFailure(LuaExecutionStatus::HostError, "read schema: " + validation.error->diagnostic);
+                    }
                 }
 
                 context.capabilities.push_back(std::move(capability));
@@ -1476,6 +1569,13 @@ void LuaBehaviorRunner::register_binding(Binding binding) {
     if (binding.type == InvalidComponentTypeId)
         throw std::invalid_argument("Lua component binding type is invalid");
 
+    if (binding.metadata) {
+        if (binding.scriptName.size() > LuaMaxNameBytes)
+            throw std::invalid_argument("Lua described binding name exceeds 256 bytes");
+        validate_schema_against_limits(binding.metadata->read_schema(), impl->limits, "read");
+        validate_schema_against_limits(binding.metadata->write_schema(), impl->limits, "write");
+    }
+
     for (const Binding& existing : impl->bindings) {
         if (existing.scriptName == binding.scriptName)
             throw std::runtime_error("Lua component binding name already registered");
@@ -1484,6 +1584,90 @@ void LuaBehaviorRunner::register_binding(Binding binding) {
     }
 
     impl->bindings.push_back(std::move(binding));
+}
+
+LuaManifestResult LuaBehaviorRunner::capability_manifest(
+    World& world,
+    BehaviorId behavior,
+    IntentTime now
+) {
+    auto failure = [](LuaManifestErrorCode code, std::string_view message) {
+        return LuaManifestResult(LuaManifestError{code, bounded_l0_diagnostic(message)});
+    };
+
+    try {
+        if (!world.behavior_exists(behavior))
+            return failure(LuaManifestErrorCode::InvalidBehavior, "Lua capability manifest behavior does not exist");
+        if (now > static_cast<IntentTime>(std::numeric_limits<lua_Integer>::max()))
+            return failure(LuaManifestErrorCode::HostError, "Lua capability manifest time is outside the Lua integer range");
+
+        LuaCapabilityManifest::Builder builder(now, LuaManifestCapture(
+            world.instance_id(),
+            behavior,
+            world.behavior_access_revision(behavior),
+            impl->runnerId,
+            impl->limits
+        ));
+        std::size_t bufferedBytes = 0;
+
+        for (const CapabilityDescription& description : impl->capabilities_for(world, behavior)) {
+            const Binding& binding = impl->bindings.at(description.binding);
+            if (!binding.metadata)
+                continue;
+
+            const LuaModelBindingMetadata& metadata = *binding.metadata;
+            LuaManifestCapability capability;
+            capability.scriptTypeName = binding.scriptName;
+            capability.componentName = description.name;
+            capability.mode = description.readable && description.writable
+                ? ComponentAccessMode::ReadWrite
+                : (description.readable ? ComponentAccessMode::Read : ComponentAccessMode::Write);
+            capability.description = metadata.description();
+
+            if (description.readable) {
+                std::optional<LuaValue> value;
+                try {
+                    value = binding.snapshot(world, behavior, description.name);
+                } catch (const std::exception& exception) {
+                    return failure(
+                        LuaManifestErrorCode::SnapshotUnavailable,
+                        std::string("Lua capability snapshot is unavailable: ") + exception.what());
+                } catch (...) {
+                    return failure(LuaManifestErrorCode::SnapshotUnavailable, "Lua capability snapshot is unavailable");
+                }
+
+                try {
+                    std::size_t entries = 0;
+                    measure_lua_value(*value, 0, entries, bufferedBytes, impl->limits);
+                } catch (const ExecutionFailure& exception) {
+                    return failure(LuaManifestErrorCode::LimitExceeded, exception.what());
+                }
+
+                const LuaSchemaValidation validation = validate_lua_value(metadata.read_schema(), *value);
+                if (!validation.valid())
+                    return failure(LuaManifestErrorCode::SchemaMismatch, "read schema: " + validation.error->diagnostic);
+
+                capability.readSchema = metadata.read_schema();
+                capability.readValue = std::move(value);
+            }
+            if (description.writable)
+                capability.writeSchema = metadata.write_schema();
+
+            if (std::optional<LuaManifestError> error = builder.add(
+                    std::move(capability),
+                    LuaManifestCapture::Entry{description.binding, binding.type, description.slot}))
+                return LuaManifestResult(std::move(*error));
+        }
+
+        LuaManifestResult result = builder.finish();
+        if (result.ok())
+            impl->started = true;
+        return result;
+    } catch (const std::exception& exception) {
+        return failure(LuaManifestErrorCode::HostError, exception.what());
+    } catch (...) {
+        return failure(LuaManifestErrorCode::HostError, "unknown Lua capability manifest host error");
+    }
 }
 
 LuaExecutionResult LuaBehaviorRunner::execute(
