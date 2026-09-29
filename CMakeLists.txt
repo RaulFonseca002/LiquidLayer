@@ -127,7 +127,9 @@ add_library(Liquid::Core ALIAS liquid)
 if(LIQUID_BUILD_LUA)
 add_library(liquid_lua_component STATIC
     src/scripting/LuaBehaviorRunner.cpp
+    src/scripting/LuaCapabilityManifest.cpp
     src/scripting/LuaLifecycleSystem.cpp
+    src/scripting/LuaValueSchema.cpp
 )
 target_compile_features(liquid_lua_component PUBLIC cxx_std_20)
 target_include_directories(liquid_lua_component PRIVATE ${lua_SOURCE_DIR}/src)
@@ -448,7 +450,12 @@ if(BUILD_TESTING)
         test_system_registry
     )
     if(LIQUID_BUILD_LUA)
-        list(APPEND LIQUID_TESTS test_lua_behavior test_lua_lifecycle test_stress)
+        list(APPEND LIQUID_TESTS
+            test_lua_behavior
+            test_lua_lifecycle
+            test_lua_schema
+            test_lua_manifest
+            test_stress)
     endif()
     if(LIQUID_BUILD_SIMULATION)
         list(APPEND LIQUID_TESTS
@@ -476,6 +483,8 @@ if(BUILD_TESTING)
             set(liquid_test_component liquid_simulation)
         elseif(test_name STREQUAL "test_lua_behavior" OR
                test_name STREQUAL "test_lua_lifecycle" OR
+               test_name STREQUAL "test_lua_schema" OR
+               test_name STREQUAL "test_lua_manifest" OR
                test_name STREQUAL "test_stress")
             set(liquid_test_component liquid_lua_component)
         else()

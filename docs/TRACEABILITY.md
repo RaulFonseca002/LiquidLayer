@@ -13,6 +13,17 @@ A row may be marked complete only after its regression first failed against the 
 | S6 | Solid Scope v2 | Trace lanes, bounded bridge parsing, complete Unix process-group cleanup, Release assertion guards, 1,000-frame responsiveness, dependency-free browser self-test | Complete — owner accepted the internal-instrument/no-browser-compatibility boundary and waived a repeat manual matrix on 2026-08-22 |
 | S7 | Release audit | Regression-first audit fixes, three independent re-reviews, local Linux release matrix, accepted low support boundaries | Complete — 2026-08-22 |
 
+## Liquid L0 — Lua schemas and capability manifests
+
+Steps from the [L0 spec](LIQUID_L0_IMPLEMENTATION_SPEC.md#implementation-steps-and-tests). Test cases are prefixed with their step ID. Each step failed against stubs before its implementation (see the [completion record](DEVELOPMENT_TRACKING.md#l0-completion-record-pending-review-and-approval)).
+
+| Step | Contract evidence | Regression evidence | Status |
+|---|---|---|---|
+| L0.1 | Immutable schema factories, expanded-tree ceilings, validator and error paths | `lua_schema`: 19 `L0.1` cases | Implemented; awaiting review |
+| L0.2 | Four-argument overload, runner-limit fit, write/read schema enforcement, legacy overload | `lua_manifest`: 9 `L0.2` cases | Implemented; awaiting review |
+| L0.3 | Manifest projections, failure codes, copied values, ordering, freeze-on-success | `lua_manifest`: 12 `L0.3` cases | Implemented; awaiting review |
+| L0.4 | Access expressions, aggregate limits, `{}` versus empty Array, installed surface | `lua_manifest`: 11 `L0.4` cases; `examples/lua_consumer` installed/source consumers | Implemented; awaiting review |
+
 ## Local verification snapshot — 13 August 2026
 
 - GCC Release strict warnings-as-errors: 23/23 tests passed.

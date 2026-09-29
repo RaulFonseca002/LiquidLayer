@@ -6,11 +6,14 @@ Liquid Layer is the future adaptive smart-environment application. Liquid is
 its reusable authoring/control layer. Solid is the deterministic C++20
 foundation, released at v0.1.0.
 
-**No Stage 2 implementation step is active.** The pre-Liquid Solid hardening
-has landed on `main` (`5979e14`, follow-up `2aee8a4`), and the Liquid
-documentation handoff is integrated. L0–L6 are specified design, not
-implemented and not active; a step becomes active only when the owner records
-its activation in [tracking](docs/DEVELOPMENT_TRACKING.md).
+**L0 is done and owner-approved (29 September 2026); no Stage 2 step is
+active now** (L0 base `b308b48`; see
+[tracking](docs/DEVELOPMENT_TRACKING.md#l0-completion-record)). The next step,
+L1, starts only when the owner activates it. The pre-Liquid Solid hardening has
+landed on `main` (`5979e14`, follow-up `2aee8a4`), and the Liquid documentation
+handoff is integrated. L1–L6 are specified design, not implemented and not
+active; a step becomes active only when the owner records its activation in
+tracking.
 
 Allowed without activation: project Markdown, specifications in existing
 `docs/`, read-only code review, and isolated validation builds. Do not create

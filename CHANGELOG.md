@@ -5,6 +5,7 @@ All notable framework changes will be recorded here. Dates are release dates, no
 ## Unreleased
 
 - 🐛 Allow recreated components to immediately reuse their external effect target without advancing a frame.
+- ✨ Liquid L0 (awaiting review): immutable `LuaValueSchema` and `validate_lua_value`; `LuaModelBindingMetadata` with `symmetric_metadata`; a four-argument `LuaBehaviorRunner::expose_component` that enforces write schemas on proposals and read schemas on snapshots; and `LuaBehaviorRunner::capability_manifest`, which returns a copied, ordered capability manifest with Lua access expressions and freezes registration on the first success. The three-argument overload is unchanged. Tests: `lua_schema`, `lua_manifest`.
 
 ## 0.1.0 — 2026-08-22
 

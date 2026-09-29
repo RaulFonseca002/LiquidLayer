@@ -2,6 +2,7 @@
 
 #include "liquid/Ids.hpp"
 #include "liquid/IntentLifetime.hpp"
+#include "liquid/scripting/LuaValueSchema.hpp"
 #include "liquid/world/World.hpp"
 
 #include <cstddef>
@@ -102,6 +103,9 @@ struct LuaExecutionResult {
     bool succeeded() const;
 };
 
+// Complete in LuaCapabilityManifest.hpp; callers of capability_manifest include it.
+class LuaManifestResult;
+
 class LuaBehaviorRunner {
 private:
     struct PendingIntent {
@@ -195,10 +199,19 @@ private:
             IntentPriority,
             IntentName
         )> makePending;
+        // Present only for bindings registered through the metadata overload.
+        std::optional<LuaModelBindingMetadata> metadata;
     };
 
     struct Impl;
     std::unique_ptr<Impl> impl;
+
+    template <typename Component>
+    static Binding make_binding(
+        ComponentType<Component> type,
+        TypeName scriptName,
+        LuaComponentCodec<Component> codec
+    );
 
     void register_binding(Binding binding);
 
@@ -217,6 +230,20 @@ public:
         TypeName scriptName,
         LuaComponentCodec<Component> codec
     );
+
+    // Described binding: validates the metadata against the L0 ceilings and
+    // this runner's effective limits before registering one binding.
+    template <typename Component>
+    void expose_component(
+        ComponentType<Component> type,
+        TypeName scriptName,
+        LuaComponentCodec<Component> codec,
+        LuaModelBindingMetadata metadata
+    );
+
+    // Copied manifest of the described capabilities `behavior` currently holds.
+    // The first successful capture freezes binding registration.
+    LuaManifestResult capability_manifest(World& world, BehaviorId behavior, IntentTime now);
 
     LuaExecutionResult execute(
         World& world,
@@ -255,6 +282,27 @@ public:
 
 template <typename Component>
 void LuaBehaviorRunner::expose_component(
+    ComponentType<Component> type,
+    TypeName scriptName,
+    LuaComponentCodec<Component> codec
+) {
+    register_binding(make_binding(type, std::move(scriptName), std::move(codec)));
+}
+
+template <typename Component>
+void LuaBehaviorRunner::expose_component(
+    ComponentType<Component> type,
+    TypeName scriptName,
+    LuaComponentCodec<Component> codec,
+    LuaModelBindingMetadata metadata
+) {
+    Binding binding = make_binding(type, std::move(scriptName), std::move(codec));
+    binding.metadata = std::move(metadata);
+    register_binding(std::move(binding));
+}
+
+template <typename Component>
+LuaBehaviorRunner::Binding LuaBehaviorRunner::make_binding(
     ComponentType<Component> type,
     TypeName scriptName,
     LuaComponentCodec<Component> codec
@@ -304,7 +352,7 @@ void LuaBehaviorRunner::expose_component(
         );
     };
 
-    register_binding(std::move(binding));
+    return binding;
 }
 
 }
