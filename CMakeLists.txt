@@ -13,6 +13,7 @@ option(LIQUID_ENABLE_STRICT_WARNINGS "Build Liquid and tests with strict compile
 option(LIQUID_WARNINGS_AS_ERRORS "Treat Liquid compiler warnings as errors" OFF)
 option(LIQUID_BUILD_LUA "Build the optional Liquid Lua component" ON)
 option(LIQUID_BUILD_SIMULATION "Build Liquid simulation library and CLI" ON)
+option(LIQUID_BUILD_AUTHORING "Build the optional Liquid Authoring component" OFF)
 option(LIQUID_BUILD_FUZZERS "Build decoder fuzz targets" OFF)
 
 if(LIQUID_ENABLE_SANITIZERS AND LIQUID_ENABLE_THREAD_SANITIZER)
@@ -37,6 +38,14 @@ if(LIQUID_ENABLE_COVERAGE AND
    NOT (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU" AND
         CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU"))
     message(FATAL_ERROR "LIQUID_ENABLE_COVERAGE requires GCC or Clang")
+endif()
+
+if(LIQUID_BUILD_AUTHORING AND NOT LIQUID_BUILD_LUA)
+    message(FATAL_ERROR "LIQUID_BUILD_AUTHORING requires LIQUID_BUILD_LUA")
+endif()
+
+if(LIQUID_BUILD_AUTHORING AND NOT LIQUID_BUILD_SIMULATION)
+    message(FATAL_ERROR "LIQUID_BUILD_AUTHORING requires LIQUID_BUILD_SIMULATION")
 endif()
 
 if(LIQUID_BUILD_SIMULATION AND NOT LIQUID_BUILD_LUA)
@@ -255,6 +264,19 @@ liquid_apply_thread_sanitizer(liquid_sim_cli)
 liquid_apply_warnings(liquid_sim_cli)
 endif()
 
+if(LIQUID_BUILD_AUTHORING)
+add_library(liquid_authoring STATIC
+    src/authoring/AuthoringSession.cpp
+)
+target_compile_features(liquid_authoring PUBLIC cxx_std_20)
+target_link_libraries(liquid_authoring PUBLIC liquid_simulation)
+set_target_properties(liquid_authoring PROPERTIES EXPORT_NAME Authoring OUTPUT_NAME liquid_authoring)
+add_library(Liquid::Authoring ALIAS liquid_authoring)
+liquid_apply_sanitizers(liquid_authoring)
+liquid_apply_thread_sanitizer(liquid_authoring)
+liquid_apply_warnings(liquid_authoring)
+endif()
+
 if(UNIX AND LIQUID_BUILD_SIMULATION)
 add_library(liquid_scope_scenario STATIC
     apps/SimulationInput.cpp
@@ -364,6 +386,13 @@ target_include_directories(liquid_lua_component
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 endif()
+if(LIQUID_BUILD_AUTHORING)
+target_include_directories(liquid_authoring
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+endif()
 
 set(Liquid_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/Liquid")
 install(TARGETS liquid EXPORT LiquidCoreTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
@@ -383,7 +412,14 @@ install(FILES apps/SimulationCli.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/liquid/simulation)
 install(EXPORT LiquidSimulationTargets FILE LiquidSimulationTargets.cmake NAMESPACE Liquid:: DESTINATION ${Liquid_INSTALL_CMAKEDIR})
 endif()
+if(LIQUID_BUILD_AUTHORING)
+install(TARGETS liquid_authoring EXPORT LiquidAuthoringTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(DIRECTORY include/liquid/authoring
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/liquid)
+install(EXPORT LiquidAuthoringTargets FILE LiquidAuthoringTargets.cmake NAMESPACE Liquid:: DESTINATION ${Liquid_INSTALL_CMAKEDIR})
+endif()
 install(DIRECTORY include/liquid DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    PATTERN authoring EXCLUDE
     PATTERN scripting EXCLUDE
     PATTERN simulation EXCLUDE)
 
@@ -520,6 +556,50 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_simulation_cli_process.cmake"
     )
     set_tests_properties(simulation_cli_process PROPERTIES TIMEOUT 10)
+    endif()
+
+    # Authoring tests use public component registration, so they stay out of
+    # the legacy-registration loop above.
+    if(LIQUID_BUILD_AUTHORING)
+        foreach(authoring_test IN ITEMS
+                test_authoring_scope
+                test_authoring_proposal)
+            add_executable(${authoring_test} tests/${authoring_test}.cpp)
+            target_link_libraries(${authoring_test} PRIVATE
+                liquid_authoring Catch2::Catch2WithMain)
+            liquid_apply_sanitizers(${authoring_test})
+            liquid_apply_thread_sanitizer(${authoring_test})
+            liquid_apply_warnings(${authoring_test})
+            string(REPLACE "test_" "" authoring_ctest_name ${authoring_test})
+            add_test(NAME ${authoring_ctest_name} COMMAND ${authoring_test})
+        endforeach()
+
+        # The installed consumer is built outside this project, so the
+        # sanitizer runtime flags must be forwarded for it to link.
+        set(liquid_consumer_sanitizer_flags "")
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+            if(LIQUID_ENABLE_SANITIZERS)
+                set(liquid_consumer_sanitizer_flags
+                    "-fsanitize=address,undefined -fno-omit-frame-pointer")
+            elseif(LIQUID_ENABLE_THREAD_SANITIZER)
+                set(liquid_consumer_sanitizer_flags
+                    "-fsanitize=thread -fno-omit-frame-pointer")
+            endif()
+        endif()
+        add_test(
+            NAME authoring_package
+            COMMAND ${CMAKE_COMMAND}
+                "-DLIQUID_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DLIQUID_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/authoring_package"
+                "-DBUILD_CONFIG=$<CONFIG>"
+                "-DGENERATOR=${CMAKE_GENERATOR}"
+                "-DC_COMPILER=${CMAKE_C_COMPILER}"
+                "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                "-DSANITIZER_FLAGS=${liquid_consumer_sanitizer_flags}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_authoring_package.cmake"
+        )
+        set_tests_properties(authoring_package PROPERTIES TIMEOUT 900)
     endif()
 
     if(UNIX AND LIQUID_BUILD_SIMULATION)

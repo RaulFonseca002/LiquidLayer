@@ -6,14 +6,14 @@ Liquid Layer is the future adaptive smart-environment application. Liquid is
 its reusable authoring/control layer. Solid is the deterministic C++20
 foundation, released at v0.1.0.
 
-**L0 is done and owner-approved (29 September 2026); no Stage 2 step is
-active now** (L0 base `b308b48`; see
-[tracking](docs/DEVELOPMENT_TRACKING.md#l0-completion-record)). The next step,
-L1, starts only when the owner activates it. The pre-Liquid Solid hardening has
-landed on `main` (`5979e14`, follow-up `2aee8a4`), and the Liquid documentation
-handoff is integrated. L1–L6 are specified design, not implemented and not
-active; a step becomes active only when the owner records its activation in
-tracking.
+**L0 (29 September 2026) and L1 (30 September 2026) are done and
+owner-approved; no Stage 2 step is active now** (L1 base `6202d93`; see the
+[L1 completion record](docs/DEVELOPMENT_TRACKING.md#l1-completion-record)).
+The next step, L2, starts only when the owner activates it. The pre-Liquid
+Solid hardening has landed on `main` (`5979e14`, follow-up `2aee8a4`), and the
+Liquid documentation handoff is integrated. L2–L6 are specified design, not
+implemented and not active; a step becomes active only when the owner records
+its activation in tracking.
 
 Allowed without activation: project Markdown, specifications in existing
 `docs/`, read-only code review, and isolated validation builds. Do not create
@@ -92,8 +92,8 @@ explicitly before expanding implementation scope.
 
 `CMakeLists.txt` owns the source inventory. Create folders only when the
 activated milestone's allowlist needs them. `include/liquid/detail/` is not
-consumer API. Current installed targets are Core, Lua and Simulation;
-`Liquid::Authoring` is a future opt-in L1 addition, not an existing target.
+consumer API. Current installed targets are Core, Lua and Simulation, plus the opt-in
+`Liquid::Authoring` (L1, `LIQUID_BUILD_AUTHORING=OFF` by default).
 Solid Scope stays an optional Unix-only owner-operated instrument, excluded
 from installation and never a second Runtime. Its repository split is deferred.
 

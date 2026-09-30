@@ -9,8 +9,11 @@
 **Implementation activation:** L0 activated by the owner on 29 September 2026
 (see the [L0 activation record](#l0-activation-record)); implemented on
 `feat/liquid-l0`, Codex review passed, and approved by the owner on 29 September
-2026. No step is active now. L1–L6 remain unimplemented and inactive until the
-owner activates the next one.
+2026. L1 activated by the owner on 30 September 2026 (Discord `#liquid-layer`,
+Hermes run `tcc-l1-2026-09-30`; see the [L1 activation record](#l1-activation-record));
+implemented on `feat/liquid-l1`, Codex review passed, and approved by the owner
+on 30 September 2026. No step is active now. L2–L6 remain unimplemented and
+inactive until the owner activates the next one.
 
 On 6 September 2026 the owner authorized a complete documentation review:
 specify every retained milestone; allow evidence-backed Solid change proposals;
@@ -67,7 +70,7 @@ limits and gates; each spec owns its milestone's additions and test steps.
 | Milestone | Deliverable | Dependencies | Status |
 | --- | --- | --- | --- |
 | [L0](LIQUID_L0_IMPLEMENTATION_SPEC.md) | Lua schemas and capability manifests | Reconciled Solid baseline | Done; owner-approved 29 September 2026 |
-| [L1](LIQUID_L1_IMPLEMENTATION_SPEC.md) | Host-selected scope and immutable proposals | L0 | Specified; inactive |
+| [L1](LIQUID_L1_IMPLEMENTATION_SPEC.md) | Host-selected scope and immutable proposals | L0 | Done; owner-approved 30 September 2026 |
 | [L2](LIQUID_L2_IMPLEMENTATION_SPEC.md) | Isolated lifecycle evaluation | L1 | Specified; inactive |
 | [L3](LIQUID_L3_IMPLEMENTATION_SPEC.md) | Scoped current truth and frame evidence | L2 | Specified; inactive |
 | [L4](LIQUID_L4_IMPLEMENTATION_SPEC.md) | Bounded session journal | L3 | Specified; inactive |
@@ -144,12 +147,102 @@ Binding clarifications of the spec recorded for this step (not owner approval):
 | Gates | G8–G13: 0 violations, 0 include cycles; `git diff --check` clean |
 | GCC sanitizers | ASan/UBSan (`build/asan`, `-DLIQUID_ENABLE_SANITIZERS=ON`): 32/32, 0 sanitizer errors; TSan (`build/tsan`, `-DLIQUID_ENABLE_THREAD_SANITIZER=ON`): 32/32, 0 warnings |
 | Clang, coverage | Unverified locally (owner rule: GCC only, no tool installs; Clang/gcovr not installed) |
-| Remote CI | Pending |
+| Remote CI | Passed: GitHub Actions run `36634818550` on `6202d93`, 29 September 2026, 6/6 jobs |
 | Codex review | Round 1 NEEDS_CHANGES (B1 schema-owned bytes, B2 status wording); round 2 NEEDS_CHANGES (B3 value accounting, B4 whole-manifest fields); round 3 PASS, no blocking findings, all R1–R6 and AC-1–AC-11 pass |
 | Owner decision | Approved 29 September 2026 (Discord), with authorization to commit and merge |
 
 The GREEN and sanitizer evidence above was reproduced by Hermes; Codex reviewed
 the diff and evidence independently (read-only).
+
+### L1 activation record
+
+| Field | Value |
+| --- | --- |
+| Step | L1 — Prospective scope and immutable proposals (L1.1–L1.4) |
+| Owner activation | 30 September 2026, via Discord `#liquid-layer` (Hermes run `tcc-l1-2026-09-30`) |
+| Branch | `feat/liquid-l1` (worktree `.worktrees/liquid-l1`) |
+| Base SHA | `6202d9366a6bc8eff01a65d50043071ebb3e2625` |
+| Specification revision | [LIQUID_L1_IMPLEMENTATION_SPEC.md](LIQUID_L1_IMPLEMENTATION_SPEC.md) at the base SHA (last changed in `fa45be7`) |
+| Prerequisites | L0 done and owner-approved 29 September 2026 |
+| Implementer / reviewer / approver | Claude / Codex / owner (Hermes orchestrates) |
+
+Allowed-file subset. New: `include/liquid/authoring/Types.hpp`,
+`include/liquid/authoring/AuthoringSession.hpp`,
+`src/authoring/AuthoringSession.cpp`, `tests/test_authoring_scope.cpp`,
+`tests/test_authoring_proposal.cpp`, `tests/test_authoring_package.cmake`,
+`examples/installed-package/authoring.cpp`. Existing:
+`include/liquid/scripting/LuaBehaviorRunner.hpp`,
+`include/liquid/scripting/LuaCapabilityManifest.hpp`,
+`src/scripting/LuaBehaviorRunner.cpp`, `src/scripting/LuaCapabilityManifest.cpp`,
+`tests/test_lua_manifest.cpp`, `tests/test_lua_behavior.cpp`, `CMakeLists.txt`,
+`cmake/LiquidConfig.cmake.in`, `cmake/README.md`,
+`examples/installed-package/CMakeLists.txt`, `examples/consumer_targets.cmake`,
+`examples/source-tree/CMakeLists.txt`, this file, `AGENTS.md` (Current work
+only), `docs/PUBLIC_API.md`, `docs/TRACEABILITY.md`, `CHANGELOG.md`
+(Unreleased), `README.md` (component/status rows only).
+Forbidden: World, Runtime, events/effects, `include/liquid/detail/`, Simulation
+headers and sources, `apps/`, `third_party/`, `.github/`, `ARCHITECTURE.md`, the
+L0–L6 spec texts and the common contract, other worktrees, new dependencies,
+version bumps.
+
+### L1 decisions — Hermes adjudications, 30 September 2026
+
+Binding clarifications of the spec recorded for this step (not owner approval):
+
+1. A1: the `tests/test_authoring_package.cmake` driver is allowed for the
+   `authoring_package` CTest.
+2. A2: `Liquid::Authoring` and the three `authoring_*` CTests are this step's
+   targets.
+3. D1: typed submission and grant structs make unknown fields unrepresentable;
+   a test that builds them field by field is the evidence. Duplicate
+   (type, component) grants fail the whole scope. Half a managed pair is
+   `InvalidInput`; a full pair is `NotFound`.
+4. D2: script-control components are rejected by the session after the runner
+   capture, as `InvalidInput` naming the grant, and nothing is stored. That
+   successful capture freezes runner registration; a failed capture does not.
+   Both are tested.
+5. D3: discover and submit first resolve target identities through
+   `scope_targets`, with no value read; a missing, removed or recreated target
+   is `StaleScope`. Only then do they re-capture through `scope_manifest`;
+   value growth past L0 limits is `LimitExceeded`; any other capture failure
+   is `HostError`.
+6. D4: `LuaManifestErrorCode::InvalidGrant` is an additive L0 change; existing
+   L0 tests stay unchanged.
+7. D5: a third private UTF-8 validator is allowed, marked `shortcut:` with its
+   reason.
+8. D6: the `authoring_package` driver forwards compiler and sanitizer flags.
+9. D7: a revoked scope is erased; later discover, submit, replace and revoke
+   return `NotFound`. This is documented and tested.
+10. D8: Authoring tests use public registration and are wired outside the
+    legacy test loop.
+11. The generic header install excludes `include/liquid/authoring/`, so a
+    default package ships no Authoring headers.
+12. The `AuthoringSession` constructor may throw `std::invalid_argument` for
+    configuration errors; every other public call returns `AuthoringResult`.
+13. Design adjustment after review B4: the design's "no separate liveness API"
+    is replaced by the host-only `scope_targets`. No new module or dependency.
+
+### L1 completion record
+
+| Evidence | Result |
+| --- | --- |
+| RED (stubs, strict GCC build 0 warnings) | `authoring_scope` 4/28 cases passed, `authoring_proposal` 0/15, `authoring_package` failed at the consumer run; the pre-existing 32/32 passed |
+| GREEN focused | `ctest --test-dir build/strict -R '^authoring_(scope\|proposal\|package)$' --output-on-failure`: 3/3 pass; `authoring_scope` 28/28 (518 assertions), `authoring_proposal` 15/15 (434 assertions) |
+| Correction cycle 1 (review B1–B5) | Seven new review cases; Hermes ran the reviewer's repros first on the pre-fix code and they failed. B1: the script type is validated through the World typed check; B2: the manifest budget is the exact L0 logical size; B3: one checked issuer, no ID or revision wraps; B4: target identity is checked before value capture; B5: name bounds come before any copy or encoder call. After the fix: `authoring_scope` 33/33 (589), `authoring_proposal` 17/17 (484) |
+| Strict GCC suite (Authoring ON) | `ctest --test-dir build/strict --output-on-failure`: 35/35, 0 warnings |
+| Default (Authoring OFF) | 32/32, no authoring tests registered; Core-only 18/18 |
+| Consumers | Installed 4/4 (with `COMPONENTS Authoring`); source-tree 3/3; `LIQUID_BUILD_AUTHORING=ON` without Simulation fails at configure |
+| L0 regression | `lua_schema` 19/19 (511), `lua_manifest` 32/32 (470), both unchanged |
+| Gates | G8–G13: 0 violations, 0 include/target cycles; no Lua/Simulation/Core header includes Authoring; `git diff --check` clean |
+| GCC sanitizers (Authoring ON) | ASan/UBSan 35/35, 0 errors; TSan 35/35, 0 warnings |
+| Clang, coverage | Unverified locally (owner rule: GCC only, no tool installs) |
+| Remote CI | Pending |
+| Codex review | Round 1 NEEDS_CHANGES (B1–B5 code, B6 evidence record); round 2 PASS, 0 blocking findings. Non-blocking: DOC-1 (fixed in the docs round) and the design adjustment (decision 13) |
+| Owner decision | Approved 30 September 2026 (Discord), with authorization to commit, merge and push |
+
+The GREEN and sanitizer evidence was reproduced by Hermes on the final code;
+Codex reviewed the diff and evidence independently (read-only) and ran no
+tests.
 
 ## Liquid Layer
 

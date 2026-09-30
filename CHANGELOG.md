@@ -6,6 +6,7 @@ All notable framework changes will be recorded here. Dates are release dates, no
 
 - 🐛 Allow recreated components to immediately reuse their external effect target without advancing a frame.
 - ✨ Liquid L0 (awaiting review): immutable `LuaValueSchema` and `validate_lua_value`; `LuaModelBindingMetadata` with `symmetric_metadata`; a four-argument `LuaBehaviorRunner::expose_component` that enforces write schemas on proposals and read schemas on snapshots; and `LuaBehaviorRunner::capability_manifest`, which returns a copied, ordered capability manifest with Lua access expressions and freezes registration on the first success. The three-argument overload is unchanged. Tests: `lua_schema`, `lua_manifest`.
+- ✨ Liquid L1 (owner-approved): opt-in `Liquid::Authoring` component (`LIQUID_BUILD_AUTHORING`, default `OFF`; `COMPONENTS Authoring`) with `AuthoringSession` for host-selected prospective scopes and immutable, unexecuted `BehaviorProposal` records; revisioned scopes with revoke, re-resolution of targets on every discover/submit, caller checks and bounded capacity. `Liquid::Lua` gains `LuaScopeGrant`, the host-only `LuaBehaviorRunner::scope_manifest`, `LuaManifestCaptureKind` and the additive `LuaManifestErrorCode::InvalidGrant`. Default builds and existing consumers are unchanged. Tests: `authoring_scope`, `authoring_proposal`, `authoring_package`.
 
 ## 0.1.0 — 2026-08-22
 

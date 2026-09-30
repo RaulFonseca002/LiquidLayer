@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -105,6 +106,8 @@ struct LuaExecutionResult {
 
 // Complete in LuaCapabilityManifest.hpp; callers of capability_manifest include it.
 class LuaManifestResult;
+struct LuaScopeGrant;
+struct LuaScopeTarget;
 
 class LuaBehaviorRunner {
 private:
@@ -199,6 +202,9 @@ private:
             IntentPriority,
             IntentName
         )> makePending;
+        // Trusted-host scope capture: no BehaviorId, no access grant consulted.
+        std::function<std::optional<ComponentSlotId>(World&, const ComponentName&)> resolveTarget;
+        std::function<LuaValue(World&, ComponentSlotId)> encodeTarget;
         // Present only for bindings registered through the metadata overload.
         std::optional<LuaModelBindingMetadata> metadata;
     };
@@ -244,6 +250,24 @@ public:
     // Copied manifest of the described capabilities `behavior` currently holds.
     // The first successful capture freezes binding registration.
     LuaManifestResult capability_manifest(World& world, BehaviorId behavior, IntentTime now);
+
+    // Host-only prospective manifest for trusted grants; creates no behavior.
+    // Write-only grants are not read. The first successful capture freezes
+    // binding registration; a failed capture does not.
+    LuaManifestResult scope_manifest(
+        World& world,
+        std::span<const LuaScopeGrant> grants,
+        IntentTime now
+    );
+
+    // Host-only target identities of trusted grants, in grant order, under the
+    // same grant admission as scope_manifest. Reads no value and does not
+    // freeze registration. Empty when any grant is not admitted; host
+    // exceptions propagate.
+    std::optional<std::vector<LuaScopeTarget>> scope_targets(
+        World& world,
+        std::span<const LuaScopeGrant> grants
+    ) const;
 
     LuaExecutionResult execute(
         World& world,
@@ -350,6 +374,20 @@ LuaBehaviorRunner::Binding LuaBehaviorRunner::make_binding(
             std::move(intentName),
             decode(value)
         );
+    };
+    binding.resolveTarget = [type](World& world, const ComponentName& name) -> std::optional<ComponentSlotId> {
+        if (!world.has_component_named(type, name))
+            return std::nullopt;
+
+        return world.component_target(type, name).slot;
+    };
+    binding.encodeTarget = [type, encode = codec.encode](World& world, ComponentSlotId slot) {
+        const Component* component = world.resolve_component(type, slot);
+
+        if (!component)
+            throw std::runtime_error("component snapshot is unavailable");
+
+        return encode(*component);
     };
 
     return binding;

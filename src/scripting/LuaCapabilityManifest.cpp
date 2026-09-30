@@ -153,6 +153,22 @@ LuaManifestCapture::LuaManifestCapture(
 {
 }
 
+LuaManifestCapture::LuaManifestCapture(
+    WorldInstanceId world,
+    std::uint64_t runner,
+    LuaExecutionLimits limits
+)
+    : captureKind(LuaManifestCaptureKind::ProspectiveScope),
+      worldInstance(world),
+      runnerId(runner),
+      effectiveLimits(limits)
+{
+}
+
+LuaManifestCaptureKind LuaManifestCapture::kind() const {
+    return captureKind;
+}
+
 WorldInstanceId LuaManifestCapture::world_instance() const {
     return worldInstance;
 }
@@ -205,6 +221,10 @@ const std::vector<LuaManifestCapability>& LuaCapabilityManifest::capabilities() 
 
 const LuaManifestCapture& LuaCapabilityManifest::capture() const {
     return captureData;
+}
+
+std::size_t LuaCapabilityManifest::logical_bytes() const {
+    return logicalBytes;
 }
 
 LuaCapabilityManifest::Builder::Builder(IntentTime now, LuaManifestCapture capture)
@@ -283,6 +303,7 @@ LuaManifestResult LuaCapabilityManifest::Builder::finish() {
     });
 
     LuaCapabilityManifest manifest(nowMs, captureData);
+    manifest.logicalBytes = logicalBytes;
     manifest.entries.reserve(items.size());
     manifest.captureData.capturedEntries.reserve(items.size());
     for (auto& [capability, entry] : items) {

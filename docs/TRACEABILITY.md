@@ -24,6 +24,17 @@ Steps from the [L0 spec](LIQUID_L0_IMPLEMENTATION_SPEC.md#implementation-steps-a
 | L0.3 | Manifest projections, failure codes, copied values, ordering, freeze-on-success | `lua_manifest`: 12 `L0.3` cases | Implemented; awaiting review |
 | L0.4 | Access expressions, aggregate limits, `{}` versus empty Array, installed surface | `lua_manifest`: 11 `L0.4` cases; `examples/lua_consumer` installed/source consumers | Implemented; awaiting review |
 
+## Liquid L1 — Prospective scope and immutable proposals
+
+Steps from the [L1 spec](LIQUID_L1_IMPLEMENTATION_SPEC.md#implementation-steps-and-tests). Test cases are prefixed with their step ID, and adjudication-specific cases also name D1, D2, D3 or D7. Each step failed against stubs before its implementation (see the [completion record](DEVELOPMENT_TRACKING.md#l1-completion-record)). The CTests are registered only when `LIQUID_BUILD_AUTHORING=ON`.
+
+| Step | Contract evidence | Regression evidence | Status |
+|---|---|---|---|
+| L1.1 | Opt-in package target; session ID, strong IDs, results, limit defaults; constructor rejects a foreign/invalid script type and invalid limits; old consumers unchanged; disabled, missing-dependency and unknown components fail | `authoring_scope`: 5 `L1.1` cases (`test_authoring_scope.cpp`) and "review B1 script type validation"; `authoring_package` (`test_authoring_package.cmake` with `examples/installed-package/authoring.cpp`) | Implemented; awaiting review |
+| L1.2 | Runner-backed prospective capture with zero live behavior/system/intent/topology change; Read/Write/ReadWrite projection with no read for Write-only; shared L0 expressions and schemas; caller isolation; whole-scope rejection of schema-less, unknown, missing, unnamed, duplicate and zero grants; D2 script-control rejection and freeze rules; bounded owner, count, manifest size and diagnostics | `authoring_scope`: 13 `L1.2` cases (`test_authoring_scope.cpp`), plus "review B2 complete manifest budget", "review B2 manifest budget boundary is the L0 logical size" and "review B5 name admission before encoder" | Implemented; awaiting review |
+| L1.3 | Exact source round trip and record fields; source UTF-8/NUL/size (smaller of session and runner limits); bounded rationale; D1 typed boundary; managed pair InvalidInput/NotFound; no source execution or World change; repair is a distinct record | `authoring_proposal`: 8 `L1.3` cases (`test_authoring_proposal.cpp`) | Implemented; awaiting review |
+| L1.4 | Revision increments and stale expected revision; D7 revoke erases; D3 ABA/removed targets StaleScope, value growth LimitExceeded, other failures HostError; copied current values; time validation; capacity without eviction; ID counter exhaustion; cross-session and cross-owner NotFound | `authoring_scope`: 10 `L1.4` cases and "review B3 checked id and revision issuance"; `authoring_proposal`: 7 `L1.4` cases, "review B3 checked proposal id issuance" and "review B4 ABA with invalid recreated value" | Implemented; awaiting review |
+
 ## Local verification snapshot — 13 August 2026
 
 - GCC Release strict warnings-as-errors: 23/23 tests passed.
