@@ -34,6 +34,28 @@ struct LuaManifestCapability {
     std::optional<LuaValueSchema> writeSchema;
 };
 
+// One trusted-host selection for a prospective scope. Only host APIs accept grants;
+// neither a source string nor a manifest can create one.
+struct LuaScopeGrant {
+    TypeName scriptTypeName;
+    ComponentName componentName;
+    ComponentAccessMode mode = ComponentAccessMode::Read;
+};
+
+// Resolved identity of one grant target, without its value.
+struct LuaScopeTarget {
+    ComponentTypeId type = InvalidComponentTypeId;
+    ComponentSlotId slot{};
+
+    friend bool operator==(const LuaScopeTarget&, const LuaScopeTarget&) = default;
+};
+
+enum class LuaManifestCaptureKind {
+    Behavior,
+    // No live BehaviorId: behavior() is invalid and access_revision() is 0.
+    ProspectiveScope
+};
+
 // Host-only capture identity for later staleness checks. Never serialized to an author.
 class LuaManifestCapture {
 public:
@@ -43,6 +65,7 @@ public:
         ComponentSlotId slot{};
     };
 
+    LuaManifestCaptureKind kind() const;
     WorldInstanceId world_instance() const;
     BehaviorId behavior() const;
     BehaviorAccessRevision access_revision() const;
@@ -52,6 +75,7 @@ public:
     const std::vector<Entry>& entries() const;
 
 private:
+    LuaManifestCaptureKind captureKind = LuaManifestCaptureKind::Behavior;
     WorldInstanceId worldInstance = 0;
     BehaviorId behaviorId{};
     BehaviorAccessRevision accessRevision = 0;
@@ -66,6 +90,8 @@ private:
         std::uint64_t runner,
         LuaExecutionLimits limits
     );
+    // Prospective-scope capture.
+    LuaManifestCapture(WorldInstanceId world, std::uint64_t runner, LuaExecutionLimits limits);
 
     friend class LuaCapabilityManifest;
     friend class LuaBehaviorRunner;
@@ -76,7 +102,9 @@ enum class LuaManifestErrorCode {
     SnapshotUnavailable,
     SchemaMismatch,
     LimitExceeded,
-    HostError
+    HostError,
+    // Prospective scope: empty, duplicate, unnamed, unknown, undescribed or missing target.
+    InvalidGrant
 };
 
 struct LuaManifestError {
@@ -95,6 +123,8 @@ public:
     // Sorted by script type name, then component name, in unsigned-byte order.
     const std::vector<LuaManifestCapability>& capabilities() const;
     const LuaManifestCapture& capture() const;
+    // Logical size charged against LuaManifestMaxLogicalBytes when built.
+    std::size_t logical_bytes() const;
 
 private:
     class Builder;
@@ -102,6 +132,7 @@ private:
     IntentTime nowMs = 0;
     std::vector<LuaManifestCapability> entries;
     LuaManifestCapture captureData;
+    std::size_t logicalBytes = 0;
 
     LuaCapabilityManifest(IntentTime now, LuaManifestCapture capture);
 

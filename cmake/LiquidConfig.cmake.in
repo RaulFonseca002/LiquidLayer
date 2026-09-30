@@ -1,6 +1,6 @@
 @PACKAGE_INIT@
 
-set(_Liquid_known_components Core Lua Simulation)
+set(_Liquid_known_components Core Lua Simulation Authoring)
 
 if(NOT Liquid_FIND_COMPONENTS)
     set(Liquid_FIND_COMPONENTS Core)
@@ -19,10 +19,16 @@ endforeach()
 
 # Every public component depends on Core. Load it first so exported target
 # dependencies resolve regardless of the order used in find_package().
+# Authoring depends on Simulation, which depends on Lua.
 set(_Liquid_components_to_load Core)
-if("Simulation" IN_LIST Liquid_FIND_COMPONENTS AND
+if(("Simulation" IN_LIST Liquid_FIND_COMPONENTS OR
+    "Authoring" IN_LIST Liquid_FIND_COMPONENTS) AND
    NOT "Lua" IN_LIST _Liquid_components_to_load)
     list(APPEND _Liquid_components_to_load Lua)
+endif()
+if("Authoring" IN_LIST Liquid_FIND_COMPONENTS AND
+   NOT "Simulation" IN_LIST _Liquid_components_to_load)
+    list(APPEND _Liquid_components_to_load Simulation)
 endif()
 foreach(_Liquid_component IN LISTS Liquid_FIND_COMPONENTS)
     if(_Liquid_component IN_LIST _Liquid_known_components AND
@@ -35,7 +41,9 @@ foreach(_Liquid_component IN LISTS _Liquid_components_to_load)
     set(_Liquid_targets_file
         "${CMAKE_CURRENT_LIST_DIR}/Liquid${_Liquid_component}Targets.cmake")
 
-    if(EXISTS "${_Liquid_targets_file}")
+    # Never load Authoring over a missing Simulation dependency.
+    if(EXISTS "${_Liquid_targets_file}" AND
+       (NOT _Liquid_component STREQUAL "Authoring" OR TARGET Liquid::Simulation))
         include("${_Liquid_targets_file}")
     endif()
 
@@ -45,6 +53,11 @@ foreach(_Liquid_component IN LISTS _Liquid_components_to_load)
         set(Liquid_${_Liquid_component}_FOUND FALSE)
     endif()
 endforeach()
+
+if(Liquid_FIND_REQUIRED_Authoring AND NOT Liquid_Authoring_FOUND)
+    set(Liquid_NOT_FOUND_MESSAGE
+        "Liquid package built without Authoring: Liquid::Authoring is unavailable")
+endif()
 
 if(NOT Liquid_Core_FOUND)
     set(Liquid_FOUND FALSE)

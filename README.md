@@ -128,6 +128,7 @@ Solid v0.1 is packaged through three static targets so consumers pay only for th
 | Core | `Liquid::Core` | Values, world/runtime APIs, effects, event stores, and replay |
 | Lua | `Liquid::Lua` | Capability-bounded Lua behavior execution; L0 is planned to extend this same target with model-facing authoring metadata |
 | Simulation | `Liquid::Simulation` | In-memory adapters and deterministic scenarios |
+| Authoring | `Liquid::Authoring` | Opt-in (`LIQUID_BUILD_AUTHORING=ON`; unreleased, L1 owner-approved): host-selected prospective scopes and immutable Lua behavior proposals |
 
 L0 intentionally extends `Liquid::Lua` rather than creating a speculative new exported target.
 

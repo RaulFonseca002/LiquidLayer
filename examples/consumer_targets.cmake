@@ -35,3 +35,11 @@ if(LIQUID_CONSUMER_BUILD_SIMULATION)
     liquid_consumer_apply_warnings(liquid_simulation_consumer)
     add_test(NAME simulation_consumer COMMAND liquid_simulation_consumer)
 endif()
+
+if(LIQUID_CONSUMER_BUILD_AUTHORING)
+    add_executable(liquid_authoring_consumer
+        "${CMAKE_CURRENT_LIST_DIR}/installed-package/authoring.cpp")
+    target_link_libraries(liquid_authoring_consumer PRIVATE Liquid::Authoring)
+    liquid_consumer_apply_warnings(liquid_authoring_consumer)
+    add_test(NAME authoring_consumer COMMAND liquid_authoring_consumer)
+endif()

@@ -1550,6 +1550,62 @@ struct LuaBehaviorRunner::Impl {
         result.watches = std::move(context.watches);
         return result;
     }
+
+    // Admits grants[index] to one resolved binding target. Names are bounded
+    // before any copy or binding callback.
+    std::optional<LuaManifestError> admit_grant(
+        World& world,
+        std::span<const LuaScopeGrant> grants,
+        std::size_t index,
+        std::size_t& bindingIndex,
+        ComponentSlotId& slot
+    ) const {
+        const LuaScopeGrant& grant = grants[index];
+        auto failure = [index](LuaManifestErrorCode code, std::string_view message) {
+            return LuaManifestError{
+                code,
+                bounded_l0_diagnostic("grants[" + std::to_string(index) + "] " + std::string(message))
+            };
+        };
+
+        if (grant.scriptTypeName.empty())
+            return failure(LuaManifestErrorCode::InvalidGrant, "has an empty script type name");
+        if (grant.componentName.empty())
+            return failure(LuaManifestErrorCode::InvalidGrant, "has an empty component name");
+        if (grant.scriptTypeName.size() > LuaMaxNameBytes)
+            return failure(LuaManifestErrorCode::LimitExceeded, "script type name exceeds 256 bytes");
+        if (grant.componentName.size() > LuaMaxNameBytes)
+            return failure(LuaManifestErrorCode::LimitExceeded, "component name exceeds 256 bytes");
+        if (grant.mode != ComponentAccessMode::Read
+            && grant.mode != ComponentAccessMode::Write
+            && grant.mode != ComponentAccessMode::ReadWrite)
+            return failure(LuaManifestErrorCode::InvalidGrant, "has an invalid access mode");
+        for (std::size_t earlier = 0; earlier < index; ++earlier) {
+            if (grants[earlier].scriptTypeName == grant.scriptTypeName
+                && grants[earlier].componentName == grant.componentName)
+                return failure(LuaManifestErrorCode::InvalidGrant, "duplicates an earlier grant target");
+        }
+
+        bindingIndex = bindings.size();
+        for (std::size_t candidate = 0; candidate < bindings.size(); ++candidate) {
+            if (bindings[candidate].scriptName == grant.scriptTypeName) {
+                bindingIndex = candidate;
+                break;
+            }
+        }
+        if (bindingIndex == bindings.size())
+            return failure(LuaManifestErrorCode::InvalidGrant, "names an unknown script type");
+
+        const Binding& binding = bindings[bindingIndex];
+        if (!binding.metadata)
+            return failure(LuaManifestErrorCode::InvalidGrant, "names a type registered without metadata");
+
+        const std::optional<ComponentSlotId> resolved = binding.resolveTarget(world, grant.componentName);
+        if (!resolved)
+            return failure(LuaManifestErrorCode::InvalidGrant, "names a missing component");
+        slot = *resolved;
+        return std::nullopt;
+    }
 };
 
 LuaBehaviorRunner::LuaBehaviorRunner(LuaExecutionLimits limits)
@@ -1668,6 +1724,114 @@ LuaManifestResult LuaBehaviorRunner::capability_manifest(
     } catch (...) {
         return failure(LuaManifestErrorCode::HostError, "unknown Lua capability manifest host error");
     }
+}
+
+LuaManifestResult LuaBehaviorRunner::scope_manifest(
+    World& world,
+    std::span<const LuaScopeGrant> grants,
+    IntentTime now
+) {
+    auto failure = [](LuaManifestErrorCode code, std::string_view message) {
+        return LuaManifestResult(LuaManifestError{code, bounded_l0_diagnostic(message)});
+    };
+
+    try {
+        if (now > static_cast<IntentTime>(std::numeric_limits<lua_Integer>::max()))
+            return failure(LuaManifestErrorCode::HostError, "Lua scope manifest time is outside the Lua integer range");
+        if (grants.empty())
+            return failure(LuaManifestErrorCode::InvalidGrant, "Lua scope manifest requires at least one grant");
+        if (grants.size() > LuaManifestMaxCapabilities)
+            return failure(LuaManifestErrorCode::LimitExceeded, "Lua scope manifest has too many grants");
+
+        LuaCapabilityManifest::Builder builder(now, LuaManifestCapture(
+            world.instance_id(),
+            impl->runnerId,
+            impl->limits
+        ));
+        std::size_t bufferedBytes = 0;
+
+        for (std::size_t index = 0; index < grants.size(); ++index) {
+            const LuaScopeGrant& grant = grants[index];
+            std::size_t bindingIndex = 0;
+            ComponentSlotId slot{};
+            if (std::optional<LuaManifestError> error = impl->admit_grant(world, grants, index, bindingIndex, slot))
+                return LuaManifestResult(std::move(*error));
+            const std::string where = "grants[" + std::to_string(index) + "] ";
+
+            const Binding& binding = impl->bindings[bindingIndex];
+            const LuaModelBindingMetadata& metadata = *binding.metadata;
+            const bool readable = grant.mode != ComponentAccessMode::Write;
+            const bool writable = grant.mode != ComponentAccessMode::Read;
+            LuaManifestCapability capability;
+            capability.scriptTypeName = binding.scriptName;
+            capability.componentName = grant.componentName;
+            capability.mode = grant.mode;
+            capability.description = metadata.description();
+
+            // A Write-only grant performs no read.
+            if (readable) {
+                std::optional<LuaValue> value;
+                try {
+                    value = binding.encodeTarget(world, slot);
+                } catch (const std::exception& exception) {
+                    return failure(
+                        LuaManifestErrorCode::SnapshotUnavailable,
+                        where + "snapshot is unavailable: " + exception.what());
+                } catch (...) {
+                    return failure(LuaManifestErrorCode::SnapshotUnavailable, where + "snapshot is unavailable");
+                }
+
+                try {
+                    std::size_t entries = 0;
+                    measure_lua_value(*value, 0, entries, bufferedBytes, impl->limits);
+                } catch (const ExecutionFailure& exception) {
+                    return failure(LuaManifestErrorCode::LimitExceeded, exception.what());
+                }
+
+                const LuaSchemaValidation validation = validate_lua_value(metadata.read_schema(), *value);
+                if (!validation.valid())
+                    return failure(LuaManifestErrorCode::SchemaMismatch, "read schema: " + validation.error->diagnostic);
+
+                capability.readSchema = metadata.read_schema();
+                capability.readValue = std::move(value);
+            }
+            if (writable)
+                capability.writeSchema = metadata.write_schema();
+
+            if (std::optional<LuaManifestError> error = builder.add(
+                    std::move(capability),
+                    LuaManifestCapture::Entry{bindingIndex, binding.type, slot}))
+                return LuaManifestResult(std::move(*error));
+        }
+
+        LuaManifestResult result = builder.finish();
+        if (result.ok())
+            impl->started = true;
+        return result;
+    } catch (const std::exception& exception) {
+        return failure(LuaManifestErrorCode::HostError, exception.what());
+    } catch (...) {
+        return failure(LuaManifestErrorCode::HostError, "unknown Lua scope manifest host error");
+    }
+}
+
+std::optional<std::vector<LuaScopeTarget>> LuaBehaviorRunner::scope_targets(
+    World& world,
+    std::span<const LuaScopeGrant> grants
+) const {
+    if (grants.empty() || grants.size() > LuaManifestMaxCapabilities)
+        return std::nullopt;
+
+    std::vector<LuaScopeTarget> targets;
+    targets.reserve(grants.size());
+    for (std::size_t index = 0; index < grants.size(); ++index) {
+        std::size_t bindingIndex = 0;
+        ComponentSlotId slot{};
+        if (impl->admit_grant(world, grants, index, bindingIndex, slot))
+            return std::nullopt;
+        targets.push_back(LuaScopeTarget{impl->bindings[bindingIndex].type, slot});
+    }
+    return targets;
 }
 
 LuaExecutionResult LuaBehaviorRunner::execute(
