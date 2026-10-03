@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -161,12 +162,58 @@ bool valid_limits(const AuthoringLimits& limits) {
         {limits.maxScopeCapabilities, defaults.maxScopeCapabilities},
         {limits.maxLabelBytes, defaults.maxLabelBytes},
         {limits.maxManifestBytes, defaults.maxManifestBytes},
+        {limits.maxSessionPayloadBytes, defaults.maxSessionPayloadBytes},
     };
     for (const auto& [value, ceiling] : bounded) {
         if (value == 0 || value > ceiling)
             return false;
     }
     return limits.maxIdValue != 0;
+}
+
+// Contract logical payload accounting (LIQUID_IMPLEMENTATION_CONTRACT.md):
+// 8 bytes per numeric scalar, ID or enum, 1 per boolean or optional-presence
+// flag, byte length for strings, and 8 per collection element or record field.
+// shortcut: second private copy of the L0 accounting constants; the first is
+// in src/scripting/LuaCapabilityManifest.cpp, outside this step's allowlist.
+// Upgrade trigger: share one definition when that file is in an authorized
+// allowlist or a third copy is needed.
+constexpr std::size_t LogicalScalarBytes = 8;
+constexpr std::size_t LogicalFlagBytes = 1;
+constexpr std::size_t LogicalElementBytes = 8;
+
+// LuaManifestCapture, the host-only identity outside the manifest's
+// logical_bytes(): 7 fields (kind, world, behavior, access revision, runner,
+// limits, entries), the first five scalars or IDs; LuaExecutionLimits is 12
+// fields, 11 sizes and 1 boolean; each entry is one element of 3 scalar fields
+// (binding index, type, slot).
+constexpr std::size_t CaptureFields = 7;
+constexpr std::size_t CaptureScalarFields = 5;
+constexpr std::size_t LimitSizeFields = 11;
+constexpr std::size_t LimitFlagFields = 1;
+static_assert(sizeof(scripting::LuaExecutionLimits) == (LimitSizeFields + LimitFlagFields) * sizeof(std::size_t),
+    "update the session payload accounting for the new LuaExecutionLimits field");
+constexpr std::size_t CaptureEntryFields = 3;
+constexpr std::size_t CaptureFixedBytes = CaptureFields * LogicalElementBytes
+    + CaptureScalarFields * LogicalScalarBytes
+    + (LimitSizeFields + LimitFlagFields) * LogicalElementBytes
+    + LimitSizeFields * LogicalScalarBytes
+    + LimitFlagFields * LogicalFlagBytes;
+constexpr std::size_t CaptureEntryBytes = LogicalElementBytes
+    + CaptureEntryFields * (LogicalElementBytes + LogicalScalarBytes);
+
+// Saturates instead of wrapping; a saturated charge always exceeds the ceiling.
+constexpr std::size_t saturating_add(std::size_t total, std::size_t bytes) {
+    return bytes > std::numeric_limits<std::size_t>::max() - total
+        ? std::numeric_limits<std::size_t>::max()
+        : total + bytes;
+}
+
+std::size_t capture_bytes(const LuaManifestCapture& capture) {
+    std::size_t bytes = CaptureFixedBytes;
+    for (std::size_t entry = 0; entry < capture.entries().size(); ++entry)
+        bytes = saturating_add(bytes, CaptureEntryBytes);
+    return bytes;
 }
 
 }
@@ -200,6 +247,9 @@ struct AuthoringSession::Impl {
         LuaManifestCapture capture;
         // The same identities in grant order, compared before any value is read.
         std::vector<LuaScopeTarget> targets;
+        // scope_charge() at admission, kept so release is exact; the admitted
+        // manifest it covers is not retained. Bookkeeping, not payload.
+        std::size_t payloadCharge = 0;
     };
 
     struct Admission {
@@ -229,6 +279,59 @@ struct AuthoringSession::Impl {
     std::uint64_t lastProposal = 0;
     std::map<ScopeId, ScopeRecord> scopes;
     std::map<ProposalId, ProposalRecord> proposals;
+    // The one session payload counter: the sum of the charges of every
+    // retained record, never above limits.maxSessionPayloadBytes.
+    std::size_t sessionPayloadBytes = 0;
+
+    // Scope record: 5 fields (owner, grants, revision, capture, targets);
+    // owner bytes; each grant one element of 3 fields (two name strings and
+    // the mode enum); the revision scalar; capture_bytes(); each target one
+    // element of 2 ID fields (type, slot); plus the admitted manifest's own
+    // logical_bytes(), duplicated data counted again.
+    static std::size_t scope_charge(std::string_view owner, const std::vector<ScopeGrant>& grants, const Admission& admission) {
+        constexpr std::size_t RecordFields = 5;
+        constexpr std::size_t GrantFields = 3;
+        constexpr std::size_t TargetFields = 2;
+        std::size_t bytes = saturating_add(RecordFields * LogicalElementBytes + LogicalScalarBytes, owner.size());
+        for (const ScopeGrant& grant : grants) {
+            bytes = saturating_add(bytes, LogicalElementBytes + GrantFields * LogicalElementBytes + LogicalScalarBytes);
+            bytes = saturating_add(bytes, grant.scriptTypeName.size());
+            bytes = saturating_add(bytes, grant.componentName.size());
+        }
+        for (std::size_t target = 0; target < admission.targets.size(); ++target)
+            bytes = saturating_add(bytes, LogicalElementBytes + TargetFields * (LogicalElementBytes + LogicalScalarBytes));
+        bytes = saturating_add(bytes, capture_bytes(admission.manifest.capture()));
+        return saturating_add(bytes, admission.manifest.logical_bytes());
+    }
+
+    // Proposal record: 3 fields (proposal, owner, capture). The proposal is
+    // 8 fields: id, session and scope IDs and the scope revision scalar;
+    // contract version, source and rationale bytes; the managed optional's
+    // presence flag, plus 2 scalar fields (behavior ID, revision) when present.
+    // Then owner bytes and capture_bytes() of the scope capture, counted again.
+    static std::size_t proposal_charge(const ProposalRecord& record) {
+        constexpr std::size_t RecordFields = 3;
+        constexpr std::size_t ProposalFields = 8;
+        constexpr std::size_t ProposalScalarFields = 4;
+        constexpr std::size_t ManagedFields = 2;
+        const BehaviorProposal& proposal = record.proposal;
+        std::size_t bytes = (RecordFields + ProposalFields) * LogicalElementBytes
+            + ProposalScalarFields * LogicalScalarBytes
+            + LogicalFlagBytes;
+        if (proposal.managed)
+            bytes += ManagedFields * (LogicalElementBytes + LogicalScalarBytes);
+        for (std::size_t text : {proposal.contractVersion.size(), proposal.source.size(), proposal.rationale.size(), record.owner.size()})
+            bytes = saturating_add(bytes, text);
+        return saturating_add(bytes, capture_bytes(record.capture));
+    }
+
+    // Whether retaining `charge` in place of `released` retained bytes stays
+    // within the session ceiling. The counter never exceeds the ceiling and
+    // `released` never exceeds the counter, so neither subtraction wraps.
+    bool payload_fits(std::size_t released, std::size_t charge) const {
+        const std::size_t retained = sessionPayloadBytes - released;
+        return charge <= limits.maxSessionPayloadBytes - retained;
+    }
 
     std::optional<AuthoringError> check_time(IntentTime now) const {
         if (now > static_cast<IntentTime>(std::numeric_limits<std::int64_t>::max()))
@@ -394,7 +497,8 @@ AuthoringSession::AuthoringSession(
         0,
         0,
         {},
-        {}
+        {},
+        0
     });
 }
 
@@ -429,10 +533,15 @@ AuthoringResult<ScopeView> AuthoringSession::create_scope(
     if (!admitted.ok())
         return admitted.error();
 
-    const ScopeId scope(*issued);
     const Impl::Admission& admission = admitted.value();
+    const std::size_t charge = Impl::scope_charge(owner, grants, admission);
+    if (!impl->payload_fits(0, charge))
+        return make_error(AuthoringErrorCode::LimitExceeded, "scope exceeds the session payload ceiling");
+
+    const ScopeId scope(*issued);
     impl->scopes.emplace(scope, Impl::ScopeRecord{
-        std::move(owner), std::move(grants), 1, admission.manifest.capture(), admission.targets});
+        std::move(owner), std::move(grants), 1, admission.manifest.capture(), admission.targets, charge});
+    impl->sessionPayloadBytes += charge;
     impl->lastScope = *issued;
     impl->lastNow = now;
     return ScopeView{scope, 1, admission.manifest};
@@ -463,12 +572,29 @@ AuthoringResult<ScopeView> AuthoringSession::replace_scope(
 
     Impl::ScopeRecord& record = found->second;
     const Impl::Admission& admission = admitted.value();
+    const std::size_t charge = Impl::scope_charge(record.owner, grants, admission);
+    if (!impl->payload_fits(record.payloadCharge, charge))
+        return make_error(AuthoringErrorCode::LimitExceeded, "replacement scope exceeds the session payload ceiling", "grants");
+
+    // Every allocating copy happens before the commit, so a throw leaves the
+    // record and the counter as they were; the commit only moves and assigns.
+    LuaManifestCapture capture = admission.manifest.capture();
+    std::vector<LuaScopeTarget> targets = admission.targets;
+    ScopeView view{scope, *revision, admission.manifest};
+    const std::size_t retained = impl->sessionPayloadBytes - record.payloadCharge + charge;
+    static_assert(std::is_nothrow_move_assignable_v<std::vector<ScopeGrant>>);
+    static_assert(std::is_nothrow_move_assignable_v<LuaManifestCapture>);
+    static_assert(std::is_nothrow_move_assignable_v<std::vector<LuaScopeTarget>>);
+    static_assert(std::is_nothrow_move_constructible_v<ScopeView>);
+
     record.grants = std::move(grants);
     record.revision = *revision;
-    record.capture = admission.manifest.capture();
-    record.targets = admission.targets;
+    record.capture = std::move(capture);
+    record.targets = std::move(targets);
+    record.payloadCharge = charge;
+    impl->sessionPayloadBytes = retained;
     impl->lastNow = now;
-    return ScopeView{scope, record.revision, admission.manifest};
+    return view;
 }
 
 AuthoringResult<void> AuthoringSession::revoke_scope(ScopeId scope, ScopeRevision expectedRevision) {
@@ -478,6 +604,8 @@ AuthoringResult<void> AuthoringSession::revoke_scope(ScopeId scope, ScopeRevisio
     if (found->second.revision != expectedRevision)
         return make_error(AuthoringErrorCode::StaleScope, "expected scope revision is not current", "expectedRevision");
 
+    // Proposals made under the scope are retained and keep their charges.
+    impl->sessionPayloadBytes -= found->second.payloadCharge;
     impl->scopes.erase(found);
     return {};
 }
@@ -531,13 +659,8 @@ AuthoringResult<ProposalId> AuthoringSession::submit(
     if (!issued)
         return make_error(AuthoringErrorCode::LimitExceeded, "session proposal id counter is exhausted");
 
-    // Liveness only; the admitted record keeps the scope's target identities.
-    AuthoringResult<LuaCapabilityManifest> captured = impl->recapture(*record, impl->lastNow.value_or(0));
-    if (!captured.ok())
-        return captured.error();
-
     const ProposalId proposal(*issued);
-    impl->proposals.emplace(proposal, Impl::ProposalRecord{
+    Impl::ProposalRecord candidate{
         BehaviorProposal{
             proposal,
             impl->id,
@@ -550,7 +673,18 @@ AuthoringResult<ProposalId> AuthoringSession::submit(
         },
         record->owner,
         record->capture
-    });
+    };
+    const std::size_t charge = Impl::proposal_charge(candidate);
+    if (!impl->payload_fits(0, charge))
+        return make_error(AuthoringErrorCode::LimitExceeded, "proposal exceeds the session payload ceiling");
+
+    // Liveness only; the admitted record keeps the scope's target identities.
+    AuthoringResult<LuaCapabilityManifest> captured = impl->recapture(*record, impl->lastNow.value_or(0));
+    if (!captured.ok())
+        return captured.error();
+
+    impl->proposals.emplace(proposal, std::move(candidate));
+    impl->sessionPayloadBytes += charge;
     impl->lastProposal = *issued;
     return proposal;
 }

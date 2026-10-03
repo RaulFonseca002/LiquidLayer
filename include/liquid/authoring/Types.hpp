@@ -157,6 +157,8 @@ struct AuthoringLimits {
     std::size_t maxScopeCapabilities = 128;
     std::size_t maxLabelBytes = 256;
     std::size_t maxManifestBytes = 1024 * 1024;
+    // Logical payload of everything the session retains, all artifact kinds together.
+    std::size_t maxSessionPayloadBytes = 64u << 20;
     // Highest value any per-session ID counter may issue; exhaustion is LimitExceeded.
     std::uint64_t maxIdValue = std::numeric_limits<std::uint64_t>::max();
 };

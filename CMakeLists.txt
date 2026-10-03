@@ -563,7 +563,8 @@ if(BUILD_TESTING)
     if(LIQUID_BUILD_AUTHORING)
         foreach(authoring_test IN ITEMS
                 test_authoring_scope
-                test_authoring_proposal)
+                test_authoring_proposal
+                test_authoring_session_ceiling)
             add_executable(${authoring_test} tests/${authoring_test}.cpp)
             target_link_libraries(${authoring_test} PRIVATE
                 liquid_authoring Catch2::Catch2WithMain)
