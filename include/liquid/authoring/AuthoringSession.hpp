@@ -1,6 +1,7 @@
 #pragma once
 
 #include "liquid/Runtime.hpp"
+#include "liquid/authoring/Evaluation.hpp"
 #include "liquid/authoring/Types.hpp"
 #include "liquid/scripting/LuaCapabilityManifest.hpp"
 #include "liquid/scripting/LuaLifecycleSystem.hpp"
@@ -104,6 +105,26 @@ public:
     AuthoringResult<ProposalId> submit(const CallerContext& caller, ProposalSubmission submission);
 
     AuthoringResult<BehaviorProposal> proposal(const CallerContext& caller, ProposalId proposal) const;
+
+    // Trusted host. Only before the first accepted proposal; a failed
+    // registration registers nothing.
+    AuthoringResult<void> register_evaluation_suite(EvaluationSuite suite);
+
+    // Runs the proposal's exact source against every case of a registered
+    // suite in fresh isolated Runtimes. The live World and session clock are
+    // never touched. Errors mean no record was created; once admitted, every
+    // outcome is a record.
+    AuthoringResult<EvaluationRecord> evaluate(
+        const CallerContext& caller,
+        ProposalId proposal,
+        EvaluationFixtureId fixture
+    );
+
+    // Trusted host only.
+    AuthoringResult<EvaluationTrace> normalized_trace(EvaluationId evaluation) const;
+
+    // Trusted host only. Never part of an EvaluationRecord.
+    AuthoringResult<EvaluationWorldTotals> world_totals(EvaluationId evaluation) const;
 
 private:
     struct Impl;

@@ -6,14 +6,18 @@ Liquid Layer is the future adaptive smart-environment application. Liquid is
 its reusable authoring/control layer. Solid is the deterministic C++20
 foundation, released at v0.1.0.
 
-**L0 (29 September 2026) and L1 (30 September 2026) are done and
-owner-approved; no Stage 2 step is active now** (L1 base `6202d93`; see the
-[L1 completion record](docs/DEVELOPMENT_TRACKING.md#l1-completion-record)).
-The next step, L2, starts only when the owner activates it. The pre-Liquid
-Solid hardening has landed on `main` (`5979e14`, follow-up `2aee8a4`), and the
-Liquid documentation handoff is integrated. L2–L6 are specified design, not
-implemented and not active; a step becomes active only when the owner records
-its activation in tracking.
+**L2 is active since 3 October 2026** (owner activation, base `f6f4af5`; see
+the [L2 activation record](docs/DEVELOPMENT_TRACKING.md#l2-activation-record)).
+L2 is implemented in `feat/liquid-l2`, which holds lane L2-A merged with lane
+L2-B (`feat/liquid-l2-eval`) and the L1 correction `22321bc`. The owner
+approved L2 on 5 October 2026 (finding L2B-14 decided: scoped summaries plus
+host-only world totals); it is not yet merged into `main`; see the
+[L2 completion evidence](docs/DEVELOPMENT_TRACKING.md#l2-completion-evidence--5-october-2026). L0
+(29 September 2026) and L1 (30 September 2026) are done and owner-approved.
+The pre-Liquid Solid hardening has landed on `main` (`5979e14`, follow-up
+`2aee8a4`), and the Liquid documentation handoff is integrated. L3–L6 are
+specified design, not implemented and not active; a step becomes active only
+when the owner records its activation in tracking.
 
 Allowed without activation: project Markdown, specifications in existing
 `docs/`, read-only code review, and isolated validation builds. Do not create
@@ -93,7 +97,7 @@ explicitly before expanding implementation scope.
 `CMakeLists.txt` owns the source inventory. Create folders only when the
 activated milestone's allowlist needs them. `include/liquid/detail/` is not
 consumer API. Current installed targets are Core, Lua and Simulation, plus the opt-in
-`Liquid::Authoring` (L1, `LIQUID_BUILD_AUTHORING=OFF` by default).
+`Liquid::Authoring` (L1; L2 evaluation owner-approved, not yet on `main`; `LIQUID_BUILD_AUTHORING=OFF` by default).
 Solid Scope stays an optional Unix-only owner-operated instrument, excluded
 from installation and never a second Runtime. Its repository split is deferred.
 

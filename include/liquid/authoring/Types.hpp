@@ -137,6 +137,7 @@ private:
 
 using ScopeId = StrongId<struct ScopeIdTag>;
 using ProposalId = StrongId<struct ProposalIdTag>;
+using EvaluationId = StrongId<struct EvaluationIdTag>;
 // Reserved for L5; no L1 call creates managed behaviors.
 using ManagedBehaviorId = StrongId<struct ManagedBehaviorIdTag>;
 
@@ -157,6 +158,12 @@ struct AuthoringLimits {
     std::size_t maxScopeCapabilities = 128;
     std::size_t maxLabelBytes = 256;
     std::size_t maxManifestBytes = 1024 * 1024;
+    std::size_t maxEvaluationCases = 16;
+    std::size_t maxEvaluationFrames = 256;
+    // Shared by every case of one evaluation run.
+    std::size_t maxEvaluationRecords = 8192;
+    std::size_t maxEvaluationRecordBytes = 8u << 20;
+    std::size_t maxEvaluationResponseBytes = 1u << 20;
     // Logical payload of everything the session retains, all artifact kinds together.
     std::size_t maxSessionPayloadBytes = 64u << 20;
     // Highest value any per-session ID counter may issue; exhaustion is LimitExceeded.

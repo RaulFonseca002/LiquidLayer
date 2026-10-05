@@ -4,8 +4,11 @@
 #include "liquid/world/World.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace liquid::scripting {
@@ -35,6 +38,51 @@ ComponentCodec<LuaBehaviorScript> lua_behavior_script_codec() {
     };
 }
 
+namespace {
+
+struct ScriptSelection {
+    const LuaBehaviorScript* script = nullptr;
+    ComponentName name;
+    ComponentSlotId slot = InvalidComponentSlotId;
+    std::string_view failure;
+};
+
+ScriptSelection select_single_readable(
+    const World& world,
+    ComponentType<LuaBehaviorScript> type,
+    BehaviorId behavior
+) {
+    ScriptSelection selected;
+    try {
+        std::size_t readable = 0;
+        for (const auto& [name, slot] : world.get_components(type, behavior)) {
+            if (!world.can_read_component(type, behavior, name))
+                continue;
+            ++readable;
+            selected.name = name;
+            selected.slot = slot;
+        }
+        if (readable == 0) {
+            selected.failure =
+                "lifecycle script selection: no readable LuaBehaviorScript component";
+            return selected;
+        }
+        if (readable > 1) {
+            selected.failure =
+                "lifecycle script selection: multiple readable LuaBehaviorScript components";
+            return selected;
+        }
+        selected.script = world.read_component(type, behavior, selected.name);
+    } catch (const std::exception&) {
+        selected.script = nullptr;
+    }
+    if (!selected.script)
+        selected.failure = "lifecycle script selection: script component is unavailable";
+    return selected;
+}
+
+}
+
 LuaLifecycleSystem::LuaLifecycleSystem(
     ComponentType<LuaBehaviorScript> type,
     std::shared_ptr<LuaBehaviorRunner> behaviorRunner,
@@ -46,10 +94,26 @@ LuaLifecycleSystem::LuaLifecycleSystem(
 {
     if (scriptType.id == InvalidComponentTypeId)
         throw std::invalid_argument("Lua lifecycle script component type is invalid");
-    if (scriptName.empty())
+    if (scriptName->empty())
         throw std::invalid_argument("Lua lifecycle script component name cannot be empty");
     if (!runner)
         throw std::invalid_argument("Lua lifecycle runner cannot be null");
+}
+
+LuaLifecycleSystem::LuaLifecycleSystem(
+    ComponentType<LuaBehaviorScript> type,
+    std::shared_ptr<LuaBehaviorRunner> behaviorRunner,
+    LuaScriptSelection selection
+)
+    : scriptType(type),
+      runner(std::move(behaviorRunner))
+{
+    if (scriptType.id == InvalidComponentTypeId)
+        throw std::invalid_argument("Lua lifecycle script component type is invalid");
+    if (!runner)
+        throw std::invalid_argument("Lua lifecycle runner cannot be null");
+    if (selection != LuaScriptSelection::SingleReadable)
+        throw std::invalid_argument("Lua lifecycle script selection is invalid");
 }
 
 void LuaLifecycleSystem::on_behavior_removed(BehaviorId behavior) {
@@ -59,20 +123,41 @@ void LuaLifecycleSystem::on_behavior_removed(BehaviorId behavior) {
 void LuaLifecycleSystem::run(World& world, FrameNumber frame, IntentTime now) {
     for (BehaviorId behavior : behaviors()) {
         const LuaBehaviorScript* script = nullptr;
-        try {
-            script = world.read_component(scriptType, behavior, scriptName);
-        } catch (const std::exception&) {
-            states.erase(behavior);
-            continue;
-        }
-        if (!script) {
-            states.erase(behavior);
-            continue;
+        // The fixed-name path keys state by source and revision only, so its
+        // slot name and slot id stay empty.
+        ComponentName slotName;
+        ComponentSlotId slot = InvalidComponentSlotId;
+        if (scriptName) {
+            try {
+                script = world.read_component(scriptType, behavior, *scriptName);
+            } catch (const std::exception&) {
+                states.erase(behavior);
+                continue;
+            }
+            if (!script) {
+                states.erase(behavior);
+                continue;
+            }
+        } else {
+            ScriptSelection selected = select_single_readable(world, scriptType, behavior);
+            if (!selected.failure.empty()) {
+                BehaviorState& state = states[behavior];
+                state = BehaviorState{};
+                state.lastResult.status = LuaExecutionStatus::HostError;
+                state.lastResult.diagnostic = std::string(selected.failure);
+                continue;
+            }
+            script = selected.script;
+            slotName = std::move(selected.name);
+            slot = selected.slot;
         }
 
         BehaviorState& state = states[behavior];
-        if (state.revision != script->revision || state.source != script->source) {
+        if (state.scriptSlotName != slotName || state.scriptSlot != slot ||
+            state.revision != script->revision || state.source != script->source) {
             state = BehaviorState{};
+            state.scriptSlotName = std::move(slotName);
+            state.scriptSlot = slot;
             state.revision = script->revision;
             state.source = script->source;
         }

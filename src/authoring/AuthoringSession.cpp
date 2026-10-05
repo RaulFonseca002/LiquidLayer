@@ -1,5 +1,8 @@
 #include "liquid/authoring/AuthoringSession.hpp"
 
+#include "BoundedEvaluationStore.hpp"
+#include "PayloadAccounting.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <limits>
@@ -162,6 +165,11 @@ bool valid_limits(const AuthoringLimits& limits) {
         {limits.maxScopeCapabilities, defaults.maxScopeCapabilities},
         {limits.maxLabelBytes, defaults.maxLabelBytes},
         {limits.maxManifestBytes, defaults.maxManifestBytes},
+        {limits.maxEvaluationCases, defaults.maxEvaluationCases},
+        {limits.maxEvaluationFrames, defaults.maxEvaluationFrames},
+        {limits.maxEvaluationRecords, defaults.maxEvaluationRecords},
+        {limits.maxEvaluationRecordBytes, defaults.maxEvaluationRecordBytes},
+        {limits.maxEvaluationResponseBytes, defaults.maxEvaluationResponseBytes},
         {limits.maxSessionPayloadBytes, defaults.maxSessionPayloadBytes},
     };
     for (const auto& [value, ceiling] : bounded) {
@@ -171,16 +179,49 @@ bool valid_limits(const AuthoringLimits& limits) {
     return limits.maxIdValue != 0;
 }
 
-// Contract logical payload accounting (LIQUID_IMPLEMENTATION_CONTRACT.md):
-// 8 bytes per numeric scalar, ID or enum, 1 per boolean or optional-presence
-// flag, byte length for strings, and 8 per collection element or record field.
-// shortcut: second private copy of the L0 accounting constants; the first is
-// in src/scripting/LuaCapabilityManifest.cpp, outside this step's allowlist.
-// Upgrade trigger: share one definition when that file is in an authorized
-// allowlist or a third copy is needed.
-constexpr std::size_t LogicalScalarBytes = 8;
-constexpr std::size_t LogicalFlagBytes = 1;
-constexpr std::size_t LogicalElementBytes = 8;
+std::optional<AuthoringError> check_case(
+    const EvaluationCase& evaluationCase,
+    const AuthoringLimits& limits,
+    const std::string& path
+) {
+    if (std::optional<AuthoringError> error = check_text(evaluationCase.name, limits.maxLabelBytes, true, path + ".name"))
+        return error;
+    if (!evaluationCase.prepare || !evaluationCase.expect)
+        return make_error(AuthoringErrorCode::InvalidInput, "a case requires prepare and expect callbacks", path);
+    const std::vector<IntentTime>& times = evaluationCase.frameTimes;
+    if (times.empty())
+        return make_error(AuthoringErrorCode::InvalidInput, "a case requires at least one frame time", path + ".frameTimes");
+    if (times.size() > limits.maxEvaluationFrames)
+        return make_error(AuthoringErrorCode::LimitExceeded, "case exceeds the frame limit", path + ".frameTimes");
+    if (!std::is_sorted(times.begin(), times.end()))
+        return make_error(AuthoringErrorCode::InvalidInput, "frame times must be nondecreasing", path + ".frameTimes");
+    if (times.back() > static_cast<IntentTime>(std::numeric_limits<std::int64_t>::max()))
+        return make_error(AuthoringErrorCode::InvalidInput, "frame time is outside the signed 64-bit range", path + ".frameTimes");
+    return std::nullopt;
+}
+
+std::optional<AuthoringError> check_suite(const EvaluationSuite& suite, const AuthoringLimits& limits) {
+    if (std::optional<AuthoringError> error = check_text(suite.id.stableName, limits.maxLabelBytes, true, "id.stableName"))
+        return error;
+    if (suite.id.version == 0)
+        return make_error(AuthoringErrorCode::InvalidInput, "fixture version must be nonzero", "id.version");
+    // An empty suite could only ever report a vacuous Passed.
+    if (suite.cases.empty())
+        return make_error(AuthoringErrorCode::InvalidInput, "a suite requires at least one case", "cases");
+    if (suite.cases.size() > limits.maxEvaluationCases)
+        return make_error(AuthoringErrorCode::LimitExceeded, "suite exceeds the case limit", "cases");
+    for (std::size_t index = 0; index < suite.cases.size(); ++index) {
+        if (std::optional<AuthoringError> error = check_case(suite.cases[index], limits, "cases[" + std::to_string(index) + "]"))
+            return error;
+    }
+    return std::nullopt;
+}
+
+// Contract logical payload accounting, defined once in PayloadAccounting.hpp.
+using detail::LogicalElementBytes;
+using detail::LogicalFlagBytes;
+using detail::LogicalScalarBytes;
+using detail::saturating_add;
 
 // LuaManifestCapture, the host-only identity outside the manifest's
 // logical_bytes(): 7 fields (kind, world, behavior, access revision, runner,
@@ -201,13 +242,6 @@ constexpr std::size_t CaptureFixedBytes = CaptureFields * LogicalElementBytes
     + LimitFlagFields * LogicalFlagBytes;
 constexpr std::size_t CaptureEntryBytes = LogicalElementBytes
     + CaptureEntryFields * (LogicalElementBytes + LogicalScalarBytes);
-
-// Saturates instead of wrapping; a saturated charge always exceeds the ceiling.
-constexpr std::size_t saturating_add(std::size_t total, std::size_t bytes) {
-    return bytes > std::numeric_limits<std::size_t>::max() - total
-        ? std::numeric_limits<std::size_t>::max()
-        : total + bytes;
-}
 
 std::size_t capture_bytes(const LuaManifestCapture& capture) {
     std::size_t bytes = CaptureFixedBytes;
@@ -268,6 +302,29 @@ struct AuthoringSession::Impl {
         Recapture
     };
 
+    struct EvaluationEntry {
+        EvaluationRecord record;
+        std::vector<EvaluationTraceEntry> trace;
+    };
+
+    // Everything an admitted evaluation runs against. The proposal, grants and
+    // recaptured manifest are copied at admission; the suite is referenced, which
+    // is safe because suites register only before the first proposal (so never
+    // during an evaluation), are never removed, and std::map nodes never move.
+    struct EvaluationTicket {
+        BehaviorProposal proposal;
+        std::vector<ScopeGrant> grants;
+        const EvaluationSuite* suite = nullptr;
+        LuaCapabilityManifest manifest;
+        std::uint64_t id = 0;
+        std::size_t reservation = 0;
+    };
+
+    struct EvaluationReservation {
+        std::uint64_t id = 0;
+        std::size_t bytes = 0;
+    };
+
     AuthoringSessionId id;
     AuthoringLimits limits;
     Runtime& runtime;
@@ -279,6 +336,9 @@ struct AuthoringSession::Impl {
     std::uint64_t lastProposal = 0;
     std::map<ScopeId, ScopeRecord> scopes;
     std::map<ProposalId, ProposalRecord> proposals;
+    std::map<EvaluationFixtureId, EvaluationSuite> suites;
+    std::uint64_t lastEvaluation = 0;
+    std::map<EvaluationId, EvaluationEntry> evaluations;
     // The one session payload counter: the sum of the charges of every
     // retained record, never above limits.maxSessionPayloadBytes.
     std::size_t sessionPayloadBytes = 0;
@@ -466,6 +526,84 @@ struct AuthoringSession::Impl {
             return nullptr;
         return &found->second;
     }
+
+    // Evaluation entry: 2 fields (record, trace). The kept record costs at
+    // most record_header_bytes() plus the response limit (bound_response drops
+    // cases first) and the trace at most the run budget's charged store bytes.
+    static constexpr std::size_t EvaluationEntryBytes = 2 * LogicalElementBytes;
+
+    // The most one admitted evaluation can keep, charged before it runs.
+    std::size_t evaluation_reservation(const EvaluationFixtureId& fixture) const {
+        std::size_t bytes = saturating_add(EvaluationEntryBytes, detail::record_header_bytes(fixture.stableName));
+        bytes = saturating_add(bytes, limits.maxEvaluationResponseBytes);
+        return saturating_add(bytes, limits.maxEvaluationRecordBytes);
+    }
+
+    // Capacity, id and payload reservation, checked before anything runs.
+    AuthoringResult<EvaluationReservation> reserve_evaluation(const EvaluationFixtureId& fixture) const {
+        if (evaluations.size() >= limits.maxEvaluations)
+            return make_error(AuthoringErrorCode::LimitExceeded, "session evaluation capacity is exhausted");
+        const std::optional<std::uint64_t> issued = checked_next(lastEvaluation, limits.maxIdValue);
+        if (!issued)
+            return make_error(AuthoringErrorCode::LimitExceeded, "session evaluation id counter is exhausted");
+        const std::size_t bytes = evaluation_reservation(fixture);
+        if (!payload_fits(0, bytes))
+            return make_error(AuthoringErrorCode::LimitExceeded, "evaluation reservation exceeds the session payload limit");
+        return EvaluationReservation{*issued, bytes};
+    }
+
+    // Runs an admitted evaluation whose reservation is already charged, keeps
+    // its record and trace, and releases the unused part of the reservation.
+    // Strong guarantee: on a throw nothing is kept and the counter is unchanged.
+    EvaluationRecord keep_evaluation(const EvaluationTicket& ticket, EvaluationFixtureId fixture) {
+        detail::EvaluationOutcome outcome;
+        try {
+            outcome = detail::run_evaluation(detail::EvaluationRun{
+                *ticket.suite, ticket.proposal.source, ticket.grants, ticket.manifest, limits});
+        } catch (...) {
+            outcome = detail::EvaluationOutcome{};
+        }
+
+        EvaluationRecord record{
+            EvaluationId(ticket.id), id, ticket.proposal.id, ticket.proposal.scope,
+            ticket.proposal.scopeRevision, std::move(fixture), outcome.status, true, std::move(outcome.cases)};
+        const std::size_t responseBytes = detail::bound_response(record, limits.maxEvaluationResponseBytes);
+        // Never above the reservation: storeBytes is within the run budget.
+        const std::size_t charge = saturating_add(saturating_add(EvaluationEntryBytes, responseBytes), outcome.storeBytes);
+        EvaluationRecord response = record;
+        const EvaluationId key = record.id;
+        evaluations.emplace(key, EvaluationEntry{std::move(record), std::move(outcome.trace)});
+        sessionPayloadBytes -= ticket.reservation - charge;
+        return response;
+    }
+
+    // Every pre-admission check; a failure leaves no record and issues no id.
+    AuthoringResult<EvaluationTicket> admit_evaluation(
+        const CallerContext& caller,
+        ProposalId proposal,
+        const EvaluationFixtureId& fixture
+    ) {
+        const auto found = proposals.find(proposal);
+        if (caller.session != id || found == proposals.end() || found->second.owner != caller.owner)
+            return make_error(AuthoringErrorCode::NotFound, "proposal does not exist for this caller", "proposal");
+        const auto suite = suites.find(fixture);
+        if (suite == suites.end())
+            return make_error(AuthoringErrorCode::NotFound, "evaluation fixture is not registered", "fixture");
+        const BehaviorProposal& record = found->second.proposal;
+        const auto scope = scopes.find(record.scope);
+        if (scope == scopes.end() || scope->second.revision != record.scopeRevision)
+            return make_error(AuthoringErrorCode::StaleScope, "proposal scope was revoked or replaced", "scope");
+
+        AuthoringResult<EvaluationReservation> reserved = reserve_evaluation(fixture);
+        if (!reserved.ok())
+            return reserved.error();
+        AuthoringResult<LuaCapabilityManifest> captured = recapture(scope->second, lastNow.value_or(0));
+        if (!captured.ok())
+            return captured.error();
+        return EvaluationTicket{
+            record, scope->second.grants, &suite->second, captured.value(),
+            reserved.value().id, reserved.value().bytes};
+    }
 };
 
 AuthoringSession::AuthoringSession(
@@ -497,6 +635,9 @@ AuthoringSession::AuthoringSession(
         0,
         0,
         {},
+        {},
+        {},
+        0,
         {},
         0
     });
@@ -699,6 +840,65 @@ AuthoringResult<BehaviorProposal> AuthoringSession::proposal(
     if (found == impl->proposals.end() || found->second.owner != caller.owner)
         return make_error(AuthoringErrorCode::NotFound, "proposal does not exist for this caller", "proposal");
     return found->second.proposal;
+}
+
+AuthoringResult<void> AuthoringSession::register_evaluation_suite(EvaluationSuite suite) {
+    if (impl->lastProposal != 0 || !impl->proposals.empty())
+        return make_error(AuthoringErrorCode::Unsupported, "evaluation suites register only before the first accepted proposal");
+    if (impl->suites.contains(suite.id))
+        return make_error(AuthoringErrorCode::InvalidInput, "evaluation fixture id is already registered", "id");
+    if (std::optional<AuthoringError> error = check_suite(suite, impl->limits))
+        return std::move(*error);
+
+    EvaluationFixtureId fixture = suite.id;
+    impl->suites.emplace(std::move(fixture), std::move(suite));
+    return {};
+}
+
+AuthoringResult<EvaluationRecord> AuthoringSession::evaluate(
+    const CallerContext& caller,
+    ProposalId proposal,
+    EvaluationFixtureId fixture
+) {
+    AuthoringResult<Impl::EvaluationTicket> admitted = make_error(AuthoringErrorCode::HostError, "evaluation was not admitted");
+    try {
+        admitted = impl->admit_evaluation(caller, proposal, fixture);
+    } catch (const std::exception& exception) {
+        return make_error(AuthoringErrorCode::HostError, exception.what());
+    } catch (...) {
+        return make_error(AuthoringErrorCode::HostError, "unknown evaluation admission host error");
+    }
+    if (!admitted.ok())
+        return admitted.error();
+
+    // Admitted: the id is consumed and the reservation is charged before any
+    // host callback runs. The session clock is never advanced by evaluation time.
+    const Impl::EvaluationTicket& ticket = admitted.value();
+    impl->lastEvaluation = ticket.id;
+    impl->sessionPayloadBytes += ticket.reservation;
+    std::optional<EvaluationRecord> kept;
+    try {
+        kept.emplace(impl->keep_evaluation(ticket, std::move(fixture)));
+    } catch (...) {
+        // Nothing was kept; release the whole reservation.
+        impl->sessionPayloadBytes -= ticket.reservation;
+        return make_error(AuthoringErrorCode::HostError, "evaluation result could not be kept");
+    }
+    return std::move(*kept);
+}
+
+AuthoringResult<EvaluationTrace> AuthoringSession::normalized_trace(EvaluationId evaluation) const {
+    const auto found = impl->evaluations.find(evaluation);
+    if (found == impl->evaluations.end())
+        return make_error(AuthoringErrorCode::NotFound, "evaluation does not exist", "evaluation");
+    return EvaluationTrace{evaluation, found->second.trace};
+}
+
+AuthoringResult<EvaluationWorldTotals> AuthoringSession::world_totals(EvaluationId evaluation) const {
+    const auto found = impl->evaluations.find(evaluation);
+    if (found == impl->evaluations.end())
+        return make_error(AuthoringErrorCode::NotFound, "evaluation does not exist", "evaluation");
+    return detail::world_totals(found->second.record, found->second.trace);
 }
 
 }

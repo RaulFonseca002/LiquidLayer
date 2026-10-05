@@ -126,9 +126,9 @@ Solid v0.1 is packaged through three static targets so consumers pay only for th
 | Component | CMake target | Current use |
 | --- | --- | --- |
 | Core | `Liquid::Core` | Values, world/runtime APIs, effects, event stores, and replay |
-| Lua | `Liquid::Lua` | Capability-bounded Lua behavior execution; L0 is planned to extend this same target with model-facing authoring metadata |
+| Lua | `Liquid::Lua` | Capability-bounded Lua behavior execution; L0 is planned to extend this same target with model-facing authoring metadata; L2 (awaiting owner approval) adds the `LuaScriptSelection::SingleReadable` lifecycle constructor |
 | Simulation | `Liquid::Simulation` | In-memory adapters and deterministic scenarios |
-| Authoring | `Liquid::Authoring` | Opt-in (`LIQUID_BUILD_AUTHORING=ON`; unreleased, L1 owner-approved): host-selected prospective scopes and immutable Lua behavior proposals |
+| Authoring | `Liquid::Authoring` | Opt-in (`LIQUID_BUILD_AUTHORING=ON`; unreleased, L1 owner-approved): host-selected prospective scopes and immutable Lua behavior proposals; L2 (implemented, awaiting owner approval) adds isolated deterministic evaluation of a proposal against host-registered suites (`register_evaluation_suite`, `evaluate`, `normalized_trace`) |
 
 L0 intentionally extends `Liquid::Lua` rather than creating a speculative new exported target.
 
