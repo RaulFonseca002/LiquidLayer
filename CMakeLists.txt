@@ -267,6 +267,7 @@ endif()
 if(LIQUID_BUILD_AUTHORING)
 add_library(liquid_authoring STATIC
     src/authoring/AuthoringSession.cpp
+    src/authoring/Evaluation.cpp
 )
 target_compile_features(liquid_authoring PUBLIC cxx_std_20)
 target_link_libraries(liquid_authoring PUBLIC liquid_simulation)
@@ -563,7 +564,9 @@ if(BUILD_TESTING)
     if(LIQUID_BUILD_AUTHORING)
         foreach(authoring_test IN ITEMS
                 test_authoring_scope
-                test_authoring_proposal)
+                test_authoring_proposal
+                test_authoring_session_ceiling
+                test_authoring_evaluation)
             add_executable(${authoring_test} tests/${authoring_test}.cpp)
             target_link_libraries(${authoring_test} PRIVATE
                 liquid_authoring Catch2::Catch2WithMain)

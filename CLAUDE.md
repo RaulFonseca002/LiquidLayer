@@ -3,10 +3,13 @@
 Read [AGENTS.md](AGENTS.md) first; it owns operational scope and the shared
 authority rule. [Tracking](docs/DEVELOPMENT_TRACKING.md) identifies activated steps.
 **No implementation step is active unless the owner activates one. Do not
-start L2 automatically.** L0 (Lua schemas and capability manifests, 29
+start L3 automatically.** L0 (Lua schemas and capability manifests, 29
 September 2026) and L1 (host-selected scope and immutable proposals, 30
-September 2026) are implemented and owner-approved. Solid hardening and the
-L0–L6 design documents are on `main`; L2–L6 remain specified, not implemented.
+September 2026) are implemented and owner-approved. L2 (isolated proposal
+evaluation) was activated by the owner on 3 October 2026 and is implemented,
+on `feat/liquid-l2` and was approved by the owner on 5 October 2026 (not yet merged into `main`). Solid hardening and
+the L0–L6 design documents are on `main`; L3–L6 remain specified, not
+implemented and inactive.
 
 For an owner-activated implementation step:
 
