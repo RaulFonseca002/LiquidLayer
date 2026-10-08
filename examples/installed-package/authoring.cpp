@@ -1,5 +1,7 @@
 #include <liquid/Runtime.hpp>
 #include <liquid/authoring/AuthoringSession.hpp>
+#include <liquid/authoring/Evaluation.hpp>
+#include <liquid/authoring/Types.hpp>
 
 #include <cstdint>
 #include <memory>

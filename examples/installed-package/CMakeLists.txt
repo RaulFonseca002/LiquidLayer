@@ -63,8 +63,7 @@ if(LIQUID_CONSUMER_EXPECT_CORE_ONLY)
     foreach(liquid_core_include_dir IN LISTS liquid_core_include_dirs)
         if(EXISTS "${liquid_core_include_dir}/liquid/scripting/LuaBehaviorRunner.hpp" OR
            EXISTS "${liquid_core_include_dir}/liquid/simulation/InMemoryAdapter.hpp" OR
-           EXISTS "${liquid_core_include_dir}/liquid/authoring/AuthoringSession.hpp" OR
-           EXISTS "${liquid_core_include_dir}/liquid/authoring/Types.hpp")
+           EXISTS "${liquid_core_include_dir}/liquid/authoring")
             message(FATAL_ERROR
                 "Core-only package installed optional component headers")
         endif()
